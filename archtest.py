@@ -43,7 +43,7 @@ def win_for(amp, speed, aspect):
 
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
-         bed_xy, home, spacing, fan):
+         bed_xy, home, spacing, fan, squish):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -53,17 +53,25 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
     b = spacing / (2 * math.pi)         # solid base: spacing under the landed width
     th_max = (r_max - r0) / b
 
-    win_hi = win_for(a_hi, speed, aspect)
-    if 2 * win_hi > pitch * 0.8:
-        raise SystemExit(f"largest hoop spans {2*win_hi:.1f}mm against a {pitch}mm pitch — hoops "
-                         f"would merge into a wave instead of standing separately.\n"
-                         f"  Raise --pitch above {2*win_hi/0.8:.0f}.")
+    # With STAPLE hops the span is chosen, not forced by the Z axis — XY is stopped while Z moves,
+    # so height no longer drags span with it. The only requirement is that a staple finishes before
+    # the next one begins.
+    span_hi = aspect * a_hi
+    if span_hi > pitch * 0.8:
+        raise SystemExit(f"largest staple carries {span_hi:.1f}mm against a {pitch}mm pitch — they "
+                         f"would run into each other.\n  Raise --pitch above {span_hi/0.8:.0f}.")
+    # Z axis check on the pure vertical move (this is the only axis constraint left)
+    t_up = math.sqrt(2 * a_hi / machine.MAX_Z_A)
+    if machine.MAX_Z_A * t_up > machine.MAX_Z_V:
+        t_up = a_hi / machine.MAX_Z_V + machine.MAX_Z_V / machine.MAX_Z_A
+    w_note = f"tallest staple rises {a_hi}mm in ~{t_up:.2f}s of stalled XY"
 
     L = []; w = L.append
     w(f"; ARCH TEST — arcs every {pitch}mm of path, height {a_lo} -> {a_hi}mm outward")
-    w(f"; span scales with height (aspect {aspect}); largest hoop {2*win_hi:.1f}mm airborne")
+    w(f"; STAPLE hops: XY stalls, Z rises, carry {aspect}x height, XY stalls, Z descends")
     w(f"; flow={flow} at {speed:.0f} mm/s, line {line_w}x{layer_h}, base spacing {spacing}")
     w(f"; hoops every {pitch}mm of path, base spacing {spacing}mm (< 1.53 landed = solid)")
+    w(f"; {w_note}")
     w("; HEADER_BLOCK_START"); w("; total layer number: 1"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
@@ -77,42 +85,66 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
     w("M107                            ; fans off while the base bonds")
     w("M82"); w("G92 E0")
     _sx, _sy = cx + r0, cy
-    w(f"G1 Z{layer_h:.2f} F600")
+    w(f"G1 Z{layer_h*squish:.3f} F600")
     w(f"G0 F9000 X{_sx - 60:.3f} Y{_sy:.3f}")
     w(f"G1 F1200 X{_sx:.3f} Y{_sy:.3f} E12"); w("G92 E0")
     w("; Z_MODULATED"); w("; BODY_START")
 
-    # walk the spiral in small steps; arcs are placed by PATH DISTANCE so they stay evenly spaced
-    seg = min(win_for(a_lo, speed, aspect) / 8.0, 0.6)
+    # STAPLE HOPS — XY STALLS while Z moves. Oleg: "when z moves the xy movement need to stall
+    # then resume then stall again when it moves back".
+    #
+    # This is a different animal from a smooth arc, and better in three ways:
+    #   · height and span become INDEPENDENT. A smooth arc has to widen as it grows, because the Z
+    #     axis can only climb so fast while XY carries on — which is why tall arcs forced a huge
+    #     pitch and hoops could not be frequent. With XY stopped, Z has all the time it needs.
+    #   · the vertical strand is drawn STRAIGHT UP, in free air, anchored at the bottom. That is a
+    #     genuinely new element: a post, not a bulge in a line.
+    #   · the shape is legible — a rectangular staple reads as deliberate, an arc reads as a wobble.
+    #
+    # Each hop is five moves: run along the base, stall and rise, carry across at height, stall and
+    # descend, continue. Extrusion continues through the vertical moves or the strand snaps.
+    seg = 0.6
     e = 0.0; th = 0.0; s = 0.0
     px, py = _sx, _sy
     next_arc = pitch
     arcs = []
     fan_on = False
-    fan_after = 2 * math.pi * r0   # one full turn of base before any cooling
+    fan_after = 2 * math.pi * r0
+    z_base = layer_h * squish
     while th < th_max:
         r = r0 + b * th
         th += seg / max(r, 1.0)
         r = r0 + b * th
         x, y = cx + r * math.cos(th), cy + r * math.sin(th)
         d = math.dist((px, py), (x, y)); s += d
-        amp = a_lo + (a_hi - a_lo) * (r - r0) / (r_max - r0)
-        win = win_for(amp, speed, aspect)
-        dz = 0.0
-        if s > next_arc - win:
-            off = s - next_arc
-            if abs(off) < win:
-                dz = amp * math.cos(math.pi * off / (2 * win)) ** 2
-            elif off >= win:
-                arcs.append((round(amp, 2), round(r)))
-                next_arc += pitch
         if fan and not fan_on and s > fan_after:
             L.append(f"M106 S{fan}                        ; {round(fan/255*100)}% once the base has bonded")
             fan_on = True
         e += d * e_per_mm
         L.append(f"G1 {'F%d ' % f_mm_min if not arcs and s < 1 else ''}"
-                 f"X{x:.3f} Y{y:.3f} Z{layer_h + dz:.4f} E{e:.5f}")
+                 f"X{x:.3f} Y{y:.3f} Z{z_base:.4f} E{e:.5f}")
         px, py = x, y
+
+        if s >= next_arc:
+            amp = a_lo + (a_hi - a_lo) * (r - r0) / (r_max - r0)
+            span = aspect * amp                      # how far it carries at height
+            z_top = z_base + amp
+            f_z = round(min(machine.MAX_Z_V, math.sqrt(2 * machine.MAX_Z_A * amp)) * 60)
+            # 1. STALL, rise — pure Z, XY frozen
+            e += amp * e_per_mm
+            L.append(f"G1 F{f_z} Z{z_top:.4f} E{e:.5f}          ; stall + rise {amp:.1f}mm")
+            # 2. carry across at height
+            th2 = th + span / max(r, 1.0)
+            x2, y2 = cx + r * math.cos(th2), cy + r * math.sin(th2)
+            dd = math.dist((px, py), (x2, y2)); s += dd
+            e += dd * e_per_mm
+            L.append(f"G1 F{f_mm_min} X{x2:.3f} Y{y2:.3f} E{e:.5f}   ; carry {dd:.1f}mm at height")
+            # 3. STALL, descend
+            e += amp * e_per_mm
+            L.append(f"G1 F{f_z} Z{z_base:.4f} E{e:.5f}          ; stall + descend")
+            th = th2; px, py = x2, y2
+            arcs.append((round(amp, 2), round(r)))
+            next_arc = s + pitch
 
     L += ["M107", "SET_PIN PIN=fan1 VALUE=0", "SET_PIN PIN=fan2 VALUE=0",
           "M104 S0", "M140 S0", f"G1 Z{layer_h + 40:.1f} F900",
@@ -127,9 +159,11 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--a-lo", type=float, default=0.3)
     ap.add_argument("--a-hi", type=float, default=4.0)
+    ap.add_argument("--squish", type=float, default=0.72,
+                    help="baseline Z as a fraction of layer_h — under 1 presses the base in")
     ap.add_argument("--aspect", type=float, default=1.6,
                     help="half-span / height. Hoop scales as ONE variable; the span is\n                          raised where the Z axis needs it at the small end.")
-    ap.add_argument("--pitch", type=float, default=25.0, help="mm of path between arcs")
+    ap.add_argument("--pitch", type=float, default=25.0, help="mm of path between hoops")
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--line_w", type=float, default=2.0)
     ap.add_argument("--spacing", type=float, default=1.4,
@@ -146,7 +180,8 @@ if __name__ == "__main__":
     a = ap.parse_args()
     bed_xy = tuple(float(v) for v in a.bed_size.split(","))
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
-                 a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan)
+                 a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
+                 a.squish)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
