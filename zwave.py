@@ -1,70 +1,76 @@
 #!/usr/bin/env python3
-"""Z modulation during extrusion — Oleg's idea, 2026-07-25. Single layer, whole plate.
+"""Z modulation during extrusion — Oleg's idea, 2026-07-25. Single layer, spiral, whole plate.
 
-Slicers treat Z as a staircase: constant inside a layer, stepping between layers. Nothing about
-the machine requires that — Z is just another axis in the same G1. Moving it *while extruding*
-varies how hard the bead is squished along a single line, which changes its width, gloss and
-adhesion continuously. There is no slicer setting for it.
+Slicers treat Z as a staircase: constant inside a layer, stepping between layers. Nothing about the
+machine requires that — Z is just another axis in the same G1. Moving it *while extruding* varies
+how hard the bead is squished along a single line, changing its width, gloss and adhesion
+continuously. There is no slicer setting for this.
 
-    Z(x) = z0 + A * sin(2*pi*x / wavelength)
+    Z(s) = z0 + A * sin(2*pi*s / wavelength)      s = distance travelled along the path
 
-Each band up the plate is one AMPLITUDE (or one wavelength with --vary wavelength). Flow is held
-constant throughout, so the only thing changing is squish. Run it at the working flow found by
-flowtest.py — squish only has range when there is enough plastic to squash.
+SPIRAL, not rows. A serpentine reverses 180 degrees at each row end, so the head decelerates there —
+and decelerating changes squish, which is the very thing being measured. Every row would carry a
+false artifact at both ends. A spiral has no ends.
 
-SAFETY, and it is the whole reason this is cheap to try:
-  - Amplitude is capped at 0.6 * layer_h. Above that the nozzle lifts clear of the bed on the
-    up-stroke, stops touching the bead, and drags a loose string instead of printing.
-  - SINGLE LAYER. The 2026-07-25 tower failure was a stacking collision; nothing here stacks, so
-    it cannot repeat.
+AMPLITUDE RAMPS OUTWARD, continuously, from 0 at the centre to the cap at the rim. So the plate is
+one uninterrupted gradient from "flat" to "too much" and you find the transition by touch rather
+than by comparing discrete bands. A pimple marks every 0.02mm step, all at the same polar angle, so
+they line up into a radial spoke — count outward.
 
-HOW TO READ IT: run a fingertip across the rows, front to back.
-  - Amplitude too low  -> feels flat, indistinguishable from a normal row.
-  - Amplitude right    -> a regular ribbed texture you can feel; bead visibly widens and narrows.
-  - Amplitude too high -> broken beads, strings, gaps where the nozzle lost contact.
-Note the LAST band that still gives continuous plastic. That is the usable ceiling.
+BED 60, deliberately NOT the 135 used for the flow test. Opposite requirement: the flow sheet wanted
+maximum adhesion and did not care about shape, but this test IS shape. At 135 PLA stays far above
+its glass transition and the ridges slump flat while still hot, erasing the signal. Ridges have to
+freeze where they are laid.
+
+SAFETY, and it is why this is cheap to try:
+  - Amplitude capped at 0.6 * layer_h. Above it the nozzle lifts clear on the up-stroke, stops
+    touching the bead, and drags a string instead of printing.
+  - SINGLE LAYER. The 2026-07-25 tower failure was a stacking collision; nothing here stacks.
+
+HOW TO READ IT: run a fingertip from the centre outward.
+  - too low  -> smooth, indistinguishable from a normal surface
+  - right    -> a regular ribbed texture you can feel; bead visibly widens and narrows
+  - too high -> broken beads, strings, gaps where the nozzle lost contact
+Note the radius where it starts to feel ribbed, and where it breaks up. Count pimples to convert.
 
 Usage:
-  python3 zwave.py --no-home --flow 29            # sweep amplitude at 10mm wavelength
-  python3 zwave.py --no-home --flow 29 --vary wavelength
+  python3 zwave.py --no-home --flow 70.5
+  python3 zwave.py --no-home --flow 70.5 --wavelength 4 --amp-max 0.24
 """
 import argparse, math, os
 
 BED = (350.0, 350.0)
-# Amplitudes are DERIVED from the safety cap (0.6*layer_h), evenly spaced up to it. A fixed list
-# got silently clipped — 0.25 and 0.30 both clamped to 0.24 and printed two identical bands, which
-# is a wasted sixth of the plate. Deriving them guarantees a real spread whatever the layer height.
-def amps_for(layer_h, n=6):
-    cap = 0.6 * layer_h
-    return [round(cap * (i + 1) / n, 3) for i in range(n)]
-WAVES = [2.0, 4.0, 8.0, 16.0, 32.0, 64.0]       # mm per cycle
 
 
-def emit(bands, vary, flow, layer_h, line_w, amp_fixed, wave_fixed, rows_per_band,
-         temp, bed, fan, fil_d, home, margin, seg_per_wave):
+def emit(flow, layer_h, line_w, wavelength, amp_max, temp, bed, fan, fil_d, home, margin,
+         r0, seg_len, bump_h, bump_arc, bump_every):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
     f_mm_min = round(speed * 60)
     cap = 0.6 * layer_h
-    x0, x1 = margin, BED[0] - margin
-    n_rows = len(bands) * rows_per_band
-    spacing = line_w
-    span = (n_rows - 1) * spacing
-    y0 = (BED[1] - span) / 2.0
-    if y0 < margin:
-        raise SystemExit(f"{n_rows} rows exceeds the plate — reduce --rows.")
+    amp_hi = min(amp_max, cap)
+    cx, cy = BED[0] / 2, BED[1] / 2
+    r_max = min(cx, cy) - margin
+    b = line_w / (2 * math.pi)
+    th_max = (r_max - r0) / b
+
+    def amp_at_r(r):
+        return amp_hi * (r - r0) / (r_max - r0)
+
+    marks = []
+    a = bump_every
+    while a < amp_hi - 1e-9:
+        r_m = r0 + (a / amp_hi) * (r_max - r0)
+        marks.append((a, math.ceil(((r_m - r0) / b) / (2 * math.pi)) * 2 * math.pi))
+        a += bump_every
 
     L = []; w = L.append
-    w(f"; Z MODULATION — single layer, {len(bands)} bands x {rows_per_band} rows, vary={vary}")
-    w(f"; flow={flow} mm3/s -> {speed:.0f} mm/s, line_w={line_w} layer_h={layer_h} fan={fan}")
-    w(f"; amplitude cap {cap:.2f}mm (0.6 x layer_h) — above it the nozzle leaves the bead")
-    for i, b in enumerate(bands, 1):
-        a = min(b, cap) if vary == "amplitude" else min(amp_fixed, cap)
-        wl = b if vary == "wavelength" else wave_fixed
-        ya = y0 + (i - 1) * rows_per_band * spacing
-        w(f"; band {i}: amp {a:.2f}mm  wavelength {wl:.0f}mm   Y {ya:.0f}.."
-          f"{ya + (rows_per_band-1)*spacing:.0f}")
+    w(f"; Z MODULATION — single layer spiral, amplitude 0 -> {amp_hi:.3f}mm outward")
+    w(f"; flow={flow} mm3/s -> {speed:.0f} mm/s, line_w={line_w} layer_h={layer_h} bed={bed} fan={fan}")
+    w(f"; wavelength {wavelength}mm along the path; amplitude cap {cap:.3f}mm (0.6 x layer_h)")
+    for ma, mth in marks:
+        w(f";   pimple amp {ma:.2f}mm at r{r0 + b*mth:.0f}mm")
     w("; HEADER_BLOCK_START"); w("; total layer number: 1"); w("; HEADER_BLOCK_END")
 
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
@@ -76,65 +82,69 @@ def emit(bands, vary, flow, layer_h, line_w, amp_fixed, wave_fixed, rows_per_ban
     w(f"G0 F9000 X{margin:.1f} Y{margin:.1f}")
     w(f"G1 F1200 X{margin:.1f} Y{margin+80:.1f} E12"); w("G92 E0")
 
-    e = 0.0; row = 0
-    for i, b in enumerate(bands, 1):
-        amp = min(b, cap) if vary == "amplitude" else min(amp_fixed, cap)
-        wl = b if vary == "wavelength" else wave_fixed
-        seg = wl / seg_per_wave
-        L.append(f"; ---- band {i}: amp {amp:.2f}mm, wavelength {wl:.0f}mm ----")
-        for _ in range(rows_per_band):
-            y = y0 + row * spacing
-            fwd = (row % 2 == 0)
-            sx, ex = (x0, x1) if fwd else (x1, x0)
-            if row == 0:
-                L.append(f"G0 F9000 X{sx:.2f} Y{y:.2f}")
-            else:
-                e += spacing * e_per_mm
-                L.append(f"G1 F{f_mm_min} X{sx:.2f} Y{y:.2f} E{e:.5f}")
-            n_seg = max(2, int(round((x1 - x0) / seg)))
-            for k in range(1, n_seg + 1):
-                t = k / n_seg
-                x = sx + (ex - sx) * t
-                # phase on absolute X so the ridges line up across rows into a readable field
-                z = layer_h + amp * math.sin(2 * math.pi * x / wl)
-                d = abs(ex - sx) / n_seg
-                e += d * e_per_mm
-                L.append(f"G1 X{x:.3f} Z{z:.3f} E{e:.5f}")
-            row += 1
+    e = 0.0; th = 0.0; s = 0.0
+    px, py = cx + r0, cy
+    L.append(f"G0 F9000 X{px:.3f} Y{py:.3f}")
+    first = True
+    while th < th_max:
+        r_base = r0 + b * th
+        th += min(seg_len / max(r_base, 1.0), 0.25)
+        r_base = r0 + b * th
+        dr = 0.0
+        for ma, mth in marks:
+            d = th - mth
+            if abs(d) < bump_arc:
+                dr = bump_h * math.cos(math.pi * d / (2 * bump_arc)) ** 2
+                break
+        r = r_base + dr
+        x, y = cx + r * math.cos(th), cy + r * math.sin(th)
+        d_mm = math.dist((px, py), (x, y))
+        s += d_mm
+        e += d_mm * e_per_mm
+        z = layer_h + amp_at_r(r_base) * math.sin(2 * math.pi * s / wavelength)
+        L.append(f"G1 {'F%d ' % f_mm_min if first else ''}X{x:.3f} Y{y:.3f} Z{z:.4f} E{e:.5f}")
+        first = False
+        px, py = x, y
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h+40:.1f} F900", "G0 X10 Y340 F9000"]
     grams = e * area * 1.24 / 1000
-    secs = (n_rows * (x1 - x0) + n_rows * spacing) / speed
-    return "\n".join(L) + "\n", dict(rows=n_rows, grams=round(grams, 1), mins=round(secs / 60, 1),
-                                     lines=len(L), speed=round(speed))
+    path = e / e_per_mm
+    return "\n".join(L) + "\n", dict(turns=round(th_max / (2 * math.pi)), grams=round(grams, 1),
+                                     mins=round(path / speed / 60, 1), path=round(path / 1000, 1),
+                                     lines=len(L), amp_hi=amp_hi, r_max=r_max,
+                                     marks=[m for m, _ in marks])
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--flow", type=float, required=True, help="working flow mm3/s (0.85 x measured max)")
-    ap.add_argument("--vary", default="amplitude", choices=["amplitude", "wavelength"])
-    ap.add_argument("--amp", type=float, default=0.20, help="fixed amplitude when varying wavelength")
-    ap.add_argument("--wavelength", type=float, default=10.0, help="fixed wavelength when varying amplitude")
-    ap.add_argument("--rows", type=int, default=6)
+    ap.add_argument("--wavelength", type=float, default=10.0, help="mm of path per cycle")
+    ap.add_argument("--amp-max", type=float, default=1.0, help="target rim amplitude (capped)")
     ap.add_argument("--layer_h", type=float, default=0.4)
-    ap.add_argument("--line_w", type=float, default=3.0)   # single layer: wide is safe
+    ap.add_argument("--line_w", type=float, default=3.0)
     ap.add_argument("--temp", type=int, default=230)
-    ap.add_argument("--bed", type=int, default=60)
-    ap.add_argument("--fan", type=int, default=51)
+    ap.add_argument("--bed", type=int, default=60, help="LOW on purpose — ridges must freeze")
+    ap.add_argument("--fan", type=int, default=128, help="50% — this test wants the shape to set")
     ap.add_argument("--margin", type=float, default=15.0)
-    ap.add_argument("--seg", type=int, default=12, help="segments per wave cycle")
+    ap.add_argument("--r0", type=float, default=25.0)
+    ap.add_argument("--seg", type=float, default=1.0, help="segment mm — must be << wavelength")
+    ap.add_argument("--bump", type=float, default=1.0)
+    ap.add_argument("--bump-arc", type=float, default=0.12)
+    ap.add_argument("--bump-every", type=float, default=0.02, help="mm of amplitude between pimples")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
-    bands = amps_for(a.layer_h) if a.vary == "amplitude" else WAVES
-    g, st = emit(bands, a.vary, a.flow, a.layer_h, a.line_w, a.amp, a.wavelength, a.rows,
-                 a.temp, a.bed, a.fan, 1.75, not a.no_home, a.margin, a.seg)
+    if a.seg > a.wavelength / 6:
+        raise SystemExit(f"--seg {a.seg} is too coarse for wavelength {a.wavelength}: the sine would "
+                         f"be sampled under 6x per cycle and come out as a jagged triangle, not a "
+                         f"wave. Use --seg <= {a.wavelength/6:.2f}.")
+    g, st = emit(a.flow, a.layer_h, a.line_w, a.wavelength, a.amp_max, a.temp, a.bed, a.fan, 1.75,
+                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every)
     os.makedirs(a.out, exist_ok=True)
-    fn = f"{a.out}/zwave_{'nohome_' if a.no_home else ''}{a.vary}_Q{a.flow:g}_T{a.temp}.gcode"
+    fn = f"{a.out}/zspiral_{'nohome_' if a.no_home else ''}Q{a.flow:g}_w{a.wavelength:g}_T{a.temp}.gcode"
     open(fn, "w").write(g)
-    cap = 0.6 * a.layer_h
-    print(f"{fn}\n  ONE layer, {st['rows']} rows @ {st['speed']}mm/s, ~{st['mins']} min, "
-          f"{st['grams']} g, {st['lines']} lines")
-    print(f"  varying {a.vary}: " + ", ".join(
-        f"{min(b,cap):.2f}mm" if a.vary == "amplitude" else f"{b:g}mm" for b in bands)
-        + (f"   (capped at {cap:.2f})" if a.vary == "amplitude" and max(bands) > cap else ""))
+    print(f"{fn}\n  ONE layer spiral, {st['turns']} turns to r{st['r_max']:.0f}mm, {st['path']} m, "
+          f"~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
+    print(f"  amplitude 0 -> {st['amp_hi']:.3f}mm outward, wavelength {a.wavelength}mm, "
+          f"bed {a.bed}C fan {round(a.fan/255*100)}%")
+    print(f"  pimple spoke every {a.bump_every}mm: {len(st['marks'])} marks")

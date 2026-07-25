@@ -38,3 +38,13 @@ If v2 still pauses, root and disable the clog monitor.
 ## Note on our `--no-home` files
 They work because the machine kept its homed position from the previous job. That's legitimate and
 fast, but it is NOT a way to avoid the Z touch on a cold start — after power-off you must home once.
+
+## Bed temperature clamps to 120 C (found 2026-07-25)
+`M190 S135` is accepted without error and the machine holds target at exactly **120.0**, even though
+the Klipper config reports `heater_bed.max_temp: 135`. Something above Klipper (firmware or the
+print profile) caps it. **`max_temp` is not the reachable ceiling — verify the achieved target, not
+the commanded one.** Silent clamp, no error, no warning: a run you believe was at 135 was at 120.
+
+Practical: any run commanding >120 actually ran at 120, so those runs remain comparable to each
+other. Check with:
+    curl -s "http://192.168.3.140:7125/printer/objects/query?heater_bed"
