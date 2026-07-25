@@ -145,6 +145,25 @@ if __name__ == "__main__":
         # line_w unless one was passed explicitly.
         if a.line_w in (3.0,):
             a.line_w = round(a.spacing * a.overlap, 3)
+    # Z-AXIS FEASIBILITY. A sine of amplitude A at frequency f = speed/wavelength demands
+    # v_peak = 2*pi*f*A and a_peak = (2*pi*f)^2*A from the Z gantry. Exceed it and Klipper does NOT
+    # error — it slows the move to obey the Z limit, which changes XY speed, which changes extruded
+    # width, which silently confounds the very thing being measured. K2 Plus: max_z_velocity 30,
+    # max_z_accel 1000. Held to 40% of the accel limit so the planner never has to intervene.
+    _speed = a.flow / (a.line_w * a.layer_h)
+    _amp = min(a.amp_max, 0.6 * a.layer_h)
+    _f = _speed / a.wavelength
+    _vz = 2 * math.pi * _f * _amp
+    _az = (2 * math.pi * _f) ** 2 * _amp
+    if _vz > 30.0 or _az > 400.0:
+        _wl = 2 * math.pi * math.sqrt(_amp / 400.0) * _speed
+        raise SystemExit(
+            f"Z cannot follow this sine: {_f:.1f} Hz demands v_peak {_vz:.1f} mm/s "
+            f"(limit 30) and a_peak {_az:.0f} mm/s2 (budget 400 of 1000).\n"
+            f"  At {_speed:.0f} mm/s the shortest safe wavelength is {_wl:.0f} mm — pass "
+            f"--wavelength {math.ceil(_wl)} or slow the flow.\n"
+            f"  Klipper would not error here; it would quietly slow the move and change the "
+            f"extrusion width, confounding the measurement.")
     if a.seg > a.wavelength / 6:
         raise SystemExit(f"--seg {a.seg} is too coarse for wavelength {a.wavelength}: the sine would "
                          f"be sampled under 6x per cycle and come out as a jagged triangle, not a "
