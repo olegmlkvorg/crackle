@@ -4,7 +4,7 @@ Oleg, 2026-07-25: "you should be extruding at max speed we know nozzle can flow.
 negotiable. 100% of the time."
 """
 MAX_FLOW = 81.2        # mm3/s, MEASURED (spiral ramp, first skips at 81.2 @ r137, 0.8 nozzle, PLA 230C)
-FLOW = 54.0            # working = 90% of 60, the highest flow CONFIRMED CLEAN at 210C on a
+FLOW = 66.6            # 90% of the ~74 where the K2 audibly cracks (2026-07-25)
                        # then still cracking at 70. Oleg heard the extruder
                        # CRACKING (skipping) at 80 during sustained printing. The spiral ramp put
                        # first visual skips at 81.2, but a ramp only holds each flow for a few
@@ -104,17 +104,20 @@ TEMP_RATED = 210        # manufacturer spec for the translucent PLA
 # ---------------------------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------------------------
-# TWO MACHINES, SAME CEILING — measured 2026-07-25.
+# TWO MACHINES, DIFFERENT CEILINGS — measured 2026-07-25.
 #
-#     K2 Plus, 0.8 nozzle : clean through 60 mm3/s (true ceiling higher, 60-100 ramp pending)
-#     K1C,     1.0 nozzle : skips at 59.6 mm3/s  (Oleg: "keep it at 40% progress speed")
+#     K2 Plus, 0.8 nozzle : cracks at ~74 mm3/s   (clean end-to-end through 60)
+#     K1C,     1.0 nozzle : cracks at  59.6 mm3/s
 #
-# A 1.0 orifice has 1.56x the cross-sectional area of a 0.8 and gives NO more flow. So the limit is
-# the HOTEND — heater power and melt-zone length — not the hole. Two consequences worth holding:
-#   · a bigger nozzle buys a WIDER BEAD, not a faster print. Fitting one to go faster is a
-#     misunderstanding of where the constraint lives.
-#   · ~60 mm3/s is a property of this class of machine, so a third printer can be assumed to sit
-#     near it rather than needing a full ramp from zero — one confirmation run, not a hunt.
+# The WIDER nozzle passes LESS: 1.56x the orifice area, 0.80x the flow. So the hole is not the
+# constraint at all — the heater is, and these are different hotends. A bigger nozzle buys a WIDER
+# BEAD, never a faster print, which is the opposite of the usual reason for fitting one.
+#
+# CORRECTION, recorded because the mistake is instructive: this block first claimed the two ceilings
+# were EQUAL, and that claim was published to alien.tech.senku.im for an hour. It came from treating
+# the top of a test range as a measured limit — a 45-60 ramp that printed clean proves AT LEAST 60,
+# never 60. Widening the range until each machine actually failed gave the real numbers. Do not
+# quote a ceiling that equals the top of the range that produced it.
 K1C_FLOW = 53.0         # 90% of the measured 59.6
 K1C_MEASURED = 59.6     # where it began skipping, 1.0 nozzle, 210C
 # ---------------------------------------------------------------------------------------------
