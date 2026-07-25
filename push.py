@@ -44,7 +44,32 @@ def info(ip):
     j = api(ip, "/printer/info")
     return j.get("result", {}).get("hostname", "?") if "_error" not in j else "unreachable"
 
-def start(ip, name):
+def gcode(ip, script, timeout=180):
+    """Run a gcode command and BLOCK until the machine finishes it. Moonraker only responds when the
+    command completes, so the long timeout is what makes 'home, then start' actually sequential."""
+    req = urllib.request.Request(
+        f"http://{ip}:7125/printer/gcode/script?script={urllib.parse.quote(script)}",
+        data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            json.load(r)
+        return True
+    except Exception as e:
+        print(f"   {script} FAILED: {e}")
+        return False
+
+def start(ip, name, src=None):
+    # A "NO HOME" file started against an unhomed machine does NOT fail safely: Klipper accepts the
+    # job, runs M190/M109, and only errors when the first move executes — so it heats the bed and
+    # nozzle for minutes and dies at 0% with nothing on the plate. That is what happened to the K1C
+    # honeycomb. --no-home is an optimisation for a machine already homed, never a statement about
+    # the machine, so ASK the machine before trusting it.
+    if src and "G28" not in open(src).read():
+        st = api(ip, "/printer/objects/query?toolhead")
+        axes = st.get("result", {}).get("status", {}).get("toolhead", {}).get("homed_axes", "")
+        if axes != "xyz":
+            print(f"   file has no G28 and {ip} reports homed_axes={axes!r} — homing first")
+            gcode(ip, "G28")
     req = urllib.request.Request(f"http://{ip}:7125/printer/print/start?filename={name}",
                                  data=b"", method="POST")
     try:
@@ -131,5 +156,5 @@ if __name__ == "__main__":
         if len(a.files) > 1:
             print("   multiple files uploaded — not auto-starting; name one file to start it")
         else:
-            ok = start(ip, os.path.basename(a.files[0]))
+            ok = start(ip, os.path.basename(a.files[0]), src=a.files[0])
     sys.exit(0 if ok else 1)

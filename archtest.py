@@ -45,7 +45,7 @@ def win_for(amp, speed, aspect):
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
          bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean, reach,
          petal_w, petal_h, touches, prelift, swing, heart_mm, heart_z, petal_wide,
-         land_wave):
+         land_wave, n_layers, amp_clear, tip_gap):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -128,222 +128,274 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
     fan_on = False
     fan_after = 2 * math.pi * r0
     z_base = layer_h * squish
-    while th < th_max:
-        r = r0 + b * th
-        th += seg / max(r, 1.0)
-        r = r0 + b * th
-        x, y = cx + r * math.cos(th), cy + r * math.sin(th)
-        d = math.dist((px, py), (x, y)); s += d
-        if fan and not fan_on and s > fan_after:
-            L.append(f"M106 S{fan}                        ; {round(fan/255*100)}% once the base has bonded")
-            fan_on = True
-        e += d * e_per_mm
-        L.append(f"G1 {'F%d ' % f_mm_min if not arcs and s < 1 else ''}"
-                 f"X{x:.3f} Y{y:.3f} Z{z_base:.4f} E{e:.5f}")
-        px, py = x, y
+    # MULTIPLE LAYERS OF OVERLAPPING PETALS. Oleg: "allow multiple layers of overlapping petals but
+    # each layer you fly in the air higher not to hit prev one and always land on uniq spot to glue
+    # furthest petal point".
+    #
+    # Two constraints, and they pull in opposite directions:
+    #   · FLY HIGHER each layer, or the new arc sweeps through the one below it and knocks it off.
+    #   · but still LAND on the plate, because a foot glued to a previous petal is glued to
+    #     something that is itself only held by a foot.
+    # Both are satisfiable because the landings are OFFSET: each layer's feet are rotated into the
+    # gaps between the previous layer's, so every descent finds bare plate. Unique spot, clear path.
+    layer_gap = amp_clear
+    tips_placed = []
+    for _layer in range(n_layers):
+      th = 0.0; s = 0.0
+      # PHASE-OFFSET each layer along the spiral by a fraction of the foot pitch. Same pitch, same
+      # spiral, but layer k starts k/n of the way into the first gap — so its feet interleave into
+      # the bare plate between the previous layers' feet instead of landing on them. A foot glued to
+      # an earlier foot is a foot glued to nothing.
+      next_arc = pitch * _layer / max(n_layers, 1)
+      lift_layer = _layer * layer_gap
+      # ALTERNATE THE SPIRAL DIRECTION. A layer that always restarts at the inner radius leaves the
+      # nozzle parked at the outer edge, and the first move of the next layer drags a 103mm bead
+      # straight back across everything just built. Reversing odd layers means each one ENDS where
+      # the next BEGINS: outward, inward, outward. No jump, no travel, and the return sweep lays its
+      # feet between the outbound ones instead of on top of them.
+      ths = []
+      _t = 0.0
+      while _t < th_max:
+          _t += seg / max(r0 + b * _t, 1.0)
+          ths.append(_t)
+      if _layer % 2:
+          ths.reverse()
+      # NEST EACH LAYER'S SPIRAL IN THE PREVIOUS ONE'S GAP. Every layer re-walked the identical
+      # spiral at the identical z_base, so the nozzle re-traced a bead already standing at full
+      # height — ploughing it, not adding to it. Shifting the radius by a fraction of the turn
+      # spacing puts each layer on bare plate between the previous turns, which also carries the
+      # petal feet onto fresh spots for free: a different radius is a different landing.
+      r_off = spacing * _layer / max(n_layers, 1)
+      for th in ths:
+          r = r0 + b * th + r_off
+          x, y = cx + r * math.cos(th), cy + r * math.sin(th)
+          d = math.dist((px, py), (x, y)); s += d
+          if fan and not fan_on and s > fan_after:
+              L.append(f"M106 S{fan}                        ; {round(fan/255*100)}% once the base has bonded")
+              fan_on = True
+          e += d * e_per_mm
+          L.append(f"G1 {'F%d ' % f_mm_min if not arcs and s < 1 else ''}"
+                   f"X{x:.3f} Y{y:.3f} Z{z_base:.4f} E{e:.5f}")
+          px, py = x, y
 
-        if s >= next_arc:
-            amp = a_lo + (a_hi - a_lo) * (r - r0) / (r_max - r0)
-            span = aspect * amp                      # how far it carries at height
-            z_top = z_base + amp
-            # FLOW LIMITS THE VERTICAL MOVE TOO. The post is extruded at the same cross-section
-            # as the base bead, so its volumetric rate is bead_area x Z_SPEED. At the Z axis's
-            # 30 mm/s that is 2.4 x 30 = 72 mm3/s — above the 55 cap and into the ~74 where this
-            # extruder audibly cracks. The flow ceiling is a property of the hotend and does not
-            # care which axis is moving; I had applied it only to XY.
-            f_z = round(min(machine.MAX_Z_V,
-                            math.sqrt(2 * machine.MAX_Z_A * amp),
-                            flow / (line_w * layer_h)) * 60)
-            # PETAL — thrown outward and back, not pulled upward.
-            # Oleg: "throwing filament in the air does not seem to work well yet. try maxing the
-            # speed away from the point in a petal shape and back. 40mm height only".
-            #
-            # A vertical post hangs from a single foot with nothing to hold it. A petal is a closed
-            # loop in a vertical plane: the strand leaves the surface, arcs out and up, comes over
-            # the top and lands back near where it started, so it is carried by its own arc.
-            #
-            # SPEED IS THE MECHANISM, not just a preference. At a fixed flow cap, going fast makes
-            # the flying strand THIN: 2.4mm2 at 23 mm/s is a rope with nothing supporting it;
-            # 0.14mm2 at 400 mm/s is a thread light enough for its own curve to carry, and with so
-            # little mass in it that it freezes almost on contact with air.
-            e += (z_base - anchor) * e_per_mm
-            L.append(f"G1 F600 Z{anchor:.4f} E{e:.5f}            ; PRESS in — anchor the petal foot")
-            e += weld_dab
-            L.append(f"G1 F180 E{e:.5f}                     ; dab a foot")
-            L.append(f"G1 F{round(petal_v*60)}")            # restore: F persists in gcode
-            # Reach and height are INDEPENDENT. A circle in a vertical plane locks them at 1:2 —
-            # throwing 130mm out would have meant a 260mm apex. An ellipse decouples them, so the
-            # petal can be a long low throw: far out, barely up, and back. Oleg: "throw it way
-            # further, to the edge of the printer", having already fixed the height at 40mm.
-            Lr = reach if reach else amp / 2.0
-            swing_r = swing * Lr        # swing circle radius, a multiple of the reach
-            # KEEP THE FLOW AT THE CAP. Extrusion must be computed for the speed the head can
-            # ACTUALLY reach, not the speed commanded. The petal is short segments, so acceleration
-            # limits it well below 400 mm/s — computing E for 400 and then moving at 207 delivers
-            # only 16 mm3/s instead of 55, i.e. a starved, broken strand. Oleg: "dont slow down the
-            # flow of filament".
-            # Sample count MUST be a multiple of the lobe count, or the feet are never sampled.
-            # With 10 lobes over 48 samples the zeros of sin(lobes*phi) fall at fractional indices
-            # (4.8, 9.6, 14.4 ...), so the touchdown test almost never fired and only one foot in
-            # ten got a heart — or a weld. The structure was flying between anchors that did not
-            # exist. 12 samples per lobe puts a point exactly on every zero.
-            # Build the petal as POINTS first, then emit. Charging extrusion inside the point loop
-            # meant special-casing the first segment, and the special case was wrong — it billed
-            # 1mm of filament for a 17mm move and the flow audit came back at 854 mm3/s. With the
-            # points in hand every distance is exact and the flow cap holds by construction.
-            ux, uy = math.cos(th), math.sin(th)     # radial: the direction the petal throws
-            tx, ty = -uy, ux                        # tangential: the sideways lean
-            # TWO LOBES WITH A FOOT IN THE MIDDLE. Oleg: "throw petal in the air, then go down in
-            # longest point to glue it and then get back to the air again".
-            #
-            # phi runs 0..pi, so the head goes OUT and comes BACK: u = Lr*sin(phi) peaks at pi/2.
-            # Height is |sin(2*phi)|, which is zero at 0, pi/2 and pi and peaks between — so the
-            # strand rises, arcs, TOUCHES DOWN at maximum reach where it is welded, rises again, and
-            # lands home. The long span stops being a cantilever hanging off one foot and becomes
-            # two arches sharing a middle anchor. That is what lets the throw be long.
-            # MANY FEET, NOT ONE. With a single mid-throw touchdown the two lobes are so long they
-            # read as straight lines. |sin((touches+1)*phi)| puts `touches` zeros inside the throw,
-            # so the strand scallops down and up repeatedly — visibly arched, and no span is longer
-            # than reach/(touches+1) unsupported.
-            # RISE FIRST, THEN THROW. Oleg: "add more of vertical movement so there is actually a
-            # petal to be thrown before you move sidewise".
-            #
-            # The arc moved outward WHILE it rose, so at no point was there a length of strand
-            # standing in the air — it was being laid along a curve, not thrown. A pure vertical
-            # climb at each foot draws real material upward first; only then does the head move
-            # sideways, and what moves is a strand that already exists. That is the difference
-            # between drawing an arc and throwing a petal.
-            # A PETAL HAS AREA. Oleg: "now you are in the are of single line mostly".
-            # The throw went out and came back along the SAME line, so it could never enclose
-            # anything — vertical scallops on a single track. A petal outline needs the outbound and
-            # the return to SEPARATE, and meet again at the tip:
-            #     radial   u = Lr * sin(phi/2)    0 -> Lr -> 0   over phi 0..2pi
-            #     lateral  w = W  * sin(phi)      +W going out, -W coming back
-            # which traces a leaf: it opens on the way out, closes on the way home, and the enclosed
-            # width is 2W at the widest. Z arches over the whole thing so the leaf lifts off the
-            # plate and lands at its own tip.
-            lobes_pre = touches + 1
-            n_p = lobes_pre * 24
-            pts_p = []
-            touches_at = set()
-            lobes = lobes_pre
-            W = petal_wide * Lr
-            for k in range(1, n_p + 1):
-                phi = 2 * math.pi * k / n_p
-                u = Lr * math.sin(phi / 2)
-                w = W * math.sin(phi)
-                al = u / swing_r
-                ox = math.sin(al) * swing_r
-                oy = (1 - math.cos(al)) * swing_r * 0.35 + w
-                zc = anchor + amp * abs(math.sin(lobes * phi / 2))
-                # SINUSOID BEFORE LANDING. Oleg: "play sinusoid on Z before landing so you travel to
-                # pull the extrusion but do not bind it". Approaching a foot the arc flattens out
-                # and the strand would simply be laid along the plate — bound, and no longer free to
-                # curve. A small Z ripple keeps the nozzle moving vertically through that approach,
-                # so it keeps PULLING material out without pressing it down. Material keeps flowing
-                # at target while nothing is committed to the plate until the foot itself.
-                if land_wave > 0:
-                    _ph = abs(math.sin(lobes * phi / 2))
-                    if _ph < 0.35:                      # only near the ground, not at the apex
-                        zc += land_wave * (0.35 - _ph) / 0.35 * abs(
-                            math.sin(lobes * phi * 3.0))
-                pts_p.append((px + ux * ox + tx * oy, py + uy * ox + ty * oy, zc))
-                # ANCHORS ONLY ON THE WAY OUT. Oleg: "remove the ancor point beyond the furtherst
-                # one". phi=pi is the tip — the furthest point. Feet after it were pinning the
-                # RETURN leg down, which is exactly the half that should stay in the air and curve.
-                if abs(math.sin(lobes * phi / 2)) < 0.02 and 1 < k < n_p and phi <= math.pi + 1e-9:
-                    touches_at.add(len(pts_p) - 1)
-            prev = (px, py, anchor)
-            # The flying strand is SET, not derived. Three attempts at deriving it from speed and
-            # the flow cap each produced a different wrong answer (0.14 too thin, 2.19 a rope,
-            # 872 mm3/s in the audit) because the derivation chains through achievable speed, which
-            # depends on segment length, which the lean makes wildly non-uniform.
-            # Oleg: "while you fly thru the air, flow need to be managable so it does not split
-            # apart". Too thin and it necks and snaps mid-flight; too thick and it is a rope with
-            # nothing holding it. So state the strand directly and CHECK the flow it implies.
-            # SLOW IN THE AIR, AT MAX FLOW. Oleg: "travel has to be slow in the air with max
-            # extrusion flow so it does not get into straight line".
-            # A fast head with a thin strand pulls the filament TAUT — it becomes a straight line
-            # between two points because it is under tension the whole way. Slow travel while
-            # pushing the full flow feeds out more material than the distance needs, so the strand
-            # goes SLACK and takes a curve of its own. That slack is the shape.
-            # petal_w = 0 derives it: cross-section = flow / speed, which is max flow by definition.
-            xsec_petal = (petal_w * petal_h) if petal_w > 0 else (flow / petal_v)
-            for k, (hx, hy, zc) in enumerate(pts_p):
-                d3 = math.dist(prev, (hx, hy, zc))
-                if d3 < 1e-9:
-                    continue
-                e += d3 * (xsec_petal / area)
-                # ONE SPEED FOR THE WHOLE THROW. Extrusion per mm is fixed, so constant speed IS
-                # constant flow — and varying it was swinging the flow 17x (3 mm3/s at a F600 press
-                # against 55 in flight). Oleg: "speed is not following the extrusion volume, lets aim
-                # for uniformed lines speed wise". The feet still weld, because the dab is a
-                # STATIONARY extrusion: it adds material without laying a line, so it cannot make
-                # the line uneven.
-                L.append(f"G1 F{round(petal_v*60)} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
-                         + (f"   ; petal reach {Lr:.0f}mm apex {amp:.0f}mm" if k == 0 else ""))
-                prev = (hx, hy, zc)
-                if k in touches_at and heart_mm <= 0:
-                    # plain foot: press hard, dab, carry on. No decoration.
-                    e += (zc - max(heart_z, 0.08)) * e_per_mm
-                    L.append(f"G1 F600 Z{max(heart_z,0.08):.4f} E{e:.5f}            ; press the foot")
-                    e += weld_dab
-                    L.append(f"G1 F180 E{e:.5f}                     ; weld the foot")
-                    # RESTORE THE FEEDRATE. F persists in gcode, so the F600 press and the F180 dab
-                    # leave every following move crawling until something sets it again — a stretch
-                    # of base spiral was running at 10 mm/s and 24 mm3/s instead of 55. Oleg spotted
-                    # it as "places where extrusion is paused". Nothing was paused; it was starved.
-                    L.append(f"G1 F{round(petal_v*60)}")
-                    prev = (hx, hy, max(heart_z, 0.08))
-                elif k in touches_at and heart_mm > 0:
-                    # A LITTLE HEART AT EVERY FOOT. Oleg: "when you land to glue it, make a little
-                    # pretty heart in there". The foot has to dwell on the plate anyway to weld —
-                    # so instead of a blind dab of filament, spend that same material drawing
-                    # something. It costs nothing extra and every landing becomes a mark.
-                    # The classic heart curve, scaled to `heart_mm` across, traced on the plate:
-                    #     x = 16 sin^3 t
-                    #     y = 13 cos t - 5 cos 2t - 2 cos 3t - cos 4t
-                    hp = []
-                    for hk in range(0, 25):
-                        t = 2 * math.pi * hk / 24
-                        hxx = 16 * math.sin(t) ** 3
-                        hyy = (13 * math.cos(t) - 5 * math.cos(2 * t)
-                               - 2 * math.cos(3 * t) - math.cos(4 * t))
-                        sc = heart_mm / 32.0
-                        hp.append((hx + (ux * hxx + tx * hyy) * sc,
-                                   hy + (uy * hxx + ty * hyy) * sc))
-                    # PRESSED HARD. The heart is the only part of a throw that must SURVIVE being
-                    # pulled on by every arc that leaves it, so it is squashed well below the
-                    # anchor height — the flatter and wider it is crushed, the more plate it grips.
-                    # Oleg: "hearts need to be much larger diameter and pressed to bed as much as
-                    # possible".
-                    hz = max(heart_z, 0.08)
-                    e += (anchor - hz) * e_per_mm
-                    L.append(f"G1 F600 Z{hz:.4f} E{e:.5f}            ; press the heart into the plate")
-                    hprev = (hx, hy, hz)
-                    for hi, (qx, qy) in enumerate(hp):
-                        dh = math.dist(hprev, (qx, qy, anchor))
-                        if dh < 1e-9:
-                            continue
-                        e += dh * (xsec_petal / area)
-                        L.append(f"G1 F{round(petal_v*60)} X{qx:.3f} Y{qy:.3f} Z{hz:.4f} "
-                                 f"E{e:.5f}" + (f"   ; heart {heart_mm:.0f}mm, pressed to {hz:.2f}"
-                                                if hi == 0 else ""))
-                        hprev = (qx, qy, hz)
-                    e += weld_dab
-                    L.append(f"G1 F180 E{e:.5f}                     ; weld the foot")
-                    L.append(f"G1 F{round(petal_v*60)}")            # restore: F persists in gcode
-                    prev = (hp[-1][0], hp[-1][1], hz)
-            e += weld_dab
-            L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
-            e += (z_base - anchor) * e_per_mm
-            L.append(f"G1 F600 Z{z_base:.4f} E{e:.5f}            ; back to the squished baseline")
-            L.append(f"G1 F{f_mm_min}")                     # restore the BASE feedrate
-            th2 = th + (span / max(r, 1.0))
-            x2, y2 = cx + r * math.cos(th2), cy + r * math.sin(th2)
-            th = th2; px, py = x2, y2
-            arcs.append((round(amp, 2), round(r)))
-            next_arc = s + pitch
+          if s >= next_arc:
+              amp = a_lo + (a_hi - a_lo) * (r - r0) / (r_max - r0)
+              span = aspect * amp                      # how far it carries at height
+              z_top = z_base + amp
+              # FLOW LIMITS THE VERTICAL MOVE TOO. The post is extruded at the same cross-section
+              # as the base bead, so its volumetric rate is bead_area x Z_SPEED. At the Z axis's
+              # 30 mm/s that is 2.4 x 30 = 72 mm3/s — above the 55 cap and into the ~74 where this
+              # extruder audibly cracks. The flow ceiling is a property of the hotend and does not
+              # care which axis is moving; I had applied it only to XY.
+              f_z = round(min(machine.MAX_Z_V,
+                              math.sqrt(2 * machine.MAX_Z_A * amp),
+                              flow / (line_w * layer_h)) * 60)
+              # PETAL — thrown outward and back, not pulled upward.
+              # Oleg: "throwing filament in the air does not seem to work well yet. try maxing the
+              # speed away from the point in a petal shape and back. 40mm height only".
+              #
+              # A vertical post hangs from a single foot with nothing to hold it. A petal is a closed
+              # loop in a vertical plane: the strand leaves the surface, arcs out and up, comes over
+              # the top and lands back near where it started, so it is carried by its own arc.
+              #
+              # SPEED IS THE MECHANISM, not just a preference. At a fixed flow cap, going fast makes
+              # the flying strand THIN: 2.4mm2 at 23 mm/s is a rope with nothing supporting it;
+              # 0.14mm2 at 400 mm/s is a thread light enough for its own curve to carry, and with so
+              # little mass in it that it freezes almost on contact with air.
+              # NEVER GLUE A TIP ONTO AN EARLIER TIP. Oleg: "always land on uniq spot to glue
+              # furthest petal point". Interleaving the layers by radius and phase gets most of the
+              # way there, but "most" is not "always" — six pairs still landed within 3mm. So check
+              # the spot before committing: work out where this petal's tip WOULD land, and if an
+              # earlier petal already owns that ground, skip this launch and try again a fifth of a
+              # pitch further along the spiral. A foot glued onto a foot is glued to nothing.
+              _Lr = reach if reach else amp / 2.0
+              _sr = swing * _Lr
+              _al = _Lr / _sr
+              _ox, _oy = math.sin(_al) * _sr, (1 - math.cos(_al)) * _sr * 0.35
+              _ux, _uy = math.cos(th), math.sin(th)
+              _tip = (px + _ux * _ox - _uy * _oy, py + _uy * _ox + _ux * _oy)
+              if any(math.dist(_tip, t) < tip_gap for t in tips_placed):
+                  next_arc = s + pitch * 0.2
+                  continue
+              tips_placed.append(_tip)
+              e += (z_base - anchor) * e_per_mm
+              L.append(f"G1 F600 Z{anchor:.4f} E{e:.5f}            ; PRESS in — anchor the petal foot")
+              e += weld_dab
+              L.append(f"G1 F180 E{e:.5f}                     ; dab a foot")
+              L.append(f"G1 F{round(petal_v*60)}")            # restore: F persists in gcode
+              # Reach and height are INDEPENDENT. A circle in a vertical plane locks them at 1:2 —
+              # throwing 130mm out would have meant a 260mm apex. An ellipse decouples them, so the
+              # petal can be a long low throw: far out, barely up, and back. Oleg: "throw it way
+              # further, to the edge of the printer", having already fixed the height at 40mm.
+              Lr = reach if reach else amp / 2.0
+              swing_r = swing * Lr        # swing circle radius, a multiple of the reach
+              # KEEP THE FLOW AT THE CAP. Extrusion must be computed for the speed the head can
+              # ACTUALLY reach, not the speed commanded. The petal is short segments, so acceleration
+              # limits it well below 400 mm/s — computing E for 400 and then moving at 207 delivers
+              # only 16 mm3/s instead of 55, i.e. a starved, broken strand. Oleg: "dont slow down the
+              # flow of filament".
+              # Sample count MUST be a multiple of the lobe count, or the feet are never sampled.
+              # With 10 lobes over 48 samples the zeros of sin(lobes*phi) fall at fractional indices
+              # (4.8, 9.6, 14.4 ...), so the touchdown test almost never fired and only one foot in
+              # ten got a heart — or a weld. The structure was flying between anchors that did not
+              # exist. 12 samples per lobe puts a point exactly on every zero.
+              # Build the petal as POINTS first, then emit. Charging extrusion inside the point loop
+              # meant special-casing the first segment, and the special case was wrong — it billed
+              # 1mm of filament for a 17mm move and the flow audit came back at 854 mm3/s. With the
+              # points in hand every distance is exact and the flow cap holds by construction.
+              ux, uy = math.cos(th), math.sin(th)     # radial: the direction the petal throws
+              tx, ty = -uy, ux                        # tangential: the sideways lean
+              # TWO LOBES WITH A FOOT IN THE MIDDLE. Oleg: "throw petal in the air, then go down in
+              # longest point to glue it and then get back to the air again".
+              #
+              # phi runs 0..pi, so the head goes OUT and comes BACK: u = Lr*sin(phi) peaks at pi/2.
+              # Height is |sin(2*phi)|, which is zero at 0, pi/2 and pi and peaks between — so the
+              # strand rises, arcs, TOUCHES DOWN at maximum reach where it is welded, rises again, and
+              # lands home. The long span stops being a cantilever hanging off one foot and becomes
+              # two arches sharing a middle anchor. That is what lets the throw be long.
+              # MANY FEET, NOT ONE. With a single mid-throw touchdown the two lobes are so long they
+              # read as straight lines. |sin((touches+1)*phi)| puts `touches` zeros inside the throw,
+              # so the strand scallops down and up repeatedly — visibly arched, and no span is longer
+              # than reach/(touches+1) unsupported.
+              # RISE FIRST, THEN THROW. Oleg: "add more of vertical movement so there is actually a
+              # petal to be thrown before you move sidewise".
+              #
+              # The arc moved outward WHILE it rose, so at no point was there a length of strand
+              # standing in the air — it was being laid along a curve, not thrown. A pure vertical
+              # climb at each foot draws real material upward first; only then does the head move
+              # sideways, and what moves is a strand that already exists. That is the difference
+              # between drawing an arc and throwing a petal.
+              # A PETAL HAS AREA. Oleg: "now you are in the are of single line mostly".
+              # The throw went out and came back along the SAME line, so it could never enclose
+              # anything — vertical scallops on a single track. A petal outline needs the outbound and
+              # the return to SEPARATE, and meet again at the tip:
+              #     radial   u = Lr * sin(phi/2)    0 -> Lr -> 0   over phi 0..2pi
+              #     lateral  w = W  * sin(phi)      +W going out, -W coming back
+              # which traces a leaf: it opens on the way out, closes on the way home, and the enclosed
+              # width is 2W at the widest. Z arches over the whole thing so the leaf lifts off the
+              # plate and lands at its own tip.
+              lobes_pre = touches + 1
+              n_p = lobes_pre * 24
+              pts_p = []
+              touches_at = set()
+              lobes = lobes_pre
+              W = petal_wide * Lr
+              for k in range(1, n_p + 1):
+                  phi = 2 * math.pi * k / n_p
+                  u = Lr * math.sin(phi / 2)
+                  w = W * math.sin(phi)
+                  al = u / swing_r
+                  ox = math.sin(al) * swing_r
+                  oy = (1 - math.cos(al)) * swing_r * 0.35 + w
+                  zc = anchor + (amp + lift_layer) * abs(math.sin(lobes * phi / 2))
+                  # SINUSOID BEFORE LANDING. Oleg: "play sinusoid on Z before landing so you travel to
+                  # pull the extrusion but do not bind it". Approaching a foot the arc flattens out
+                  # and the strand would simply be laid along the plate — bound, and no longer free to
+                  # curve. A small Z ripple keeps the nozzle moving vertically through that approach,
+                  # so it keeps PULLING material out without pressing it down. Material keeps flowing
+                  # at target while nothing is committed to the plate until the foot itself.
+                  if land_wave > 0:
+                      _ph = abs(math.sin(lobes * phi / 2))
+                      if _ph < 0.35:                      # only near the ground, not at the apex
+                          zc += land_wave * (0.35 - _ph) / 0.35 * abs(
+                              math.sin(lobes * phi * 3.0))
+                  pts_p.append((px + ux * ox + tx * oy, py + uy * ox + ty * oy, zc))
+                  # ANCHORS ONLY ON THE WAY OUT. Oleg: "remove the ancor point beyond the furtherst
+                  # one". phi=pi is the tip — the furthest point. Feet after it were pinning the
+                  # RETURN leg down, which is exactly the half that should stay in the air and curve.
+                  if abs(math.sin(lobes * phi / 2)) < 0.02 and 1 < k < n_p and phi <= math.pi + 1e-9:
+                      touches_at.add(len(pts_p) - 1)
+              prev = (px, py, anchor)
+              # The flying strand is SET, not derived. Three attempts at deriving it from speed and
+              # the flow cap each produced a different wrong answer (0.14 too thin, 2.19 a rope,
+              # 872 mm3/s in the audit) because the derivation chains through achievable speed, which
+              # depends on segment length, which the lean makes wildly non-uniform.
+              # Oleg: "while you fly thru the air, flow need to be managable so it does not split
+              # apart". Too thin and it necks and snaps mid-flight; too thick and it is a rope with
+              # nothing holding it. So state the strand directly and CHECK the flow it implies.
+              # SLOW IN THE AIR, AT MAX FLOW. Oleg: "travel has to be slow in the air with max
+              # extrusion flow so it does not get into straight line".
+              # A fast head with a thin strand pulls the filament TAUT — it becomes a straight line
+              # between two points because it is under tension the whole way. Slow travel while
+              # pushing the full flow feeds out more material than the distance needs, so the strand
+              # goes SLACK and takes a curve of its own. That slack is the shape.
+              # petal_w = 0 derives it: cross-section = flow / speed, which is max flow by definition.
+              xsec_petal = (petal_w * petal_h) if petal_w > 0 else (flow / petal_v)
+              for k, (hx, hy, zc) in enumerate(pts_p):
+                  d3 = math.dist(prev, (hx, hy, zc))
+                  if d3 < 1e-9:
+                      continue
+                  e += d3 * (xsec_petal / area)
+                  # ONE SPEED FOR THE WHOLE THROW. Extrusion per mm is fixed, so constant speed IS
+                  # constant flow — and varying it was swinging the flow 17x (3 mm3/s at a F600 press
+                  # against 55 in flight). Oleg: "speed is not following the extrusion volume, lets aim
+                  # for uniformed lines speed wise". The feet still weld, because the dab is a
+                  # STATIONARY extrusion: it adds material without laying a line, so it cannot make
+                  # the line uneven.
+                  L.append(f"G1 F{round(petal_v*60)} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
+                           + (f"   ; petal reach {Lr:.0f}mm apex {amp:.0f}mm" if k == 0 else ""))
+                  prev = (hx, hy, zc)
+                  if k in touches_at and heart_mm <= 0:
+                      # plain foot: press hard, dab, carry on. No decoration.
+                      e += (zc - max(heart_z, 0.08)) * e_per_mm
+                      L.append(f"G1 F600 Z{max(heart_z,0.08):.4f} E{e:.5f}            ; press the foot")
+                      e += weld_dab
+                      L.append(f"G1 F180 E{e:.5f}                     ; weld the foot")
+                      # RESTORE THE FEEDRATE. F persists in gcode, so the F600 press and the F180 dab
+                      # leave every following move crawling until something sets it again — a stretch
+                      # of base spiral was running at 10 mm/s and 24 mm3/s instead of 55. Oleg spotted
+                      # it as "places where extrusion is paused". Nothing was paused; it was starved.
+                      L.append(f"G1 F{round(petal_v*60)}")
+                      prev = (hx, hy, max(heart_z, 0.08))
+                  elif k in touches_at and heart_mm > 0:
+                      # A LITTLE HEART AT EVERY FOOT. Oleg: "when you land to glue it, make a little
+                      # pretty heart in there". The foot has to dwell on the plate anyway to weld —
+                      # so instead of a blind dab of filament, spend that same material drawing
+                      # something. It costs nothing extra and every landing becomes a mark.
+                      # The classic heart curve, scaled to `heart_mm` across, traced on the plate:
+                      #     x = 16 sin^3 t
+                      #     y = 13 cos t - 5 cos 2t - 2 cos 3t - cos 4t
+                      hp = []
+                      for hk in range(0, 25):
+                          t = 2 * math.pi * hk / 24
+                          hxx = 16 * math.sin(t) ** 3
+                          hyy = (13 * math.cos(t) - 5 * math.cos(2 * t)
+                                 - 2 * math.cos(3 * t) - math.cos(4 * t))
+                          sc = heart_mm / 32.0
+                          hp.append((hx + (ux * hxx + tx * hyy) * sc,
+                                     hy + (uy * hxx + ty * hyy) * sc))
+                      # PRESSED HARD. The heart is the only part of a throw that must SURVIVE being
+                      # pulled on by every arc that leaves it, so it is squashed well below the
+                      # anchor height — the flatter and wider it is crushed, the more plate it grips.
+                      # Oleg: "hearts need to be much larger diameter and pressed to bed as much as
+                      # possible".
+                      hz = max(heart_z, 0.08)
+                      e += (anchor - hz) * e_per_mm
+                      L.append(f"G1 F600 Z{hz:.4f} E{e:.5f}            ; press the heart into the plate")
+                      hprev = (hx, hy, hz)
+                      for hi, (qx, qy) in enumerate(hp):
+                          dh = math.dist(hprev, (qx, qy, anchor))
+                          if dh < 1e-9:
+                              continue
+                          e += dh * (xsec_petal / area)
+                          L.append(f"G1 F{round(petal_v*60)} X{qx:.3f} Y{qy:.3f} Z{hz:.4f} "
+                                   f"E{e:.5f}" + (f"   ; heart {heart_mm:.0f}mm, pressed to {hz:.2f}"
+                                                  if hi == 0 else ""))
+                          hprev = (qx, qy, hz)
+                      e += weld_dab
+                      L.append(f"G1 F180 E{e:.5f}                     ; weld the foot")
+                      L.append(f"G1 F{round(petal_v*60)}")            # restore: F persists in gcode
+                      prev = (hp[-1][0], hp[-1][1], hz)
+              e += weld_dab
+              L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
+              e += (z_base - anchor) * e_per_mm
+              L.append(f"G1 F600 Z{z_base:.4f} E{e:.5f}            ; back to the squished baseline")
+              L.append(f"G1 F{f_mm_min}")                     # restore the BASE feedrate
+              th2 = th + (span / max(r, 1.0))
+              x2, y2 = cx + r * math.cos(th2), cy + r * math.sin(th2)
+              th = th2; px, py = x2, y2
+              arcs.append((round(amp, 2), round(r)))
+              next_arc = s + pitch
 
     L += ["M107", "SET_PIN PIN=fan1 VALUE=0", "SET_PIN PIN=fan2 VALUE=0",
           "M104 S0", "M140 S0", f"G1 Z{layer_h + 40:.1f} F900",
@@ -369,6 +421,11 @@ if __name__ == "__main__":
                     help="swing-circle radius as a MULTIPLE of the reach. Bigger = gentler\n                          sweep. This is the arc that throws the strand.")
     ap.add_argument("--prelift", type=float, default=12.0,
                     help="pure vertical climb at each foot BEFORE any sideways move —\n                          this is what makes a petal to throw instead of an arc to lay")
+    ap.add_argument("--tip-gap", type=float, default=4.0,
+                    help="minimum mm between two petals' far-point glue landings")
+    ap.add_argument("--layers", type=int, default=1, help="stacked layers of petals")
+    ap.add_argument("--clear", type=float, default=12.0,
+                    help="extra apex height per layer so a new arc clears the one below")
     ap.add_argument("--land-wave", type=float, default=3.0,
                     help="Z ripple on the approach to a foot — pulls extrusion without\n                          binding it to the plate")
     ap.add_argument("--wide", type=float, default=0.35,
@@ -409,7 +466,7 @@ if __name__ == "__main__":
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
                  a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean, a.reach,
                  a.petal_w, a.petal_h, a.touches, a.prelift, a.swing, a.heart, a.heart_z, a.wide,
-                 a.land_wave)
+                 a.land_wave, a.layers, a.clear, a.tip_gap)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
