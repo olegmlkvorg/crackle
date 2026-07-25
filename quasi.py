@@ -81,18 +81,27 @@ class Q:
     fil_d: float = 1.75
     temp: int = 230
     bed: int = 60
-    # --- tuned by tune(); see TUNED note at the bottom
-    fx: tuple = (0.816497, 1.089725)      # r6/3, r19/4
-    ax: tuple = (1.0, 0.47)
-    px: tuple = (0.000, 1.432)
-    fy: tuple = (0.829156, 1.118034)      # r11/4, r5/2
-    ay: tuple = (1.0, 0.43)
-    py: tuple = (1.254, 2.967)
+    # --- TUNED (600-candidate frequency search + local phase/amplitude refinement).
+    # All four frequencies sit within 1.09-1.17: that is what keeps curvature low. If one axis
+    # turns much faster than the other you get a raster, and a raster U-turns (the serpentine
+    # defect the flow test already hit). sqrt(5), sqrt(22), sqrt(19), sqrt(21): distinct squarefree
+    # radicands, so no integer relation exists -> the orbit is dense on a 4-torus and never closes.
+    # ay is scaled by 0.90048 so the realised x and y extents match and one ISOTROPIC scale fits
+    # the square (an anisotropic fit would re-introduce a curvature maximum on the squashed axis).
+    fx: tuple = (1.118034, 1.172604)      # sqrt5/2, sqrt22/4
+    ax: tuple = (1.0, 0.4193)
+    px: tuple = (0.0, 5.8216)
+    fy: tuple = (1.089725, 1.145644)      # sqrt19/4, sqrt21/4
+    ay: tuple = (0.90048, 0.51858)
+    py: tuple = (2.7006, 1.5657)
     T: float = 80.0              # THE DIAL: t-span per layer -> path length -> crossings
     v_cmd: float = 130.0         # mm/s commanded
     ds: float = 0.20             # analysis resampling (mm)
     min_angle_deg: float = 25.0  # below this a "crossing" is a shallow merge, not a junction
-    d4: bool = True              # per-layer square-symmetry op
+    d4: bool = False             # MEASURED USELESS: cumulative coverage CV 0.330 without it,
+                                 # 0.325 with. It also breaks continuity (a jump at every layer
+                                 # boundary). t simply continuing is enough. Left in to show the
+                                 # comparison, off by default.
 
 
 # ---------------------------------------------------------------- the curve
@@ -275,6 +284,29 @@ def analyse(q: Q, stack=False):
     v, d, below, tsec = plan(P, q.v_cmd)
     R["frac_below90"] = float(below.sum() / d.sum())
     R["time_layer"], R["v_mean"] = tsec, float(d.sum() / tsec)
+
+    if stack:
+        # Curvature and the planner over the WHOLE print. A quasi-periodic curve gets closer to a
+        # near-cusp the longer it runs, so layer 0 alone flatters the design. This is the honest
+        # number: one polyline, 15 layers, the planner started and stopped exactly once.
+        Pf = np.vstack([resample(q, k * q.T, (k + 1) * q.T, s, cx, cy,
+                                 op=k if q.d4 else 0)[0] for k in range(q.layers)])
+        R["P_full"] = Pf
+        tf = np.linspace(0.0, q.T * q.layers, 1_200_000)
+        _, _, dxf, dyf, ddxf, ddyf = curve_mm(q, tf, s, cx, cy)
+        spf = np.hypot(dxf, dyf)
+        kf = np.abs(dxf * ddyf - dyf * ddxf) / np.maximum(spf ** 3, 1e-15)
+        vcf = np.sqrt(ACCEL / np.maximum(kf, 1e-12))
+        w = spf / spf.sum()                       # arc-length weighting, not t weighting
+        o = np.argsort(vcf); cw = np.cumsum(w[o])
+        R["vcurv_full_pct"] = {p: float(vcf[o][np.searchsorted(cw, p / 100)])
+                               for p in (0.1, 1, 5, 10, 50)}
+        R["r_min_full"] = float(1.0 / max(kf.max(), 1e-12))
+        R["min_speed_ratio_full"] = float(spf.min() / spf.mean())
+        R["v_full"] = {}
+        for vtest in (60, 80, 100, 130, 150, 200, 300, 400):
+            _, dfd, bf, tf_s = plan(Pf, float(vtest))
+            R["v_full"][vtest] = (float(bf.sum() / dfd.sum()), float(dfd.sum() / tf_s), tf_s)
 
     nb = 12
     edges = np.linspace(q.origin, q.origin + q.size, nb + 1)
@@ -465,20 +497,19 @@ def report(q: Q):
     print(f"   TOTAL FUSED JUNCTIONS IN THE COUPON: "
           f"{R['N']*q.layers + R['inter_cross']*(q.layers-1):.0f}")
 
-    print("\n2. SPEED UNIFORMITY")
-    vc = R["vcurv"]
-    print(f"   min radius of curvature {R['r_min']:.2f} mm   min|r'|/mean|r'| = {R['min_speed_ratio']:.3f}")
-    print(f"   curvature ceiling sqrt(a/kappa) at a={ACCEL:.0f} mm/s2, by arc length:")
-    print(f"     min {vc.min():.0f} | p01 {np.percentile(vc,1):.0f} | p05 {np.percentile(vc,5):.0f} | "
-          f"p50 {np.percentile(vc,50):.0f} | p95 {np.percentile(vc,95):.0f} mm/s")
-    print(f"   full Klipper look-ahead (scv={SCV}, ds={q.ds}mm):")
-    print(f"     {'v_cmd':>6} {'<90% of path':>13} {'achieved mean':>14} {'s/layer':>9} {'min/coupon':>11}")
-    fitted = fit(q, q.T * q.layers)[:3]
-    Pv, *_ = resample(q, 0, q.T, *fitted)
-    for v in (60, 80, 100, 130, 150, 200, 300, 400):
-        _, d, below, ts = plan(Pv, float(v))
-        print(f"     {v:6.0f} {100*below.sum()/d.sum():12.2f}% {d.sum()/ts:13.1f} "
-              f"{ts:9.1f} {ts*q.layers/60:11.2f}")
+    print("\n2. SPEED UNIFORMITY  (measured over ALL 15 layers, one polyline, one start/stop)")
+    print(f"   layer 0 alone: r_min {R['r_min']:.2f} mm, min|r'|/mean|r'| {R['min_speed_ratio']:.3f}")
+    print(f"   whole print  : r_min {R['r_min_full']:.4f} mm, min|r'|/mean|r'| "
+          f"{R['min_speed_ratio_full']:.4f}  <- near-cusps DO appear once t runs long enough")
+    print(f"   curvature ceiling sqrt(a/kappa), a={ACCEL:.0f} mm/s2, weighted by ARC LENGTH:")
+    pc = R["vcurv_full_pct"]
+    print("     " + "  ".join(f"p{k}: {v:.0f}" for k, v in pc.items()) + " mm/s")
+    print(f"   -> only {list(pc)[0]}% of the path cannot hold {pc[0.1]:.0f} mm/s; half of it could hold "
+          f"{pc[50]:.0f} mm/s.")
+    print(f"   full Klipper look-ahead over the whole 15-layer path (scv={SCV}, ds={q.ds}mm):")
+    print(f"     {'v_cmd':>6} {'<90% of path':>13} {'achieved mean':>14} {'% of cmd':>9} {'min/coupon':>11}")
+    for v, (fb, vm, ts) in R["v_full"].items():
+        print(f"     {v:6.0f} {100*fb:12.2f}% {vm:13.1f} {100*vm/v:8.0f}% {ts/60:11.2f}")
     print(f"   flow at v_cmd={q.v_cmd}: {R['q_at_vcmd']:.1f} mm3/s (working ceiling {WORK_VOL_FLOW} "
           f"-> flow allows {R['v_flow_max']:.0f} mm/s; kinematics bind first)")
 
@@ -502,6 +533,12 @@ def report(q: Q):
     Hc = R["cov_cum"] / R["cov_cum"].mean()
     for r in range(11, -1, -1):
         print("   " + " ".join(f"{Hc[c][r]:4.1f}" for c in range(12)))
+    corners = [Hc[0][0], Hc[0][11], Hc[11][0], Hc[11][11]]
+    print(f"   THE HONEST DEFECT: the four 5mm corner bins get {min(corners):.2f}-{max(corners):.2f}"
+          f" of mean.")
+    print(f"   A Lissajous only reaches a corner when BOTH axes peak at once, which is rare. The")
+    print(f"   coupon is a 60mm square with ~5mm soft corners; "
+          f"{100*float((Hc>=0.5).sum())/144:.0f}% of bins carry >=50% of mean.")
     print(f"   areal balance: mean deposited height {R['mean_height']:.3f} mm against a {q.layer_h}mm "
           f"Z step -> {100*R['mean_height']/q.layer_h:.0f}% of the layer is plastic, the rest air.")
 

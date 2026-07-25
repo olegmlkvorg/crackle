@@ -17,7 +17,7 @@ def check(path):
     # comes back down to Z0.2, and homes inside a macro rather than a literal G28. Checking the
     # body only — a validator that cries wolf on correct machine gcode trains you to ignore it.
     body = False
-    z = 0.0; e = 0.0; x = y = 0.0
+    z = 0.0; e = 0.0; x = y = 0.0; layer_floor = 0.0
     abs_e = True
     problems, warns = [], []
     travel_mm = extrude_mm = 0.0
@@ -25,7 +25,11 @@ def check(path):
     zs, temps, maxz = [], [], 0.0
     n = 0
     for ln, raw in enumerate(open(path), 1):
-        if 'base layer 1' in raw or 'web layer 1 ' in raw: body = True   # start block ends here
+        # Body-mode markers. MUST cover every generator, because a file whose marker is missing
+        # gets ZERO body checks and still prints a green tick — silence is not success.
+        if ('base layer 1' in raw or 'web layer 1 ' in raw
+                or raw.startswith('; layer 1 ') or '; ramp starts' in raw
+                or '---- band 1' in raw or '; ramp ' in raw): body = True
         s = raw.split(';')[0].strip()
         if not s: continue
         n += 1
@@ -55,10 +59,22 @@ def check(path):
             else:
                 travel_mm += d
             if body and nz < z - 1e-6 and nz < maxz - 1e-6:
-                problems.append(f"L{ln}: Z descends to {nz} (below max {maxz}) — nozzle would plough the part")
+                # A WEAVE lifts over an existing bead and comes back down to the same layer Z.
+                # That descent is the whole point, so it is only ploughing if it goes BELOW the
+                # layer height it started from.
+                if nz < layer_floor - 1e-6:
+                    problems.append(f"L{ln}: Z descends to {nz} below layer floor {layer_floor} "
+                                    f"— nozzle would plough the part")
             if not (0 <= nx <= BED[0] and 0 <= ny <= BED[1]):
                 problems.append(f"L{ln}: XY off bed ({nx},{ny})")
             x, y, z = nx, ny, nz; maxz = max(maxz, z); zs.append(z)
+            if 'Z' in s and 'E' not in s:      # a bare Z move sets the layer floor
+                layer_floor = nz
+    if not body:
+        # The single most dangerous outcome: a file that silently receives no checks and passes.
+        problems.append("BODY NEVER STARTED — no recognised layer marker, so the Z-plough, "
+                        "backwards-extrusion and off-bed checks NEVER RAN. This file is unchecked, "
+                        "not clean. Add its marker to validate.py.")
     if not any(t >= 150 for t in temps): problems.append("no hotend temp >=150 commanded")
     src = open(path).read()
     if 'G28' not in src and 'START_PRINT' not in src:
