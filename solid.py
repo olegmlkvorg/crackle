@@ -130,7 +130,7 @@ def order_rings(rings, here):
 
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3):
+         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
@@ -154,11 +154,22 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
             _cache[key] = contours(region(t), bead_w)
         return _cache[key]
 
+    # BRIM — Oleg: "k1 did not bind well to bed". These parts press their base layer to 0.1mm and
+    # meter it as a wide thin ribbon, which is necessary but not sufficient: a 23mm foot standing
+    # 14mm tall has almost no plate contact holding down a part the head keeps reversing around.
+    # Extra contours OUTSIDE the region, layer 1 only, bought by buffering the region outward.
     rings = contours(region(0.0) if _is_fn else region, bead_w)
+    base_extra = []
+    if brim:
+        src = region(0.0) if _is_fn else region
+        for i in range(1, brim + 1):
+            g = src.buffer(bead_w * i)
+            for geo in (list(g.geoms) if g.geom_type == "MultiPolygon" else [g]):
+                base_extra.append(list(geo.exterior.coords))
     if not rings:
         raise SystemExit(f"{name}: the region is smaller than one {bead_w}mm bead — nothing to print.")
 
-    _allr = rings + (contours(region(1.0), bead_w) if _is_fn else [])
+    _allr = rings + base_extra + (contours(region(1.0), bead_w) if _is_fn else [])
     xs = [p[0] for r in _allr for p in r]
     ys = [p[1] for r in _allr for p in r]
     ox = (bed_xy[0] - (max(xs) + min(xs))) / 2.0
@@ -208,7 +219,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
             e += layer_h * e_per_mm
             L.append(f"G1 F{round(min(speed, 15)*60)} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
-        _rk = rings_at(k)
+        _rk = rings_at(k) + (base_extra if k == 0 else [])
         ordered = order_rings(_rk, (px - ox, py - oy) if px is not None else _rk[0][0])
         for li, loop in enumerate(ordered):
             loop = decimate(densify(loop, 0.8), min_seg)
@@ -363,6 +374,7 @@ if __name__ == "__main__":
     ap.add_argument("--first-w", type=float, default=3.0)
     ap.add_argument("--fan", type=int, default=80)
     ap.add_argument("--aux", type=float, default=0.2)
+    ap.add_argument("--brim", type=int, default=4, help="brim rings on layer 1")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
