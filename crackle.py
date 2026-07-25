@@ -62,6 +62,7 @@ class Params:
     base_layers: int = 2        # solid anchor slab (adhesion + handleable coupon)
     filament_d: float = 1.75
     flow: float = 1.0
+    nozzle_d: float = 0.8       # orifice — sets the safe ceiling on line_w for STACKED geometry
     wipe_every: int = 0         # layers between a nozzle-wipe pass (0 = off)
     inset: float = 8.0          # keep pillars off the coupon edge
     prime_f: int = 3000         # from filament_max_volumetric_speed/0.3*60 (PLA ~15mm3/s)
@@ -153,6 +154,23 @@ class G:
     def __init__(self, p: Params):
         self.p = p; self.L = []; self.e = 0.0
         area = math.pi * (p.filament_d/2)**2
+        # STACKING GUARD (added after the 2026-07-25 tower failure — see notes/ and flowtest.py).
+        # A commanded width far wider than the orifice does not give a wide bead, it gives a TALL
+        # one: cross-section line_w*layer_h is conserved, the nozzle can only spread it so far, so
+        # the excess goes into height. The part then climbs faster than Z does, the nozzle ploughs
+        # into it, and it drags the part off the plate. The crackle coupon STACKS, so it is exposed
+        # to exactly this. Cap the commanded width at 1.5x the orifice.
+        max_w = p.nozzle_d * 1.5
+        if p.line_w > max_w + 1e-9:
+            landed = p.nozzle_d * 1.2                     # realistic spread from a round orifice
+            grew = (p.line_w * p.layer_h) / landed
+            raise SystemExit(
+                f"line_w={p.line_w} is too wide for a {p.nozzle_d}mm nozzle on STACKED geometry.\n"
+                f"  It would land ~{landed:.1f}mm wide and therefore ~{grew:.2f}mm TALL against a "
+                f"{p.layer_h}mm Z step,\n  so the part gains ~{grew - p.layer_h:.2f}mm per layer on "
+                f"the nozzle and gets ploughed off the plate.\n"
+                f"  Use line_w <= {max_w:.1f}, or make it a SINGLE layer (flowtest.py) where nothing "
+                f"stacks and any width is safe.")
         self.mm_per_mm = (p.line_w * p.layer_h) / area * p.flow   # filament mm per mm of travel
     def w(self, s): self.L.append(s)
     def move(self, x, y, f=None):                      # plain travel, no material (base/setup only)

@@ -25,6 +25,13 @@ HOW TO READ IT
   The first band that goes THIN, GAPPY, MATTE or starts skipping = past the ceiling.
   Max stable flow = the last good band below it. Use ~85% of it as the working number.
 
+FAN: 20%, not 100% (Oleg, 2026-07-25). Two reasons, and the second is the important one:
+  1. It is a single layer with nothing above it, so cooling buys nothing — but a 46 g sheet of fat
+     beads WILL curl and lift off the plate with full fan behind it.
+  2. Worse, full fan chills the melt and can make extrusion fail on its own. That would read as the
+     flow ceiling when it is really the fan, and we would set every downstream parameter too low.
+     A melt-rate test must not have a second cooling variable fighting the hotend.
+
 BONUS MEASUREMENT: row spacing equals the COMMANDED line width. Where the sheet seals with no gap,
   the bead really is that wide. Where you see a gap, measure it — landed width = spacing - gap.
   That number is what a hermetic single-layer sheet needs for its spacing, and it feeds the
@@ -122,7 +129,7 @@ if __name__ == "__main__":
     ap.add_argument("--rows", type=int, default=8, help="rows per flow band")
     ap.add_argument("--layer_h", type=float, default=0.4)
     ap.add_argument("--line_w", type=float, default=3.0)   # safe: single layer, nothing stacks
-    ap.add_argument("--fan", type=int, default=255)
+    ap.add_argument("--fan", type=int, default=51)   # 20% — see FAN note in the docstring
     ap.add_argument("--margin", type=float, default=15.0)
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
