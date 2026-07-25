@@ -43,7 +43,7 @@ def win_for(amp, speed, aspect):
 
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
-         bed_xy, home, spacing):
+         bed_xy, home, spacing, fan):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -69,9 +69,12 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
     w(f"M190 S{bed}"); w(f"M109 S{temp}")
     w("M204 S8000")
-    w("M106 S255")
-    w("SET_PIN PIN=fan1 VALUE=255      ; auxiliary blower — the arc must freeze in flight")
-    w("SET_PIN PIN=fan2 VALUE=255      ; chamber")
+    # FANS OFF while the base bonds, then low. Max cooling froze the arcs beautifully and detached
+    # the part at 46% (2026-07-25) — and adhesion is the PREREQUISITE for measuring anything, since
+    # a part that lifts reports the fan rather than the hoop. Oleg: "also fans off. 20%".
+    # Trade-off, stated: less cooling means the hoop tops droop more, so this reads as a
+    # CONSERVATIVE height ceiling. Raise it once the height is known.
+    w("M107                            ; fans off while the base bonds")
     w("M82"); w("G92 E0")
     _sx, _sy = cx + r0, cy
     w(f"G1 Z{layer_h:.2f} F600")
@@ -85,6 +88,8 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
     px, py = _sx, _sy
     next_arc = pitch
     arcs = []
+    fan_on = False
+    fan_after = 2 * math.pi * r0   # one full turn of base before any cooling
     while th < th_max:
         r = r0 + b * th
         th += seg / max(r, 1.0)
@@ -101,6 +106,9 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             elif off >= win:
                 arcs.append((round(amp, 2), round(r)))
                 next_arc += pitch
+        if fan and not fan_on and s > fan_after:
+            L.append(f"M106 S{fan}                        ; {round(fan/255*100)}% once the base has bonded")
+            fan_on = True
         e += d * e_per_mm
         L.append(f"G1 {'F%d ' % f_mm_min if not arcs and s < 1 else ''}"
                  f"X{x:.3f} Y{y:.3f} Z{layer_h + dz:.4f} E{e:.5f}")
@@ -128,7 +136,8 @@ if __name__ == "__main__":
                     help="turn spacing — 1.4 < the 1.53mm landed width, so the base is a\n                          SOLID surface for hoops to launch from and land on")
     ap.add_argument("--layer_h", type=float, default=1.2)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
-    ap.add_argument("--bed", type=int, default=60)
+    ap.add_argument("--bed", type=int, default=95)
+    ap.add_argument("--fan", type=int, default=51, help="20%% — off entirely for the first turn")
     ap.add_argument("--r0", type=float, default=25.0)
     ap.add_argument("--margin", type=float, default=75.0)
     ap.add_argument("--bed-size", default="350,350")
@@ -137,7 +146,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     bed_xy = tuple(float(v) for v in a.bed_size.split(","))
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
-                 a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing)
+                 a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
