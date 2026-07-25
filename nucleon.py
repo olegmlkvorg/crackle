@@ -32,6 +32,7 @@ mechanism, so --weld defaults to 1.0.
 import argparse, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
+import smooth
 from pathstats import crossings as find_crossings
 
 
@@ -81,6 +82,15 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None):
             t += max(seg / max(dRdt, 1e-9), 1e-4)
         x, y = a, 0.0
         pts.append((cx + x * c - y * s, cy + x * s + y * c))
+    # ROUND THE JOINS. Each ellipse ends where it began and the next starts at a different
+    # rotation, so the path crosses a chord between them — a genuine ~19deg corner, one per
+    # ellipse. At 70 mm/s an 19deg turn caps the head at 28 mm/s, which is where the last 8.6% of
+    # speed loss was hiding. Everything else on the curve is already gentle, and fillet() leaves
+    # near-straight vertices untouched, so this only affects the joins.
+    # (Oleg, 2026-07-25: "not sharp angles, make sure you use semi circlish always".)
+    if speed:
+        r_min = speed * speed / (accel or machine.ACCEL)
+        pts = smooth.fillet(pts, max(2.0 * r_min, 2.0), speed=speed, accel=accel or machine.ACCEL)
     return pts
 
 
