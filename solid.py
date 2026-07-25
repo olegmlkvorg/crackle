@@ -299,7 +299,7 @@ def adapter(shaft_d, flat_depth, stick_d, wall, split=0.5):
     return region_at
 
 
-def plate(bores, wall, thickness=None):
+def plate(bores, wall, thickness=None, clearance=0.0):
     """A plate with N vertical bores — the general bamboo joint.
 
     Why vertical bores and not angled sockets: this generator extrudes a 2D region up the Z axis, so
@@ -327,18 +327,18 @@ def plate(bores, wall, thickness=None):
         body = unary_union([body, Polygon([(min(xs), min(ys) - h), (max(xs), min(ys) - h),
                                            (max(xs), max(ys) + h), (min(xs), max(ys) + h)])])
     for (x, y, d) in bores:
-        body = body.difference(Point(x, y).buffer((d + SHRINK) / 2.0, 96))
+        body = body.difference(Point(x, y).buffer((d + SHRINK + clearance) / 2.0, 96))
     return body
 
 
-def bracket(axle_d, stick_d, centres, wall, shrink=0.25):
+def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
     """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
 
     Both bores are modelled OVERSIZE by the measured printed-hole shrink (printed = model - 0.25 on
     these machines), so the axle turns and the stick slides in rather than the part being scrap.
     """
     r_a = (axle_d + shrink) / 2.0
-    r_s = (stick_d + shrink) / 2.0
+    r_s = (stick_d + shrink + clearance) / 2.0
     # CONSTANT-HEIGHT BODY, not a waisted one. A waist PINCHES as the region is buffered inward:
     # the contours split into two islands and the path has to cross the gap once per layer -- a
     # 12.8mm hop, measured. Making the connecting body as tall as the larger boss means the region
@@ -375,14 +375,23 @@ if __name__ == "__main__":
     ap.add_argument("--fan", type=int, default=80)
     ap.add_argument("--aux", type=float, default=0.2)
     ap.add_argument("--brim", type=int, default=4, help="brim rings on layer 1")
+    # BORE FIT. printed = model - 0.25 is CONFIRMED at ~6mm (the pulley bore is a perfect fit on a
+    # 6.0mm shaft). So bore = stick + SHRINK gives ZERO clearance — a grip fit, which is what a
+    # bracket wants: you slide it up the stick to tension the belt and friction holds it there.
+    # A spacer wants the opposite: it should slide freely while you square the frame up.
+    #   grip  0.00  -> prints at nominal, holds position   (bracket, foot)
+    #   slip  0.25  -> slides by hand                      (spacer)
+    #   loose 0.50  -> drops on                            (guides, sleeves over a taper)
+    ap.add_argument("--clearance", type=float, default=0.0,
+                    help="extra bore clearance mm: 0 grip, 0.25 slip, 0.5 loose")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     if a.part == "bracket":
-        region = bracket(a.axle, a.stick, a.centres, a.wall)
+        region = bracket(a.axle, a.stick, a.centres, a.wall, clearance=a.clearance)
     elif a.part == "foot":
-        region = plate([(0, 0, a.stick)], a.wall * 3)
+        region = plate([(0, 0, a.stick)], a.wall * 3, clearance=a.clearance)
     elif a.part == "adapter":
         region = adapter(a.axle, a.flat, a.stick, a.wall)
     elif a.part == "gauge":
@@ -392,10 +401,10 @@ if __name__ == "__main__":
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
     elif a.part == "coupler":
-        region = plate([(0, 0, a.stick)], a.wall)
+        region = plate([(0, 0, a.stick)], a.wall, clearance=a.clearance)
     else:
         n = int(a.part[-1])
-        region = plate([(i * a.centres, 0, a.stick) for i in range(n)], a.wall)
+        region = plate([(i * a.centres, 0, a.stick) for i in range(n)], a.wall, clearance=a.clearance)
     g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                  a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
