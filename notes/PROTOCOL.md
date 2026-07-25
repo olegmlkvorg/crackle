@@ -51,6 +51,24 @@ is confirmed. If it's flat or random, crossings aren't the driver even if A beat
 Times rise with density (3.9 / 6.1 / 9.4 / 13.8 min) — that's inherent: more crossings means more
 travel moves. Sweep anything else the same way: `--vary passes=1,2,4`, `--vary temp=210,230,250`.
 
+## Why it still "calibrates" — and the file set that doesn't
+**The expensive ceremony is inside `G28` on this machine, not only in `START_PRINT`.** The K2 probes
+with a strain gauge *through the nozzle*, so its homing routine heats to 140 °C and probes. Dropping
+`START_PRINT` didn't remove that, because `G28` triggers it too.
+
+Three tiers, pick by situation:
+| prefix | homes? | when |
+|---|---|---|
+| `crackle_X_…` | full `START_PRINT` | first print of a session, or after any doubt about Z |
+| `crackle_fast_X_…` | plain `G28` | fresh session, skip the macro ceremony |
+| **`crackle_iter_X_…`** | **no homing at all** | **back-to-back coupons — the actually-fast one** |
+
+The `iter_` files also **leave the steppers energised at the end**, because `M84` would drop the
+homed position and force the next coupon to re-calibrate. So: print one `fast_` coupon to establish
+home, then run `iter_` files all afternoon.
+**If the machine was powered off or the steppers disabled in between**, an `iter_` file fails safely
+with "Must home axis first" — it errors, it does not crash.
+
 ## Fast iteration (`crackle_fast_*` files)
 The normal files call Creality's `START_PRINT`, which heats to 140 °C, homes, cleans the nozzle,
 re-homes Z, reheats and cleans **again** — often longer than the 4-minute coupon itself. The
