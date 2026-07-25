@@ -11,11 +11,16 @@ NOZZLE = 0.8
 MAX_VELOCITY = 800.0
 MAX_ACCEL = 30000.0     # config ceiling
 ACCEL = 5000.0          # what the toolhead ACTUALLY reports while printing — M204 S8000 is clamped
-MAX_SPEED = 50.0        # mm/s HARD CAP on head movement (Oleg, 2026-07-25: "no rush to move head
-                        # like crazy. Set max speed of 50 movement wise"). Thick walls beat fast
-                        # movement. NOTE this is incompatible with holding MAX_FLOW on stacked
-                        # geometry: at 50 mm/s the fattest bead a 0.8 nozzle can STACK (1.2 x 0.6 =
-                        # 0.72mm2) carries only 36 mm3/s. The speed cap wins; flow follows.
+# BEAD FIRST, then speed. Oleg, 2026-07-25: "keep line width and height always at max", and
+# "increase speed to 100 something to match max flow".
+# The bead is pinned at the largest a 0.8 nozzle can STACK — width 1.5x nozzle, height 0.75x —
+# and speed is whatever hits MAX flow with that bead. Nothing here is chosen for comfort:
+#     0.72 mm2 x speed = 80 mm3/s  ->  speed = 111 mm/s
+# Wider than 1.5x and the bead lands TALLER than the Z step (it cannot spread), the part climbs
+# past the nozzle and gets ploughed off the plate — that failure cost a print on 2026-07-25.
+BEAD_W = 1.2            # 1.5 x nozzle — stacking ceiling
+BEAD_H = 0.6            # 0.75 x nozzle — stacking ceiling
+MAX_SPEED = 120.0       # headroom above the 111 the bead+flow imply; not itself a target
 MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the head stalls; measured
                            # 2026-07-25 as a ~3s stutter at 990 moves/s
 MAX_Z_V = 30.0

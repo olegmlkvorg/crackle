@@ -149,6 +149,35 @@ def segment(P, t, x, y, kap, v_cmd):
     return x[k], y[k]
 
 
+def handover(P, p0, t0, p1, t1, v):
+    """Tangent-continuous blend between the end of one layer and the start of the next.
+
+    PARSE-BACK CAUGHT THIS TOO. v1 joined layers with a straight chord. The chord is 4-6 mm (the
+    two layers' rim ends sit at the same polar angle but different radius, because of the golden
+    phase walk and the half-pitch offset), and it met the next layer's 0.07 mm chords at a sharp
+    angle: Klipper's junction limit put the head at 4 mm/s, 15 times per print, at the rim where
+    material already piles. My single-layer model could not see it because a handover is not part
+    of a layer. A cubic Hermite with the arm length grown until the blend's own min radius clears
+    v^2/accel fixes it by construction rather than by hoping."""
+    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+    t0 = np.asarray(t0, float); t0 = t0 / max(np.hypot(*t0), 1e-12)
+    t1 = np.asarray(t1, float); t1 = t1 / max(np.hypot(*t1), 1e-12)
+    gap = float(np.hypot(*(p1 - p0)))
+    R_req = v * v / P['accel']
+    arm = max(gap * 0.5, 2.0)
+    for _ in range(14):
+        u = np.linspace(0, 1, 400)[:, None]
+        h00 = 2*u**3 - 3*u**2 + 1; h10 = u**3 - 2*u**2 + u
+        h01 = -2*u**3 + 3*u**2;    h11 = u**3 - u**2
+        pts = h00*p0 + h10*(arm*t0) + h01*p1 + h11*(arm*t1)
+        x, y = pts[:, 0], pts[:, 1]
+        kap = curvature(np.linspace(0, 1, len(x)), x, y)
+        if 1.0 / max(kap.max(), 1e-9) >= R_req:
+            break
+        arm *= 1.35
+    return segment(P, np.linspace(0, 1, len(x)), x, y, kap, v)
+
+
 def layer_plan(P, i):
     """Per-layer variation. Three things, and the third is the one that is easy to get wrong.
 
@@ -370,12 +399,18 @@ def emit(P):
 
     # ---- anchor base: 2 layers of a dense Archimedean spiral. Continuous (no reversals, the
     #      flowtest lesson), sticks, and peels off as one coupon you can stand on.
-    bs = base_w
-    turns = (S / 2 - 1.5) / bs
-    tb = np.linspace(0.0, TAU * turns, int(900 * turns))
-    rbb = (bs / TAU) * tb
-    Wb = 1.0 + (_rho(tb, 4.0) - 1.0) * np.clip(rbb / (S / 2 - 1.5), 0, 1) ** 2
-    bx, by = c + Wb * rbb * np.cos(tb), c + Wb * rbb * np.sin(tb)
+    # PARSE-BACK CAUGHT THIS: v1 started the base at r=0 (curvature -> infinity, planner floor
+    # 3 mm/s) and sampled it at a fixed 900 points/turn (2097 moves/s, 27k moves for 2.9 m).
+    # Start at a finite radius and segment it by the same adaptive rule as the web.
+    v_base = P['flow'] / (base_w * P['layer_h'])
+    r0b, rmb = 1.2, S / 2 - 1.5
+    turns = (rmb - r0b) / base_w
+    tb = np.linspace(0.0, TAU * turns, int(max(40000, 2000 * turns)))
+    rbb = r0b + (base_w / TAU) * tb
+    Wb = 1.0 + (_rho(tb, 4.0) - 1.0) * np.clip(rbb / rmb, 0, 1) ** 2
+    bx, by = Wb * rbb * np.cos(tb), Wb * rbb * np.sin(tb)
+    bx, by = segment(P, tb, bx, by, curvature(tb, bx, by), v_base)
+    bx, by = bx + c, by + c
     for bl in range(2):
         z = round(z + P['layer_h'], 3)
         w(f"; base layer {bl+1}")
@@ -410,11 +445,15 @@ def emit(P):
         if lx is None:
             w(f"G0 F9000 X{xs[0]:.3f} Y{ys[0]:.3f}")
         w(f"G1 F600 Z{z:.3f}")
-        if lx is not None:
-            d = math.hypot(xs[0] - lx, ys[0] - ly)
-            if d > 0.05:                       # handover is EXTRUDED: a known chord, not an ooze
-                e += d * e_mm; stats['path'] += d
-                w(f"G1 F{f} X{xs[0]:.3f} Y{ys[0]:.3f} E{e:.5f}")
+        if lx is not None and math.hypot(xs[0] - lx, ys[0] - ly) > 0.05:
+            hx, hy = handover(P, (lx, ly), (ltx, lty), (xs[0], ys[0]),
+                              (xs[1] - xs[0], ys[1] - ys[0]), v)
+            hpx, hpy = lx, ly
+            for X, Y in list(zip(hx, hy))[1:]:
+                d = math.hypot(X - hpx, Y - hpy)
+                e += d * e_mm; stats['path'] += d; stats['moves'] += 1
+                w(f"G1 F{f} X{X:.3f} Y{Y:.3f} E{e:.5f}")
+                hpx, hpy = X, Y
         px, py = xs[0], ys[0]
         for jj in range(1, len(xs)):
             dz = 0.0
@@ -428,6 +467,7 @@ def emit(P):
             w(f"G1 F{f} X{xs[jj]:.3f} Y{ys[jj]:.3f}{zt} E{e:.5f}")
             px, py = xs[jj], ys[jj]
         lx, ly = px, py
+        ltx, lty = xs[-1] - xs[-2], ys[-1] - ys[-2]
     w("M107"); w("M104 S0"); w("M140 S0"); w(f"G1 Z{z+40:.1f} F900"); w("G0 X10 Y340 F9000")
     stats['grams'] = e * area * 1.24 / 1000
     stats['lines'] = len(L)
@@ -436,24 +476,35 @@ def emit(P):
 
 
 def parse_gcode(path):
-    """Read the EMITTED file back as a polyline. The epicycle brief's discipline: verify the
-    artifact, not the model. Their first file measured 4.9% below speed while the model said 0.00%."""
-    xs, ys, x, y, body = [], [], 0.0, 0.0, False
+    """Read the EMITTED file back as {tag: [polyline, ...]}. The epicycle brief's discipline:
+    verify the ARTIFACT, not the model — their first file ran 4.9% below speed while the model
+    said 0.00%. It earned its keep here too: v1's base spiral started at r=0 and the parse-back
+    read v_min 3 mm/s and 2097 moves/s off the emitted file, which no model of mine was watching."""
+    runs, cur, tag, x, y, body = {}, [], None, 0.0, 0.0, False
+    def flush():
+        if cur and len(cur) > 2:
+            runs.setdefault(tag, []).append(np.array(cur))
     for raw in open(path):
         if '; BODY_START' in raw:
             body = True
+        if raw.startswith('; base layer'):
+            flush(); cur = []; tag = 'base'
+        elif raw.startswith('; web layer'):
+            flush(); cur = []; tag = 'web'
         s = raw.split(';')[0].strip()
         if not body or not s.startswith(('G0', 'G1')):
             continue
         mx = re.search(r'X([-\d.]+)', s); my = re.search(r'Y([-\d.]+)', s)
         nx = float(mx.group(1)) if mx else x; ny = float(my.group(1)) if my else y
-        if 'E' in s:
-            xs.append(nx); ys.append(ny)
-        else:
-            if xs:
-                xs.append(np.nan); ys.append(np.nan)      # travel = break the polyline
+        if 'E' in s and ('X' in s or 'Y' in s):
+            if not cur:
+                cur.append([x, y])
+            cur.append([nx, ny])
+        elif 'X' in s or 'Y' in s:
+            flush(); cur = []                     # a travel breaks the polyline
         x, y = nx, ny
-    return np.array(xs), np.array(ys)
+    flush()
+    return runs
 
 
 # --------------------------------------------------------------------------- analysis
@@ -659,18 +710,24 @@ def main():
               f"({st['cross']//P['layers']}/layer), {st['lifts']} lifts, {st['moves']} web moves")
         print(f"  {st['path']/1000:.1f} m web path, {st['grams']:.2f} g, {st['lines']} lines, "
               f"F{st['speed']:.0f} mm/s")
-        px, py = parse_gcode(fn)
-        seg = np.split(np.column_stack([px, py]), np.where(np.isnan(px))[0])
-        seg = [s[~np.isnan(s[:, 0])] for s in seg]
-        seg = [s for s in seg if len(s) > 2]
-        big = max(seg, key=len)
-        p = plan(big[:, 0], big[:, 1], st['speed'], P['accel'], P['scv'])
-        h = crossings(big[:, 0], big[:, 1])
-        print(f"  PARSE-BACK of the emitted file: longest extruding run {len(big)} pts, "
-              f"{p['L']/1000:.1f} m")
-        print(f"    below 90% of commanded {p['frac_below_90']*100:.2f}%   v_min {p['v_min']:.0f}"
-              f"   v_mean {p['v_mean']:.0f}   {p['moves_per_s']:.0f} moves/s   "
-              f"crossings in that run {len(h)}")
+        runs = parse_gcode(fn)
+        print("  PARSE-BACK — the emitted file re-planned, not the model:")
+        print(f"    {'part':>6}{'runs':>6}{'pts':>8}{'m':>7}{'F':>6}{'slow':>8}{'v_min_body':>12}"
+              f"{'v_mean':>8}{'mv/s':>7}{'xings':>7}")
+        for tag, F in (('base', P['flow'] / (0.9 * P['layer_h'])), ('web', st['speed'])):
+            rr = runs.get(tag, [])
+            if not rr:
+                continue
+            big = max(rr, key=len)
+            p = plan(big[:, 0], big[:, 1], F, P['accel'], P['scv'])
+            h = crossings(big[:, 0], big[:, 1])
+            print(f"    {tag:>6}{len(rr):>6}{len(big):>8}{p['L']/1000:>7.2f}{F:>6.0f}"
+                  f"{p['frac_below_90']*100:>7.2f}%{p['v_min_body']:>12.0f}{p['v_mean']:>8.0f}"
+                  f"{p['moves_per_s']:>7.0f}{len(h):>7}")
+        allw = [plan(r[:, 0], r[:, 1], st['speed'], P['accel'], P['scv']) for r in runs['web']]
+        print(f"    all 15 web layers: worst slow {max(q['frac_below_90'] for q in allw)*100:.2f}%,"
+              f" worst v_min_body {min(q['v_min_body'] for q in allw):.0f} mm/s,"
+              f" peak {max(q['moves_per_s'] for q in allw):.0f} moves/s")
 
 
 def _seg_with(P, x, y, h):

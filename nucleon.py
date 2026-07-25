@@ -182,8 +182,8 @@ if __name__ == "__main__":
     ap.add_argument("--ratio", type=float, default=0.55, help="b/a — fatter prints faster")
     ap.add_argument("--origin", type=float, default=40.0)
     ap.add_argument("--layers", type=int, default=12)
-    ap.add_argument("--layer_h", type=float, default=0.6)   # 0.75x nozzle — the stacking ceiling
-    ap.add_argument("--strand_w", type=float, default=1.2)  # 1.5x nozzle — the stacking ceiling.
+    ap.add_argument("--layer_h", type=float, default=machine.BEAD_H)   # stacking ceiling
+    ap.add_argument("--strand_w", type=float, default=machine.BEAD_W)  # stacking ceiling.
                     # Together these give the fattest bead a 0.8 nozzle can stack (0.72mm2),
                     # which is what lets max flow run at the SLOWEST possible speed: 111 mm/s
                     # instead of 235. Oleg wanted 5x slower at constant flow; 2.1x is the

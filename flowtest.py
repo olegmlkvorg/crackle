@@ -68,7 +68,16 @@ BED = (350.0, 350.0)   # K2 Plus
 
 
 def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
-         bump_h, bump_arc, bump_every, spacing_mm):
+         bump_h, bump_arc, bump_every, spacing_mm, fixed_speed=None):
+    """With --fixed-speed the ramp varies LINE WIDTH instead of speed.
+
+    Q = width x height x speed, so a flow ramp can be driven by either factor. Driving it with
+    speed (the original design) means the flow test is also a speed test: every reading carries an
+    acceleration and junction-limit confound, and at the fast end the planner may not even reach the
+    commanded rate. Driving it with WIDTH at a fixed 50 mm/s removes that entirely — one speed for
+    the whole plate, and the only thing changing is how much plastic per mm.
+    Safe here because it is a single layer: nothing stacks, so a 5mm commanded width cannot land
+    tall and plough. (Oleg, 2026-07-25: cap head movement at 50 mm/s, thick walls always.)"""
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     cx, cy = BED[0] / 2, BED[1] / 2
@@ -126,8 +135,8 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
                 break
         r = r_base + dr
         x, y = cx + r * math.cos(th), cy + r * math.sin(th)
-        e += math.dist((px, py), (x, y)) * e_per_mm
-        L.append(f"G1 F{round(q_at_r(r_base) / (line_w * layer_h) * 60)} "
+        e += math.dist((px, py), (x, y)) * e_local
+        L.append(f"G1 F{f_mm_min} "
                  f"X{x:.3f} Y{y:.3f} E{e:.5f}")
         px, py = x, y
 
@@ -164,6 +173,8 @@ if __name__ == "__main__":
                     help="turn spacing mm; lines OVERLAP when < the landed bead width")
     ap.add_argument("--overlap", type=float, default=1.10,
                     help="material multiple vs spacing (1.10 = 10%% squeeze)")
+    ap.add_argument("--fixed-speed", type=float, default=machine.MAX_SPEED,
+                    help="hold this speed and ramp WIDTH instead (0 = ramp speed)")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
@@ -180,7 +191,8 @@ if __name__ == "__main__":
     temp = a.temp or m["temp"]
     bed = a.bed if a.bed is not None else m["bed"]
     g, st = emit(q_lo, q_hi, a.layer_h, a.line_w, temp, bed, a.fan, 1.75,
-                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every, a.spacing)
+                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every,
+                 a.spacing, a.fixed_speed or None)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/flowspiral_{'nohome_' if a.no_home else ''}{a.material}"
           f"_T{temp}_{int(q_lo)}-{int(q_hi)}.gcode")
