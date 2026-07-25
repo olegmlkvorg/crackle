@@ -62,7 +62,13 @@ def check(path):
     if not any(t >= 150 for t in temps): problems.append("no hotend temp >=150 commanded")
     src = open(path).read()
     if 'G28' not in src and 'START_PRINT' not in src:
-        problems.append("never homes (no G28 and no START_PRINT macro)")
+        # A deliberate no-home file is a real tier (back-to-back iteration on an already-homed
+        # machine). Klipper refuses to move an unhomed axis, so this fails SAFELY rather than
+        # crashing — it is a warning, not a defect. Unmarked missing-home is still a failure.
+        if 'NO HOME' in src:
+            warns.append("no homing — deliberate. Machine must still be homed from a previous run.")
+        else:
+            problems.append("never homes (no G28 and no START_PRINT macro)")
     ratio = travel_mm / max(extrude_mm, 1e-9)
     # v2: strands are DRAWN (G1 at travel feedrate with a small E), so travel:extrude no longer
     # measures web content. Count fast extrusion moves instead — those are the strands.
