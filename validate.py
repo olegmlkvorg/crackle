@@ -104,6 +104,43 @@ def check(path):
         if _inside:
             problems.append(f"{len(_inside)} TRAVEL move(s) inside the object (first at line "
                             f"{_inside[0]+1}) — prints must be one continuous extrusion")
+    # STARVED MOVES. Feedrates PERSIST in gcode, so a slow press or a stationary dab leaves every
+    # following move crawling until something sets F again — long stretches ran at 24 mm3/s against
+    # a 55 target and looked like the extruder had paused. Nothing was paused; it was starved.
+    # Oleg spotted it by eye on the plate (2026-07-25); nothing in this file would have.
+    import math as _m
+    _area = _m.pi * (1.75 / 2) ** 2
+    _px = _py = _pz = None; _pe = None; _cf = None; _starved = 0; _moves = 0; _first = None
+    _target = None
+    for _ln in open(path):
+        _t = _ln.split(';')[0].strip()
+        if _ln.startswith('; flow=') or 'mm3/s' in _ln:
+            _mm = re.search(r'flow=([\d.]+)', _ln)
+            if _mm and _target is None: _target = float(_mm.group(1))
+        if not _t.startswith(('G0', 'G1')):
+            if _t.startswith('G92'):
+                _m2 = re.search(r'E([-\d.]+)', _t)
+                if _m2: _pe = float(_m2.group(1))
+            continue
+        _mf = re.search(r'F(\d+)', _t)
+        if _mf: _cf = int(_mf.group(1))
+        _mx = re.search(r'X([-\d.]+)', _t); _my = re.search(r'Y([-\d.]+)', _t)
+        _mz = re.search(r'Z([-\d.]+)', _t); _me = re.search(r'E([\d.]+)', _t)
+        _nx = float(_mx.group(1)) if _mx else _px
+        _ny = float(_my.group(1)) if _my else _py
+        _nz = float(_mz.group(1)) if _mz else _pz
+        if None not in (_px, _py, _pz, _nx, _ny, _nz) and _t.startswith('G1') and _target:
+            _d = _m.dist((_px, _py, _pz), (_nx, _ny, _nz))
+            if _d > 1e-6 and _me and _pe is not None and float(_me.group(1)) > _pe and _cf:
+                _moves += 1
+                _q = (float(_me.group(1)) - _pe) * _area / _d * (_cf / 60)
+                if _q < _target * 0.5:
+                    _starved += 1
+        if _me: _pe = float(_me.group(1))
+        _px, _py, _pz = _nx, _ny, _nz
+    if _target and _moves and _starved > _moves * 0.05:
+        problems.append(f"{_starved} of {_moves} moves run below HALF the {_target} mm3/s target — "
+                        f"a slow move probably left its feedrate set (F persists in gcode)")
     if not any(t >= 150 for t in temps): problems.append("no hotend temp >=150 commanded")
     src = open(path).read()
     if 'G28' not in src and 'START_PRINT' not in src:
