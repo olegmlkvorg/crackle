@@ -237,6 +237,28 @@ def check(path):
     elif _worst[0]:
         print(f"  peak implied flow {_worst[0]:.1f} mm3/s (cap {machine.FLOW:.0f})")
 
+    # HARD SPEED CAP — see machine.MAX_SPEED. A generator that derives speed from flow will happily
+    # command 115 mm/s on a small part and throw it off the plate.
+    #
+    # The feedrate is STICKY in gcode: a bare "G1 F6900" line sets the speed for every move after
+    # it. So the check must track the current F and test it at each MOVE, not only on lines that
+    # happen to carry both F and E — my first version did the latter and passed a 115 mm/s file.
+    _f = 0.0
+    _worst = (0.0, 0)
+    for _i, _ln in enumerate(open(path)):
+        _mf = re.search(r'\bF(\d+(?:\.\d+)?)', _ln)
+        if _mf and _ln.startswith(('G1', 'G0')):
+            _f = float(_mf.group(1)) / 60.0
+        if _ln.startswith('G1') and ' E' in _ln and ('X' in _ln or 'Y' in _ln):
+            if _f > _worst[0]:
+                _worst = (_f, _i + 1)
+    if _worst[0] > machine.MAX_SPEED + 0.5:
+        problems.append(f"extruding move at line {_worst[1]} runs at {_worst[0]:.0f} mm/s — the hard "
+                        f"cap is {machine.MAX_SPEED:.0f} (machine.MAX_SPEED). Lower --flow or widen "
+                        f"the bead: speed = flow / (bead_w * layer_h).")
+    else:
+        print(f"  peak extruding speed {_worst[0]:.1f} mm/s (cap {machine.MAX_SPEED:.0f})")
+
     mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
     print(f"  lines={n}  maxZ={maxz:.2f}mm  travel={travel_mm/1000:.1f}m  extrude={extrude_mm/1000:.1f}m"

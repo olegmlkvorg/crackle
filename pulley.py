@@ -79,7 +79,10 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
          fil_d, bed_xy, home, press, fan, spoke_adv, sleeve=0, first_w=3.0, aux=0.2):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
-    speed = flow / (bead_w * layer_h)
+    # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
+    # Capping speed without lowering flow would over-extrude by the same ratio.
+    speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
+    flow = speed * bead_w * layer_h
     f = round(speed * 60)
     layers = max(2, int(round(width / layer_h)))
     # BASE LAYER PRESSED TO THE PLATE. Oleg, after a pulley turned into spaghetti: "make sure you
@@ -210,7 +213,7 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + width + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(layers=layers, grams=round(grams, 1), speed=round(speed),
+    return "\n".join(L) + "\n", dict(flow=round(flow, 1), layers=layers, grams=round(grams, 1), speed=round(speed),
                                      mins=round(e / e_per_mm / speed / 60, 1))
 
 
@@ -250,4 +253,4 @@ if __name__ == "__main__":
     print(f"  OD {a.od}mm (+{a.crown} crown, +{a.flange} flange), {a.width}mm wide, "
           f"{a.bore}mm D-bore modelled {a.bore + SHRINK:.2f} for shrink")
     print(f"  {st['layers']} layers, {a.spokes} spokes advancing {a.spoke_adv} rad/layer")
-    print(f"  {st['speed']} mm/s at flow {a.flow} mm3/s, ~{st['mins']} min, {st['grams']} g")
+    print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g")

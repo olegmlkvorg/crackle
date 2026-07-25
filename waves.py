@@ -115,7 +115,8 @@ def round_corners(pts, fillet, seg=0.8):
 def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan, fillet=3.0, layers=1):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
-    speed = flow / (bead_w * bead_h)
+    speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
+    flow = speed * bead_w * bead_h
     f = round(speed * 60)
     s = cell
     w_total = cols * 2 * (s * math.sqrt(3) / 2.0)      # wave-row geometry, not hex-cell
@@ -183,7 +184,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press+(layers-1)*bead_h+40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(pts=len(pts), grams=round(grams, 1), speed=round(speed),
+    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed),
                                      mins=round(e / e_per_mm / speed / 60, 1),
                                      size=(round(w_total), round(h_total)))
 
@@ -219,5 +220,5 @@ if __name__ == "__main__":
     open(fn, "w").write(g)
     print(f"{fn}\n  {a.rows} ribbons of {a.cols} waves at {a.cell}mm -> "
           f"{st['size'][0]} x {st['size'][1]}mm, {st['pts']} points, one continuous path")
-    print(f"  {st['speed']} mm/s at flow {a.flow} mm3/s, ~{st['mins']} min, {st['grams']} g, "
+    print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, "
           f"pressed to {a.press}mm")

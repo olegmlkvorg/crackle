@@ -184,7 +184,7 @@ if __name__ == "__main__":
                     help="turn spacing mm; lines OVERLAP when < the landed bead width")
     ap.add_argument("--overlap", type=float, default=1.10,
                     help="material multiple vs spacing (1.10 = 10%% squeeze)")
-    ap.add_argument("--fixed-speed", type=float, default=machine.MAX_SPEED,
+    ap.add_argument("--fixed-speed", type=float, default=machine.MACHINE_MAX_SPEED,
                     help="hold this speed and ramp WIDTH instead (0 = ramp speed)")
     ap.add_argument("--bed-size", default=None, help="X,Y bed size, e.g. 229,225 for the K1C")
     ap.add_argument("--no-home", action="store_true")

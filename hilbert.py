@@ -184,7 +184,8 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
          fillet, layers, closed):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
-    speed = flow / (bead_w * bead_h)
+    speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
+    flow = speed * bead_w * bead_h
     f = round(speed * 60)
 
     n = (2 ** (order + 1)) if closed else (2 ** order)
@@ -259,7 +260,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
           f"G1 Z{press + (layers-1)*bead_h + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(pts=len(pts), grams=round(grams, 1), speed=round(speed),
+    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed),
                                      cells=n * n, pitch=round(pitch, 2),
                                      mins=round(e / e_per_mm / speed / 60, 1))
 
@@ -301,5 +302,5 @@ if __name__ == "__main__":
     open(fn, "w").write(g)
     print(f"{fn}\n  order {a.order} -> {st['cells']} cells, {st['pitch']}mm pitch, "
           f"{span:.0f}mm square, fillet {fillet:.2f}mm, {st['pts']} points")
-    print(f"  {st['speed']} mm/s at flow {a.flow} mm3/s, ~{st['mins']} min, {st['grams']} g, "
+    print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, "
           f"{a.layers} layers pressed to {a.press}mm")

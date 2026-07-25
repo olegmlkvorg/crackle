@@ -138,7 +138,10 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
          fil_d, bed_xy, home, press, fan, walls, fold=0, span=0.0, first_w=3.0, aux=0.2):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
-    speed = flow / (bead_w * layer_h)
+    # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
+    # Capping speed without lowering flow would over-extrude by the same ratio.
+    speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
+    flow = speed * bead_w * layer_h
     f = round(speed * 60)
     layers = max(1, int(round(belt_w / layer_h)))
     # BASE LAYER PRESSED TO THE PLATE — a 2.5m single-wall loop has enormous peel length and very
@@ -233,7 +236,7 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + belt_w + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(per=round(per), layers=layers, grams=round(grams, 1),
+    return "\n".join(L) + "\n", dict(flow=round(flow, 1), per=round(per), layers=layers, grams=round(grams, 1),
                                      speed=round(speed),
                                      mins=round(e / e_per_mm / speed / 60, 1))
 
@@ -297,4 +300,4 @@ if __name__ == "__main__":
           f"flat stadium {length:.0f} x {a.ring_w:.0f}mm, measured perimeter {st['per']}mm")
     print(f"  {a.cleats} cleats {a.cleat_h}mm proud, one every {loop/a.cleats:.0f}mm of belt")
     print(f"  {st['layers']} layers x {a.layer_h} = {a.belt_w}mm belt width")
-    print(f"  {st['speed']} mm/s at flow {a.flow} mm3/s, ~{st['mins']} min, {st['grams']} g")
+    print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g")

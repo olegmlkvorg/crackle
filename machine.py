@@ -44,7 +44,17 @@ FIRST_LAYER_SPEED = 50.0  # mm/s CEILING for layer 1 — never a target. It must
                           # adhesion failed twice (Oleg, 2026-07-25). Deposit per mm of PATH is
                           # unchanged by slowing — E is per mm, not per second — so the first layer
                           # is just as thick, it simply has time to bond. Layer 2+ runs at 111.
-MAX_SPEED = 120.0       # headroom above the 111 the bead+flow imply; not itself a target
+MACHINE_MAX_SPEED = 120.0   # what the MACHINE can do — headroom above the 111 the bead+flow imply
+
+# HARD PHYSICAL SPEED CAP FOR THE WORK. Oleg, after a pulley printed at 115 mm/s tore off the
+# plate: "make sure we have hard checks not to go over 30mm second phisical".
+#
+# Every generator derives speed from flow / bead area, which is right for FLOW and says nothing
+# about whether the PART survives being whipped around at that speed. On a small part the head
+# reversing direction transmits straight into a thin wall stuck to glass, and a part that lets go
+# becomes a ball of filament. This is a limit of the work, not the machine, so it OVERRIDES the
+# flow target: when they conflict, flow drops. validate.py FAILS any file that commands more.
+MAX_SPEED = 30.0
 MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the head stalls; measured
                            # 2026-07-25 as a ~3s stutter at 990 moves/s
 MAX_Z_V = 30.0

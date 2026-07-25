@@ -131,8 +131,8 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     e_per_mm = (strand_w * layer_h) / area
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
     # a calm head beat chasing volumetric throughput; and on stacked geometry the two cannot both
-    # be satisfied anyway (see machine.MAX_SPEED).
-    speed = min(flow / (strand_w * layer_h), machine.MAX_SPEED)
+    # be satisfied anyway (see machine.MACHINE_MAX_SPEED).
+    speed = min(flow / (strand_w * layer_h), machine.MACHINE_MAX_SPEED)
     actual_flow = strand_w * layer_h * speed
     f_mm_min = round(speed * 60)
     b = a * ratio
@@ -441,4 +441,4 @@ if __name__ == "__main__":
     open(fn, "w").write(g)
     print(f"{fn}\n  N={a.N} ({2*a.N*(a.N-1)} junctions/layer predicted, {st['junctions']} measured "
           f"over {a.layers} layers), {st['lifts']} lifts")
-    print(f"  {st['speed']} mm/s (capped at {machine.MAX_SPEED:.0f}), flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
+    print(f"  {st['speed']} mm/s (capped at {machine.MACHINE_MAX_SPEED:.0f}), flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
