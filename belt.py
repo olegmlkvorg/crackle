@@ -92,7 +92,21 @@ def add_cleats(pts, per, n_cleats, height, width, ease=0.35):
             lo -= 1
         while hi < len(pts) - 1 and s[hi] - s[i] < half0:
             hi += 1
-        if max(turn[lo:hi + 1] or [99]) < 1.0:
+        # CURVATURE, not straightness. Requiring a dead-straight run allowed only 14 cleats on a
+        # 2.5m belt: at fold 2 the fillet radius is 21mm on a 46mm channel, so barely 4mm of each
+        # run is truly straight. But the fold's curves BECOME STRAIGHT BELT once it is unfolded --
+        # the curvature is an artefact of packing it onto the plate, not a property of the belt.
+        # What actually matters is that pushing a bump out along the normal must not fold back on
+        # itself, which needs the local radius to comfortably exceed the cleat height.
+        # Swept 2.0/2.5/3.0/3.5x, measuring the worst emitted turn each time:
+        #   2.0x -> 40 cleats, worst 45.8deg, 4 over 30
+        #   2.5x -> 25 cleats, worst 47.2deg, 12 over 30   (WORSE — different positions
+        #   3.0x -> 25 cleats, worst 47.2deg, 12 over 30    get selected, so this is not
+        #   3.5x -> 25 cleats, worst 23.4deg,  0 over 30    monotonic; measure, do not guess)
+        seg_len = max(1e-6, (s[hi] - s[lo]) / max(1, hi - lo))
+        worst = max(turn[lo:hi + 1] or [180.0])
+        r_local = seg_len / max(math.radians(worst), 1e-6)
+        if r_local > 3.5 * height:
             ok.append(i)
     if len(ok) < n_cleats:
         raise SystemExit(f"only {len(ok)} straight positions for {n_cleats} cleats of {width}mm — "
@@ -136,7 +150,7 @@ def add_cleats(pts, per, n_cleats, height, width, ease=0.35):
 
 def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flow, temp, bed,
          fil_d, bed_xy, home, press, fan, walls, fold=0, span=0.0, first_w=3.0, aux=0.2,
-         printer='k2plus'):
+         printer='k2plus', dish=2.0, rail=3.0):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
@@ -168,7 +182,18 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
         per = sum(math.dist(a, b) for a, b in zip(ring, ring[1:]))
     else:
         ring, per = stadium(length, width)
-    ring = add_cleats(ring, per, n_cleats, cleat_h, cleat_w)
+    # CRADLE THE BALL. Oleg: "did you added a bit of cavity into belt so ball gravitates to the
+    # middle of it?" — no, and a flat cleat lets a 14mm ball roll off the side of a 20mm belt.
+    #
+    # The fix comes free from how this is printed: BELT WIDTH IS THE Z AXIS, so varying the cleat
+    # height per layer shapes the cleat's profile ACROSS the belt. A parabola that protrudes more
+    # at the edges and less in the middle turns every cleat into a valley, and the ball rolls to
+    # the bottom of it. `dish` is that depth.
+    #
+    # The ball (r7) is wider than half the belt (10), so it rides ON the valley walls rather than
+    # sinking to the bottom — the dish only has to TILT it, not enclose it. 2mm gives a ~9 degree
+    # wall and a restoring force of 0.16x weight at 2mm off-centre, which is ample.
+    base_ring = ring
 
     if fold:
         cx = cy = 0.0
@@ -178,7 +203,9 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     else:
         cx = (bed_xy[0] - (length + width + 2 * cleat_h)) / 2.0 + cleat_h
         cy = bed_xy[1] / 2.0
-    ring = [(p[0] + cx, p[1] + cy) for p in ring]
+    base_ring = [(p[0], p[1]) for p in base_ring]
+    _probe = add_cleats(base_ring, per, n_cleats, cleat_h, cleat_w)
+    ring = [(p[0] + cx, p[1] + cy) for p in _probe]
     xs = [p[0] for p in ring]
     ys = [p[1] for p in ring]
     if min(xs) < 4 or min(ys) < 4 or max(xs) > bed_xy[0] - 4 or max(ys) > bed_xy[1] - 4:
@@ -229,6 +256,25 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
             L.append(f"; --- layer {k+1} at Z{z:.2f}")
             L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
+        # cleat height for THIS layer: full at the belt edges, reduced by `dish` in the middle
+        u = (k / max(1, layers - 1)) * 2.0 - 1.0          # -1 at one edge, +1 at the other
+        # TENSION RAILS AT THE EDGES. Oleg: "the V parts of belt that suppose to catch ball, they
+        # stretch to almost straight".
+        #
+        # The cause is structural, not cosmetic: a cleat is built by displacing the BELT LINE
+        # outward, so the cleat's strands ARE the belt. Pull the belt taut and you are pulling on
+        # the cleat itself — it straightens because nothing else is carrying the load.
+        #
+        # Since belt width is the Z axis, the outermost layers can be left cleat-free. They run dead
+        # straight for the whole loop and take ALL the tension, so the cleated layers between them
+        # are never loaded and cannot be pulled flat. The rails also give the ball two edges to sit
+        # between, which is the same job the dish does.
+        if abs(u) > 1.0 - 2.0 * rail / max(belt_w, 1e-6):
+            h_k = 0.0
+        else:
+            h_k = max(0.0, cleat_h - dish * (1.0 - u * u))
+        ring = add_cleats(base_ring, per, n_cleats, h_k, cleat_w)
+        ring = [(p[0] + cx, p[1] + cy) for p in ring]
         px, py = ring[0]
         for (x, y) in ring[1:]:
             d = math.dist((px, py), (x, y))
@@ -255,6 +301,10 @@ if __name__ == "__main__":
     ap.add_argument("--cleats", type=int, default=12)
     ap.add_argument("--cleat-h", type=float, default=10.0, help="how far a cleat stands proud mm")
     ap.add_argument("--cleat-w", type=float, default=14.0, help="cleat footprint along the belt mm")
+    ap.add_argument("--rail", type=float, default=3.0,
+                    help="cleat-free tension rail at each belt edge, mm")
+    ap.add_argument("--dish", type=float, default=2.0,
+                    help="cradle depth across the belt width — 0 = flat cleats")
     ap.add_argument("--ring-w", type=float, default=20.0, help="width of the flat ring on the plate")
     ap.add_argument("--bead-w", type=float, default=1.2)
     ap.add_argument("--layer-h", type=float, default=0.6)
@@ -296,7 +346,7 @@ if __name__ == "__main__":
                 f"run. Lower --fold or --cleat-h.")
     g, st = emit(length, a.ring_w, a.belt_w, a.cleats, a.cleat_h, a.cleat_w, a.bead_w, a.layer_h,
                  a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.walls,
-                 a.fold, span, a.first_w, a.aux, a.printer)
+                 a.fold, span, a.first_w, a.aux, a.printer, a.dish, a.rail)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/belt_{a.printer}_c{a.centres:.0f}_p{a.pulley_d:.0f}_"
           f"w{a.belt_w:.0f}_{a.cleats}cleat_T{a.temp}.gcode")
