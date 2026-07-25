@@ -65,6 +65,7 @@ class Params:
     prime_f: int = 3000         # from filament_max_volumetric_speed/0.3*60 (PLA ~15mm3/s)
     tally: int = 1              # raised bars on the base = which coupon this is
     home: bool = True           # False = skip G28 (only when already homed; saves the whole calibration)
+    strand_ratio: float = 0.35  # strand flow as a fraction of a normal line (thin but real)
     fast: bool = False          # skip calibration/nozzle-clean ceremony (see notes)
     machine: str = "k2"         # k2 | generic — k2 uses Creality's START_PRINT/END_PRINT macros
     start_gcode: str = ""       # if set, used VERBATIM instead of the generic start (see README)
@@ -147,8 +148,16 @@ class G:
         area = math.pi * (p.filament_d/2)**2
         self.mm_per_mm = (p.line_w * p.layer_h) / area * p.flow   # filament mm per mm of travel
     def w(self, s): self.L.append(s)
-    def move(self, x, y, f=None):                      # TRAVEL — no retraction: this draws a strand
+    def move(self, x, y, f=None):                      # plain travel, no material (base/setup only)
         self.w(f"G0 F{f or self.p.travel_f} X{x:.3f} Y{y:.3f}")
+    def strand(self, x, y, dist, f=None):
+        """DRAW the strand instead of hoping for ooze.
+        v1 used a bare G0 here and relied on the nozzle bleeding material across the move. It does
+        not: pressure drops over a long fast travel, so the pillars got almost nothing and the top
+        of the coupon failed to extrude (observed 2026-07-25 on coupon A — base fine, web empty).
+        A small deliberate E gives a thin strand AND keeps nozzle pressure up so pillars build."""
+        self.e += dist * self.mm_per_mm * self.p.strand_ratio
+        self.w(f"G1 F{f or self.p.travel_f} X{x:.3f} Y{y:.3f} E{self.e:.5f}")
     def extrude_to(self, x, y, dist, f=None):
         self.e += dist * self.mm_per_mm
         self.w(f"G1 F{f or self.p.print_f} X{x:.3f} Y{y:.3f} E{self.e:.5f}")
@@ -275,6 +284,7 @@ def emit(p: Params) -> tuple[str, dict]:
             g.move(xx, y0); g.extrude_to(xx, y1, y1 - y0, f=p.base_f)
 
     # --- web: pillars + crossing travels ---
+    last_x = last_y = None
     for layer in range(p.layers):
         z = round(z + p.layer_h, 3); g.z(z)
         order = base_order if not p.rotate_per_layer else \
@@ -283,7 +293,10 @@ def emit(p: Params) -> tuple[str, dict]:
         for _ in range(p.passes):
             for i, pi in enumerate(order):
                 x, y = pts[pi]
-                g.move(x, y)                      # <- the strand: molten drag through open air
+                d = math.dist((last_x, last_y), (x, y)) if last_x is not None else 0.0
+                if d > 0: g.strand(x, y, d)        # <- the strand, deliberately drawn
+                else: g.move(x, y)
+                last_x, last_y = x, y
                 # lay a little material AT the pillar so it has a body to anchor the web
                 r = p.line_w * 0.6
                 for a in range(4):

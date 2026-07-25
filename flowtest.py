@@ -29,7 +29,7 @@ MATERIALS = {   # sane starting ladders; the point is to find the truth, not tru
     "abs":  dict(temp=255, bed=100, flows=[6, 9, 12, 15, 18, 21, 24, 27]),
 }
 
-def emit(size, layer_h, line_w, flows, band_layers, temp, bed, fan, origin, fil_d, fast):
+def emit(size, layer_h, line_w, flows, band_layers, temp, bed, fan, origin, fil_d, fast, home=True):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     L = []
@@ -43,7 +43,9 @@ def emit(size, layer_h, line_w, flows, band_layers, temp, bed, fan, origin, fil_
         w(f"; band {i}: {q} mm3/s  -> {v:.0f} mm/s  (top of band at Z{z0})")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {len(flows)*band_layers}"); w("; HEADER_BLOCK_END")
     if fast:
-        w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90"); w("G28")
+        w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
+        if home: w("G28")
+        else: w("; NO HOME — direct to print (errors safely if the machine lost its homed position)")
         w(f"M190 S{bed}"); w(f"M109 S{temp}")
         w("M204 S8000")                          # high accel: short sides otherwise never reach speed
         w("M83"); w("G1 Z0.3 F600")
@@ -78,7 +80,7 @@ def emit(size, layer_h, line_w, flows, band_layers, temp, bed, fan, origin, fil_
                 a, b = pts[k], pts[(k + 1) % 4]
                 d = math.dist(a, b); e += d * e_per_mm
                 L.append(f"G1 F{f_mm_min} X{b[0]:.2f} Y{b[1]:.2f} E{e:.5f}")
-    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{z+30:.1f} F900", "G1 X10 Y330 F9000", "M84"]
+    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{z+30:.1f} F900", "G1 X10 Y330 F9000"]  # steppers stay on
     grams = e * area * 1.24 / 1000
     return "\n".join(L) + "\n", {"layers": layer, "grams": round(grams, 2), "z": z}
 
@@ -94,15 +96,16 @@ if __name__ == "__main__":
     ap.add_argument("--fan", type=int, default=255)   # flow test WANTS cooling (unlike crackle)
     ap.add_argument("--origin", type=float, default=100.0)
     ap.add_argument("--fast", action="store_true", default=True)
+    ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     m = MATERIALS[a.material]
     flows = [float(x) for x in a.flows.split(",")] if a.flows else m["flows"]
     temp = a.temp or m["temp"]
     g, st = emit(a.size, a.layer_h, a.line_w, flows, a.band_layers, temp, m["bed"], a.fan,
-                 a.origin, 1.75, a.fast)
+                 a.origin, 1.75, a.fast, not a.no_home)
     os.makedirs(a.out, exist_ok=True)
-    fn = f"{a.out}/flowtest_{a.material}_T{temp}_{int(min(flows))}-{int(max(flows))}.gcode"
+    fn = f"{a.out}/flowtest_{'nohome_' if a.no_home else ''}{a.material}_T{temp}_{int(min(flows))}-{int(max(flows))}.gcode"
     open(fn, "w").write(g)
     speeds = [f"{q:g}→{q/(a.line_w*a.layer_h):.0f}mm/s" for q in flows]
     print(f"{fn}\n  {len(flows)} bands x {a.band_layers} layers, {st['layers']} layers, {st['z']}mm tall, {st['grams']} g")

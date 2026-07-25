@@ -64,8 +64,12 @@ def check(path):
     if 'G28' not in src and 'START_PRINT' not in src:
         problems.append("never homes (no G28 and no START_PRINT macro)")
     ratio = travel_mm / max(extrude_mm, 1e-9)
-    if ratio < 1.0 and 'crackle' in path:
-        warns.append(f"travel:extrude = {ratio:.2f} — LOW; this may not build much web")
+    # v2: strands are DRAWN (G1 at travel feedrate with a small E), so travel:extrude no longer
+    # measures web content. Count fast extrusion moves instead — those are the strands.
+    if 'crackle' in path:
+        strands = len(re.findall(r'^G1 F(?:[6-9]\d{3}|\d{5,}) .*E', src, re.M))
+        print(f"  strand moves (fast G1 w/ E): {strands}")
+        if strands < 50: warns.append(f"only {strands} strand moves — the web may be sparse")
     mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
     print(f"  lines={n}  maxZ={maxz:.2f}mm  travel={travel_mm/1000:.1f}m  extrude={extrude_mm/1000:.1f}m"
