@@ -44,7 +44,8 @@ def win_for(amp, speed, aspect):
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
          bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean, reach,
-         petal_w, petal_h, touches, prelift, swing, heart_mm, heart_z, petal_wide):
+         petal_w, petal_h, touches, prelift, swing, heart_mm, heart_z, petal_wide,
+         land_wave):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -63,9 +64,12 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             f"{r_max + reach:.0f}mm — past the {min(cx,cy):.0f}mm bed edge.\n"
             f"  Raise --margin so the base spiral stays inside {min(cx,cy) - reach - 4:.0f}mm, "
             f"or shorten --reach below {min(cx,cy) - r_max - 4:.0f}.")
+    # With petal_w = 0 the strand is DERIVED from flow/speed, so speed is the input and there is
+    # nothing to clamp — the flow is at target by construction. The clamp only applies when a
+    # strand width is stated, where speed and width together imply a rate that could exceed the cap.
     _xp = petal_w * petal_h
-    _vmax = flow / _xp
-    if petal_v > _vmax * 0.9:
+    _vmax = (flow / _xp) if _xp > 0 else petal_v
+    if _xp > 0 and petal_v > _vmax * 0.9:
         # 10% margin: E is written to 5 decimals and the petal has short segments, so rounding
         # alone put the measured strand 10% over the stated one and the flow with it.
         petal_v = _vmax * 0.9
@@ -231,8 +235,22 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                 ox = math.sin(al) * swing_r
                 oy = (1 - math.cos(al)) * swing_r * 0.35 + w
                 zc = anchor + amp * abs(math.sin(lobes * phi / 2))
+                # SINUSOID BEFORE LANDING. Oleg: "play sinusoid on Z before landing so you travel to
+                # pull the extrusion but do not bind it". Approaching a foot the arc flattens out
+                # and the strand would simply be laid along the plate — bound, and no longer free to
+                # curve. A small Z ripple keeps the nozzle moving vertically through that approach,
+                # so it keeps PULLING material out without pressing it down. Material keeps flowing
+                # at target while nothing is committed to the plate until the foot itself.
+                if land_wave > 0:
+                    _ph = abs(math.sin(lobes * phi / 2))
+                    if _ph < 0.35:                      # only near the ground, not at the apex
+                        zc += land_wave * (0.35 - _ph) / 0.35 * abs(
+                            math.sin(lobes * phi * 3.0))
                 pts_p.append((px + ux * ox + tx * oy, py + uy * ox + ty * oy, zc))
-                if abs(math.sin(lobes * phi / 2)) < 0.02 and 1 < k < n_p:
+                # ANCHORS ONLY ON THE WAY OUT. Oleg: "remove the ancor point beyond the furtherst
+                # one". phi=pi is the tip — the furthest point. Feet after it were pinning the
+                # RETURN leg down, which is exactly the half that should stay in the air and curve.
+                if abs(math.sin(lobes * phi / 2)) < 0.02 and 1 < k < n_p and phi <= math.pi + 1e-9:
                     touches_at.add(len(pts_p) - 1)
             prev = (px, py, anchor)
             # The flying strand is SET, not derived. Three attempts at deriving it from speed and
@@ -242,7 +260,14 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             # Oleg: "while you fly thru the air, flow need to be managable so it does not split
             # apart". Too thin and it necks and snaps mid-flight; too thick and it is a rope with
             # nothing holding it. So state the strand directly and CHECK the flow it implies.
-            xsec_petal = petal_w * petal_h
+            # SLOW IN THE AIR, AT MAX FLOW. Oleg: "travel has to be slow in the air with max
+            # extrusion flow so it does not get into straight line".
+            # A fast head with a thin strand pulls the filament TAUT — it becomes a straight line
+            # between two points because it is under tension the whole way. Slow travel while
+            # pushing the full flow feeds out more material than the distance needs, so the strand
+            # goes SLACK and takes a curve of its own. That slack is the shape.
+            # petal_w = 0 derives it: cross-section = flow / speed, which is max flow by definition.
+            xsec_petal = (petal_w * petal_h) if petal_w > 0 else (flow / petal_v)
             for k, (hx, hy, zc) in enumerate(pts_p):
                 d3 = math.dist(prev, (hx, hy, zc))
                 if d3 < 1e-9:
@@ -336,12 +361,15 @@ if __name__ == "__main__":
                     help="swing-circle radius as a MULTIPLE of the reach. Bigger = gentler\n                          sweep. This is the arc that throws the strand.")
     ap.add_argument("--prelift", type=float, default=12.0,
                     help="pure vertical climb at each foot BEFORE any sideways move —\n                          this is what makes a petal to throw instead of an arc to lay")
+    ap.add_argument("--land-wave", type=float, default=3.0,
+                    help="Z ripple on the approach to a foot — pulls extrusion without\n                          binding it to the plate")
     ap.add_argument("--wide", type=float, default=0.35,
                     help="petal width as a fraction of reach — this is what gives it AREA")
     ap.add_argument("--touches", type=int, default=3,
                     help="glue-downs inside the throw — more feet, shorter arcs, visibly curved")
-    ap.add_argument("--petal-w", type=float, default=0.8,
-                    help="flying strand width mm — thin enough to fly, thick enough not to split")
+    ap.add_argument("--petal-w", type=float, default=0.0,
+                    help="flying strand width mm. 0 = derive from flow/speed: hold max flow "
+                         "while travelling slowly, so the strand is slack and curved not taut.")
     ap.add_argument("--petal-h", type=float, default=0.4, help="flying strand height mm")
     ap.add_argument("--reach", type=float, default=0.0,
                     help="how far the petal throws, mm. 0 = tie it to height (a circle)")
@@ -372,7 +400,8 @@ if __name__ == "__main__":
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
                  a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean, a.reach,
-                 a.petal_w, a.petal_h, a.touches, a.prelift, a.swing, a.heart, a.heart_z, a.wide)
+                 a.petal_w, a.petal_h, a.touches, a.prelift, a.swing, a.heart, a.heart_z, a.wide,
+                 a.land_wave)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
