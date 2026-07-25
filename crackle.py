@@ -34,7 +34,8 @@ Usage:
   python3 crackle.py --list                # show presets
 """
 from __future__ import annotations
-import argparse, random, itertools, math, os, random, sys
+import argparse, random
+import machine, itertools, math, os, random, sys
 from dataclasses import dataclass, asdict, replace
 
 # ---------------------------------------------------------------- parameters
@@ -476,12 +477,19 @@ if __name__ == "__main__":
         # Working flow = 0.85 x measured. Pillars extrude at that; strands get strand_ratio of it.
         # Travel speed is then set so the strand is thin but continuous:
         #   strand_area = line_w*layer_h*strand_ratio  ->  v = working_flow / strand_area
-        wf = a.max_flow * 0.85
+        # Oleg, 2026-07-25: "you should be extruding at max speed we know nozzle can flow. that is
+        # not negotiable. 100% of the time" and "i dont care of uneven lines". So no 0.85 discount:
+        # machine.FLOW is already the max-known-good (highest flow observed still laying solid,
+        # below the 81.2 where skipping starts).
+        wf = a.max_flow
         for k, P in PRESETS.items():
             sa = P.strand_w * P.layer_h
             v = wf / sa                     # mm/s
-            PRESETS[k] = replace(P, travel_f=int(min(max(v*60, 1800), 12000)),
-                                 print_f=int(min(wf/(P.line_w*P.layer_h)*60, 9000)))
+            # Caps are the MACHINE's limit now, not numbers I picked. The old 12000/9000 held the
+            # strand to 68 mm3/s and the pillar to 54 against a measured 80 ceiling.
+            PRESETS[k] = replace(P, travel_f=int(min(max(v*60, 1800), machine.MAX_VELOCITY*60)),
+                                 print_f=int(min(wf/(P.line_w*P.layer_h)*60,
+                                                 machine.MAX_VELOCITY*60)))
         print(f"tuned from measured max flow {a.max_flow} mm3/s -> working {wf:.1f}; "
               f"strand travel {PRESETS['A'].travel_f/60:.0f} mm/s, pillar {PRESETS['A'].print_f/60:.0f} mm/s")
     _sg = open(a.start_gcode).read() if a.start_gcode else ""

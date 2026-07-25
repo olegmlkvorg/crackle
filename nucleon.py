@@ -48,7 +48,8 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0):
 
 
 def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_win,
-         temp, bed, fan, fil_d, home, n_per):
+         temp, bed, fan, fil_d, home, n_per, first_slow=1, first_speed_frac=0.18,
+         first_squish=0.85):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
     speed = flow / (strand_w * layer_h)
@@ -78,7 +79,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w(f"M190 S{bed}"); w(f"M109 S{temp}")
     w("M204 S8000"); w("M107" if not fan else f"M106 S{fan}")
     w("M82"); w("G92 E0")
-    w(f"G1 Z{layer_h:.2f} F600")
+    w(f"G1 Z{layer_h*0.85:.3f} F600")
     w(f"G0 F9000 X{origin:.1f} Y{origin-8:.1f}")
     w(f"G1 F1200 X{origin+2*a:.1f} Y{origin-8:.1f} E10"); w("G92 E0")
     if weld < 1.0:
@@ -88,6 +89,16 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     e = 0.0; total_x = 0; total_lift = 0
     for layer in range(layers):
         z0 = layer_h * (layer + 1)
+        # FIRST-LAYER ADHESION. At max flow the head runs 235 mm/s and the bead has no dwell to wet
+        # the plate — it rides the nozzle and pills into balls (observed 2026-07-25). Deposit per mm
+        # of path is unchanged by slowing down (E is per mm, not per second), so a slow first layer
+        # costs material nothing and seconds only, and every layer above still runs flat out.
+        # Also squish layer 1 into the plate: nominal Z would leave the bead sitting on top of it.
+        if layer < first_slow:
+            lf = round(speed * first_speed_frac * 60)
+            z0 = layer_h * first_squish
+        else:
+            lf = f_mm_min
         # rotate each layer off the last so crossings distribute through the volume instead of
         # stacking into welded vertical columns
         phase = (math.pi / N) * (layer * 0.5)
@@ -113,7 +124,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                     if abs(d) < lift_win:
                         dz = max(dz, lift * math.cos(math.pi * d / (2 * lift_win)) ** 2)
             e += math.dist(pts[i - 1], pts[i]) * e_per_mm
-            L.append(f"G1 {'F%d ' % f_mm_min if i == 1 else ''}X{pts[i][0]:.3f} "
+            L.append(f"G1 {'F%d ' % lf if i == 1 else ''}X{pts[i][0]:.3f} "
                      f"Y{pts[i][1]:.3f} Z{z0+dz:.4f} E{e:.5f}")
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h*layers+40:.1f} F900", "G0 X10 Y340 F9000"]
@@ -140,11 +151,15 @@ if __name__ == "__main__":
     ap.add_argument("--bed", type=int, default=60)
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--n-per", type=int, default=600, help="samples per ellipse")
+    ap.add_argument("--first-slow", type=int, default=1, help="layers printed slow for adhesion")
+    ap.add_argument("--first-frac", type=float, default=0.18, help="first-layer speed as a fraction")
+    ap.add_argument("--first-squish", type=float, default=0.85, help="first-layer Z as a fraction")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     g, st = emit(a.N, a.a, a.ratio, a.origin, a.layers, a.layer_h, a.strand_w, a.flow, a.weld,
-                 a.lift, a.lift_win, a.temp, a.bed, a.fan, 1.75, not a.no_home, a.n_per)
+                 a.lift, a.lift_win, a.temp, a.bed, a.fan, 1.75, not a.no_home, a.n_per,
+                 a.first_slow, a.first_frac, a.first_squish)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/nucleon_{'nohome_' if a.no_home else ''}N{a.N}_weld{a.weld:g}_T{a.temp}.gcode"
     open(fn, "w").write(g)
