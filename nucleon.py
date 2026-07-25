@@ -172,7 +172,12 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
     w(f"M190 S{bed}"); w(f"M109 S{temp}")
     w("M204 S8000")
-    w("M107" if not fan else f"M106 S{fan}")
+    # FANS OFF FOR LAYER 1, ALWAYS. Cooling the first layer chills the bead before it can wet the
+    # plate; on a tall open structure the nozzle drag then peels the whole part. That is what
+    # detached the wave print at 46% on 2026-07-25 — max cooling was enabled from the first
+    # millimetre because it was needed for the ARCHES, and the layer that has to stick was never
+    # exempted. Cooling helps everything above layer 1 and hurts layer 1 specifically.
+    w("M107")
     if fan >= 255:
         # MAX COOLING means all THREE fans, not just the part fan. Oleg: "to push z to the limits
         # you shall freeze stuff in the air so max air flow on all fans" — an arch that does not
@@ -180,8 +185,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # M106 drives fan0 only. fan1 (auxiliary side blower) and fan2 (chamber) are output_pins and
         # need SET_PIN — and they are scaled 0-255, NOT 0-1: SET_PIN VALUE=1.0 sets 1/255, which
         # reports "ok" and leaves the fan effectively off. Verified live on the machine.
-        w("SET_PIN PIN=fan1 VALUE=255      ; auxiliary side blower")
-        w("SET_PIN PIN=fan2 VALUE=255      ; chamber")
+        w("; fans stay OFF through layer 1; switched on below once it has bonded")
     w("M82"); w("G92 E0")
     # NO TRAVEL IS A RULE (Oleg, 2026-07-25: "always our prints are continuous extrusion").
     # The prime line therefore ENDS exactly where the object BEGINS, so there is no reposition
@@ -193,7 +197,14 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     _sx, _sy = start_xy
     w(f"G1 Z{layer_h*0.85:.3f} F600")
     w(f"G0 F9000 X{_sx - 55:.3f} Y{_sy - 12:.3f}")
-    w(f"G1 F1200 X{_sx:.3f} Y{_sy:.3f} E10"); w("G92 E0")
+    # STATIONARY PURGE before anything moves. The prime line extrudes WHILE travelling, so it never
+    # builds nozzle pressure — Oleg watched the first 4 seconds of a print lay nothing at all
+    # (2026-07-25). A cold-start nozzle has drooled its melt away and the filament path is slack;
+    # pressure has to be re-established standing still, or the first stretch of the object is air.
+    # 25mm of filament at 5mm/s is ~5 seconds of visible extrusion in one spot, off to the side.
+    w("G1 E25 F300                      ; ~5s stationary purge — build pressure before moving")
+    w(f"G1 F1200 X{_sx:.3f} Y{_sy:.3f} E37   ; prime line, ending exactly where the object begins")
+    w("G92 E0")
     if weld < 1.0:
         w("; Z_MODULATED")
     w("; BODY_START")
@@ -232,6 +243,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         for k, (i, j, x, y) in enumerate(sorted(hits, key=lambda h: max(h[0], h[1]))):
             if ((k * 0.6180339887498949) % 1.0) >= weld:
                 second.append(cum[max(i, j)]); total_lift += 1
+        fans_on_at = 1.0 / layers          # fraction of path where layer 1 ends
         L.append(f"; VASE — one continuous extrusion, {len(full)} points, "
                  f"Z {layer_h*first_squish:.2f} -> {layer_h*layers:.2f}, {total_x} junctions")
         L.append(f"; continuous from the prime — no reposition")
@@ -262,6 +274,10 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                     d = s_here - sv
                     if abs(d) < lift_win:
                         dz = max(dz, lift * math.cos(math.pi * d / (2 * lift_win)) ** 2)
+            if fan >= 255 and cum[i - 1] / total < fans_on_at <= frac:
+                L.append(f"M106 S{fan}")
+                L.append("SET_PIN PIN=fan1 VALUE=255      ; blowers on — layer 1 has bonded")
+                L.append("SET_PIN PIN=fan2 VALUE=255")
             e += math.dist(full[i - 1], full[i]) * e_per_mm
             L.append(f"G1 {'F%d ' % lf if i == 1 or (frac >= 1.0/layers and cum[i-1]/total < 1.0/layers) else ''}"
                      f"X{full[i][0]:.3f} Y{full[i][1]:.3f} Z{z+dz:.4f} E{e:.5f}")
@@ -313,6 +329,9 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             if ((k * 0.6180339887498949) % 1.0) >= weld:
                 second.append(cum[max(i, j)]); total_lift += 1
         L.append(f"; layer {layer+1}  z{z0:.2f}  junctions {len(hits)}  lifts {len(second)}")
+        if fan >= 255 and layer == 1:
+            L.append(f"M106 S{fan}"); L.append("SET_PIN PIN=fan1 VALUE=255")
+            L.append("SET_PIN PIN=fan2 VALUE=255")
         L.append(f"G1 F1800 Z{z0:.3f}")   # Z only — no XY reposition   # layer-change Z move: 10 -> 30 mm/s
         for i in range(1, len(pts)):
             dz = 0.0
@@ -352,7 +371,11 @@ if __name__ == "__main__":
     ap.add_argument("--lift", type=float, default=0.5)
     ap.add_argument("--lift-win", type=float, default=12.0)
     ap.add_argument("--temp", type=int, default=machine.TEMP)   # material-rated, not a guess
-    ap.add_argument("--bed", type=int, default=60)
+    ap.add_argument("--bed", type=int, default=120,
+                    help="120 = the K2's real max (it silently clamps anything higher). Chosen for\n"
+                         "ADHESION: the wave/arch geometry is tall, open and lightly anchored, and\n"
+                         "it detached at 46%% on a 60C bed. A hot plate keeps the first layer soft\n"
+                         "and gripping; the cost is a softer base, which this geometry can afford.")
     ap.add_argument("--fan", type=int, default=0,
                     help="0 = off (crossings weld). 255 = ALL THREE fans, for arches")
     ap.add_argument("--n-per", type=int, default=600, help="samples per ellipse")
