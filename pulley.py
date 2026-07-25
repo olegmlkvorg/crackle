@@ -110,6 +110,22 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     elif r_bore + 2.5 * bead_w >= od / 2 - 2 * bead_w:
         raise SystemExit(f"a {bore_d}mm bore leaves no material inside a {od}mm pulley.")
 
+    # SPOKE ADVANCE IS BOUNDED BY OVERHANG, not chosen. A rotating web is only self-supporting if
+    # each layer's spoke still lands on the one below: the lateral shift at the OUTER radius is
+    # adv * r_out, against a layer height of layer_h, so the overhang from horizontal is
+    # atan(layer_h / (adv * r_out)).
+    #
+    # 0.09 rad/layer was fine on a 40mm pulley (r20 -> 1.8mm shift, 12.5deg) and SNAPPED THE MODEL
+    # on a 60mm one (r30 -> 2.7mm, 8deg — printing in mid-air). The constant was tuned on one
+    # radius and silently became wrong on another; derive it instead.
+    _r_out = od / 2.0 + crown + flange
+    _adv_max = layer_h / (math.tan(math.radians(40.0)) * max(_r_out, 1e-6))
+    if spoke_adv > _adv_max:
+        print(f"  spoke advance {spoke_adv:.3f} would overhang at "
+              f"{math.degrees(math.atan(layer_h / (spoke_adv * _r_out))):.0f}deg — "
+              f"capped to {_adv_max:.4f} rad/layer (40deg)")
+        spoke_adv = _adv_max
+
     cx, cy = bed_xy[0] / 2.0, bed_xy[1] / 2.0
     L = []
     w = L.append
@@ -183,8 +199,14 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         a_in = cur_ang + 0.12 * 2 * math.pi
         pts += spiral_between(r_rim, r_b, cur_ang, 0.12)
         pts += d_bore(r_b, flat_depth, a_start=a_in, sweep=2 * math.pi)
-        pts += spiral_between(r_b, r_rim, a_in, 0.12)
-        cur_ang = a_in + 0.12 * 2 * math.pi + spoke_adv
+        # UNWIND ON THE WAY OUT. The inward spiral advances 0.12 turn and the outward one used to
+        # advance another 0.12, so every layer rotated 1.51 rad no matter what spoke_adv said — the
+        # web's rotation was a side effect of the spokes' own angular travel, and capping spoke_adv
+        # changed nothing. That is why the 60mm wheel snapped: 1.51 rad at r30 is a 45mm lateral
+        # shift on a 0.4mm layer, i.e. the spoke printed in mid-air.
+        # Spiralling BACK the other way cancels it, so the layer advances by exactly spoke_adv.
+        pts += spiral_between(r_b, r_rim, a_in, -0.12)
+        cur_ang = a_in - 0.12 * 2 * math.pi + spoke_adv
         path_layers.append(pts)
 
     # BRIM. Oleg: "for puley first layer adhesion was not perfect, double check (start with brim
@@ -245,7 +267,7 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + width + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(flow=round(flow, 1), layers=layers, grams=round(grams, 1), speed=round(speed),
+    return "\n".join(L) + "\n", dict(adv=spoke_adv, flow=round(flow, 1), layers=layers, grams=round(grams, 1), speed=round(speed),
                                      mins=round(e / e_per_mm / speed / 60, 1))
 
 
@@ -285,5 +307,5 @@ if __name__ == "__main__":
     print(f"{fn}")
     print(f"  OD {a.od}mm (+{a.crown} crown, +{a.flange} flange), {a.width}mm wide, "
           f"{a.bore}mm D-bore modelled {a.bore + SHRINK:.2f} for shrink")
-    print(f"  {st['layers']} layers, {a.spokes} spokes advancing {a.spoke_adv} rad/layer")
+    print(f"  {st['layers']} layers, {a.spokes} spokes advancing {st['adv']:.4f} rad/layer")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g")
