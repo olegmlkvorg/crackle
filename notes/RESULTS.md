@@ -174,3 +174,41 @@ weave.py refuses strand_w < 0.8; defaults raised to 0.85.**
 2. `--weld 0.25 / 0.5 / 0.75` — is the response monotonic? If loudness tracks weld fraction, the
    mechanism is confirmed twice over and the dial is calibrated.
 3. Only then return to crossing COUNT as a secondary axis.
+
+---
+
+# RETIRE THE PILLAR LATTICE — measured 2026-07-25
+
+Oleg pushed twice: "why are you not doing continuous?" and "not sharp angles, use semi circlish
+always". Both are the same insight, and the pillar-and-strand lattice violates both. Measured with
+the corrected junction model (Klipper's own, validated: a 90-degree corner yields exactly its
+square_corner_velocity of 5 mm/s):
+
+| design | speed | junctions | member mean | path below 90% of commanded speed |
+|---|---|---|---|---|
+| pillar chords (coupon A) | 200 mm/s | 70 | 32.7mm | **93%** |
+| lissajous 5:7 | 235 mm/s | 54 | 8.4mm | **7.8%** |
+| lissajous 7:9 | 125 mm/s | 108 | 5.6mm | **2.0%** |
+| lissajous 9:11 | 125 mm/s | 176 | 4.3mm | 3.5% |
+
+**The coupon never ran at its commanded speed.** 93% of its path is corner-limited, so the carefully
+derived "strand 200 mm/s" was fiction — the head crawled through the turns. Every coupon printed
+before today shares this.
+
+**Filleting cannot rescue it.** Star order makes near-reversals; rounding them at the minimum radius
+that holds 200 mm/s (5.0mm) collapses the path from 894mm to 426mm and junctions from 70 to 46. The
+corners ARE the design. You can keep them or keep the speed.
+
+**The continuous curve wins on every axis simultaneously**: holds speed, MORE junctions, and much
+shorter members between them (5.6mm vs 32.7mm) — short slender spans snap, long ones bend, and
+bending is the quiet hex-grid feel that started this project.
+
+## Design rule that falls out
+At max flow the head moves fast, so curvature is the binding constraint on how many crossings fit:
+9:11 costs 23.8% speed loss at 235 mm/s but only 3.5% at 125. To raise crossing density at max flow,
+make the COUPON BIGGER (more path between crossings at the same curvature) rather than raising the
+frequency pair.
+
+## Consequence
+`weave.py` (lissajous + per-crossing weld control) is now the coupon generator. `crackle.py` stays
+for the historical pillar sweep and its measured comparison, but Phase 2 runs on weave.
