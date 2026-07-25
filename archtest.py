@@ -28,33 +28,42 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
 
 
-def emit(a_lo, a_hi, win, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin, bed_xy, home):
+def win_for(amp, speed, aspect):
+    """Half-span for a hoop of height `amp`, respecting the Z axis at both ends of the ladder.
+
+    A hoop should scale as ONE thing — height and span together — so "hoop size" is a single
+    variable and a failure is unambiguous. But pure proportional scaling breaks at the small end:
+    acceleration goes as amp/win^2, so a short narrow hoop demands MORE acceleration than a tall
+    wide one. The span is therefore the larger of the proportional span and the accel-safe minimum.
+    """
+    prop = aspect * amp
+    a_min = math.sqrt((math.pi ** 2) * amp * speed ** 2 / (2 * machine.MAX_Z_A))
+    v_min = math.pi * amp * speed / (2 * machine.MAX_Z_V)
+    return max(prop, a_min, v_min)
+
+
+def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
+         bed_xy, home, spacing):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
     f_mm_min = round(speed * 60)
     cx, cy = bed_xy[0] / 2, bed_xy[1] / 2
     r_max = min(cx, cy) - margin
-    b = line_w / (2 * math.pi)          # turn spacing = line width
+    b = spacing / (2 * math.pi)         # solid base: spacing under the landed width
     th_max = (r_max - r0) / b
 
-    # axis feasibility at the TALLEST arc
-    vz = math.pi * a_hi * speed / (2 * win)
-    az = (math.pi ** 2) * a_hi * speed ** 2 / (2 * win ** 2)
-    if vz > machine.MAX_Z_V or az > machine.MAX_Z_A:
-        need = speed * math.pi * math.sqrt(a_hi / (2 * machine.MAX_Z_A))
-        raise SystemExit(f"tallest arc {a_hi}mm needs v_peak {vz:.1f} (limit {machine.MAX_Z_V}) and "
-                         f"a_peak {az:.0f} (limit {machine.MAX_Z_A}).\n"
-                         f"  widen --win to at least {max(need, math.pi*a_hi*speed/(2*machine.MAX_Z_V)):.1f}mm "
-                         f"or lower --a-hi.")
-    if 2 * win > pitch * 0.8:
-        raise SystemExit(f"arc span {2*win}mm vs pitch {pitch}mm — arcs would merge into a wave "
-                         f"instead of standing separately. Raise --pitch above {2*win/0.8:.0f}.")
+    win_hi = win_for(a_hi, speed, aspect)
+    if 2 * win_hi > pitch * 0.8:
+        raise SystemExit(f"largest hoop spans {2*win_hi:.1f}mm against a {pitch}mm pitch — hoops "
+                         f"would merge into a wave instead of standing separately.\n"
+                         f"  Raise --pitch above {2*win_hi/0.8:.0f}.")
 
     L = []; w = L.append
     w(f"; ARCH TEST — arcs every {pitch}mm of path, height {a_lo} -> {a_hi}mm outward")
-    w(f"; span {2*win}mm airborne, flow={flow} at {speed:.0f} mm/s, line {line_w}x{layer_h}")
-    w(f"; axis demand at the tallest arc: v {vz:.1f}/{machine.MAX_Z_V}, a {az:.0f}/{machine.MAX_Z_A}")
+    w(f"; span scales with height (aspect {aspect}); largest hoop {2*win_hi:.1f}mm airborne")
+    w(f"; flow={flow} at {speed:.0f} mm/s, line {line_w}x{layer_h}, base spacing {spacing}")
+    w(f"; hoops every {pitch}mm of path, base spacing {spacing}mm (< 1.53 landed = solid)")
     w("; HEADER_BLOCK_START"); w("; total layer number: 1"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
@@ -71,7 +80,7 @@ def emit(a_lo, a_hi, win, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, ma
     w("; Z_MODULATED"); w("; BODY_START")
 
     # walk the spiral in small steps; arcs are placed by PATH DISTANCE so they stay evenly spaced
-    seg = min(win / 8.0, 0.8)
+    seg = min(win_for(a_lo, speed, aspect) / 8.0, 0.6)
     e = 0.0; th = 0.0; s = 0.0
     px, py = _sx, _sy
     next_arc = pitch
@@ -83,6 +92,7 @@ def emit(a_lo, a_hi, win, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, ma
         x, y = cx + r * math.cos(th), cy + r * math.sin(th)
         d = math.dist((px, py), (x, y)); s += d
         amp = a_lo + (a_hi - a_lo) * (r - r0) / (r_max - r0)
+        win = win_for(amp, speed, aspect)
         dz = 0.0
         if s > next_arc - win:
             off = s - next_arc
@@ -108,11 +118,14 @@ def emit(a_lo, a_hi, win, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, ma
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--a-lo", type=float, default=0.3)
-    ap.add_argument("--a-hi", type=float, default=3.0)
-    ap.add_argument("--win", type=float, default=5.0, help="half-span; strand is airborne 2*win")
+    ap.add_argument("--a-hi", type=float, default=4.0)
+    ap.add_argument("--aspect", type=float, default=1.6,
+                    help="half-span / height. Hoop scales as ONE variable; the span is\n                          raised where the Z axis needs it at the small end.")
     ap.add_argument("--pitch", type=float, default=25.0, help="mm of path between arcs")
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--line_w", type=float, default=2.0)
+    ap.add_argument("--spacing", type=float, default=1.4,
+                    help="turn spacing — 1.4 < the 1.53mm landed width, so the base is a\n                          SOLID surface for hoops to launch from and land on")
     ap.add_argument("--layer_h", type=float, default=1.2)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
     ap.add_argument("--bed", type=int, default=60)
@@ -123,11 +136,11 @@ if __name__ == "__main__":
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     bed_xy = tuple(float(v) for v in a.bed_size.split(","))
-    g, st = emit(a.a_lo, a.a_hi, a.win, a.pitch, a.flow, a.line_w, a.layer_h, a.temp, a.bed,
-                 1.75, a.r0, a.margin, bed_xy, not a.no_home)
+    g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
+                 a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing)
     os.makedirs(a.out, exist_ok=True)
-    fn = f"{a.out}/archtest_{a.a_lo:g}-{a.a_hi:g}mm_win{a.win:g}_T{a.temp}.gcode"
+    fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
-    print(f"{fn}\n  {st['arcs']} arcs, {a.a_lo}->{a.a_hi}mm tall, {2*a.win}mm airborne each")
+    print(f"{fn}\n  {st['arcs']} hoops, {a.a_lo}->{a.a_hi}mm tall, span scales with height")
     print(f"  {st['speed']} mm/s, {st['path']} m path, ~{st['mins']} min, {st['grams']} g")
     print(f"  height at radius: {', '.join(f'{h}mm@r{r}' for h,r in st['sample'])}")
