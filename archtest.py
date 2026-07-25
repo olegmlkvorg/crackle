@@ -44,7 +44,7 @@ def win_for(amp, speed, aspect):
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
          bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean, reach,
-         petal_w, petal_h, touches, prelift, swing, heart_mm, heart_z):
+         petal_w, petal_h, touches, prelift, swing, heart_mm, heart_z, petal_wide):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -208,50 +208,32 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             # climb at each foot draws real material upward first; only then does the head move
             # sideways, and what moves is a strand that already exists. That is the difference
             # between drawing an arc and throwing a petal.
+            # A PETAL HAS AREA. Oleg: "now you are in the are of single line mostly".
+            # The throw went out and came back along the SAME line, so it could never enclose
+            # anything — vertical scallops on a single track. A petal outline needs the outbound and
+            # the return to SEPARATE, and meet again at the tip:
+            #     radial   u = Lr * sin(phi/2)    0 -> Lr -> 0   over phi 0..2pi
+            #     lateral  w = W  * sin(phi)      +W going out, -W coming back
+            # which traces a leaf: it opens on the way out, closes on the way home, and the enclosed
+            # width is 2W at the widest. Z arches over the whole thing so the leaf lifts off the
+            # plate and lands at its own tip.
             lobes_pre = touches + 1
-            n_p = lobes_pre * 12    # exact samples on every foot
+            n_p = lobes_pre * 24
             pts_p = []
             touches_at = set()
             lobes = lobes_pre
-            prev_phi_lobe = 0
+            W = petal_wide * Lr
             for k in range(1, n_p + 1):
-                phi = math.pi * k / n_p
-                lobe_i = int(phi * lobes / math.pi + 1e-9)
-                if lobe_i != prev_phi_lobe:
-                    # a new lobe begins here: climb straight up before any sideways motion
-                    u0 = Lr * math.sin(math.pi * lobe_i / lobes)
-                    a0 = u0 / swing_r
-                    bx = px + ux * (math.sin(a0) * swing_r) + tx * ((1 - math.cos(a0)) * swing_r)
-                    by = py + uy * (math.sin(a0) * swing_r) + ty * ((1 - math.cos(a0)) * swing_r)
-                    steps = max(2, int(prelift / 3))
-                    for q in range(1, steps + 1):
-                        pts_p.append((bx, by, anchor + prelift * q / steps))
-                    prev_phi_lobe = lobe_i
-                # THE THROW IS AN ARC, NOT A LINE. Oleg: "you cant go by straight line to get a
-                # petal, it need to be a circlish movement with way bigger dia than the petal
-                # itself". You do not throw by pushing something away from you — you swing it, and
-                # the curve is what flings it. So the distance u is now travelled ALONG a circle of
-                # radius swing_r (several times the reach), not along a straight radial line. With
-                # a large radius the path is a gentle sweep rather than a turn, which is exactly
-                # what carries the strand outward instead of dragging it.
-                u = Lr * math.sin(phi)
-                al = u / swing_r                       # angle subtended by that arc length
-                ox = math.sin(al) * swing_r            # along the tangent
-                oy = (1 - math.cos(al)) * swing_r      # the sideways bulge the swing creates
-                # The feet must reach the PLATE. Folding prelift into this formula raised the
-                # minimum to anchor+prelift, so no throw ever landed and no foot was ever welded —
-                # the whole structure was floating. prelift is the separate vertical climb inserted
-                # at each foot, not an offset on the arc.
-                zc = anchor + amp * abs(math.sin(lobes * phi))
+                phi = 2 * math.pi * k / n_p
+                u = Lr * math.sin(phi / 2)
+                w = W * math.sin(phi)
+                al = u / swing_r
+                ox = math.sin(al) * swing_r
+                oy = (1 - math.cos(al)) * swing_r * 0.35 + w
+                zc = anchor + amp * abs(math.sin(lobes * phi / 2))
                 pts_p.append((px + ux * ox + tx * oy, py + uy * ox + ty * oy, zc))
-                if abs(math.sin(lobes * phi)) < 0.03 and 1 < k < n_p:
+                if abs(math.sin(lobes * phi / 2)) < 0.02 and 1 < k < n_p:
                     touches_at.add(len(pts_p) - 1)
-            # ONE cross-section for the whole petal, sized from the MEAN segment.
-            # Per-segment sizing was wrong in a way that only showed up in the audit: where the lean
-            # makes points cluster, the segment shrinks, the "achievable speed" collapses, and
-            # flow/v demands an absurd bead — 872 mm3/s against a 55 cap. Physically the strand does
-            # not change thickness because two sample points happen to be close together. Size it
-            # once from the mean and the flow holds across the whole throw.
             prev = (px, py, anchor)
             # The flying strand is SET, not derived. Three attempts at deriving it from speed and
             # the flow cap each produced a different wrong answer (0.14 too thin, 2.19 a rope,
@@ -354,6 +336,8 @@ if __name__ == "__main__":
                     help="swing-circle radius as a MULTIPLE of the reach. Bigger = gentler\n                          sweep. This is the arc that throws the strand.")
     ap.add_argument("--prelift", type=float, default=12.0,
                     help="pure vertical climb at each foot BEFORE any sideways move —\n                          this is what makes a petal to throw instead of an arc to lay")
+    ap.add_argument("--wide", type=float, default=0.35,
+                    help="petal width as a fraction of reach — this is what gives it AREA")
     ap.add_argument("--touches", type=int, default=3,
                     help="glue-downs inside the throw — more feet, shorter arcs, visibly curved")
     ap.add_argument("--petal-w", type=float, default=0.8,
@@ -388,7 +372,7 @@ if __name__ == "__main__":
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
                  a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean, a.reach,
-                 a.petal_w, a.petal_h, a.touches, a.prelift, a.swing, a.heart, a.heart_z)
+                 a.petal_w, a.petal_h, a.touches, a.prelift, a.swing, a.heart, a.heart_z, a.wide)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
