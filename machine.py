@@ -170,3 +170,32 @@ BED = {
     "k2plus": (350.0, 350.0),
     "f022":   (220.0, 220.0),
 }
+
+
+# AUXILIARY FANS — the syntax DIFFERS PER MACHINE and a wrong command errors mid-print.
+# K2 Plus exposes output_pin fan1/fan2 (SET_PIN, 0-255). K1C exposes fan_generic side_fan and
+# chassis_fan (SET_FAN_SPEED, 0-1). Hardcoding the K1C form into belt.py -- which defaults to the
+# K2 -- would have failed the moment it ran. Ask this function instead of writing the line.
+AUX_FANS = {
+    "k2plus": [("SET_PIN PIN=fan1 VALUE={v255}"), ("SET_PIN PIN=fan2 VALUE={v255}")],
+    "k1c":    [("SET_FAN_SPEED FAN=side_fan SPEED={v:.2f}"),
+               ("SET_FAN_SPEED FAN=chassis_fan SPEED={v:.2f}")],
+    "f022":   [],
+}
+
+
+def aux_fans(printer, frac):
+    """Gcode lines to run the chamber/side fans at `frac` (0-1) on this machine."""
+    frac = max(0.0, min(1.0, frac))
+    return [t.format(v=frac, v255=int(round(frac * 255)))
+            for t in AUX_FANS.get(printer, [])]
+
+
+# BED TEMPERATURE IS PER MATERIAL, and more is NOT better. Oleg, after a TPU flow test welded
+# itself to a 120C plate: "tpu on 120 bed is like glue. how to scrap it away".
+#
+# 120 came from a PLA part that kept letting go, where max bed was the right answer. Carried into
+# TPU it is the WRONG DIRECTION: 120 is above TPU's softening point, so the first layer does not
+# stick, it FUSES -- and then has to be torn off, taking the PEI with it. TPU needs 40-50: enough
+# to bond, cold enough to release when the plate cools.
+BED_TEMP = {"pla": 60, "petg": 80, "tpu": 45, "abs": 100}

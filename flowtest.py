@@ -68,7 +68,8 @@ BED = (350.0, 350.0)   # K2 Plus — overridden by --bed
 
 
 def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
-         bump_h, bump_arc, bump_every, spacing_mm, fixed_speed=None, bed_xy=None):
+         bump_h, bump_arc, bump_every, spacing_mm, fixed_speed=None, bed_xy=None,
+         printer='k2plus', aux=1.0):
     """With --fixed-speed the ramp varies LINE WIDTH instead of speed.
 
     Q = width x height x speed, so a flow ramp can be driven by either factor. Driving it with
@@ -114,6 +115,8 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     w(f"M190 S{bed}"); w(f"M109 S{temp}")
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
+    for _ln in machine.aux_fans(printer, aux):
+        w(_ln)
     w("M82"); w("G92 E0")
     # NO TRAVEL IS A RULE (machine.py): the prime ENDS where the spiral BEGINS, so there is no
     # reposition between priming and printing.
@@ -185,7 +188,8 @@ if __name__ == "__main__":
     ap.add_argument("--material", default="pla", choices=list(MATERIALS))
     ap.add_argument("--flows", default=None, help="lo,hi in mm3/s")
     ap.add_argument("--temp", type=int, default=None)
-    ap.add_argument("--bed", type=int, default=None)
+    ap.add_argument("--bed", type=int, default=0,
+                    help="0 = machine.BED_TEMP[material] — per-material, not max")
     ap.add_argument("--layer_h", type=float, default=0.4)
     ap.add_argument("--line_w", type=float, default=3.0)   # single layer: wide is safe
     ap.add_argument("--fan", type=int, default=51)         # 20% — see the FAN note above
@@ -206,6 +210,8 @@ if __name__ == "__main__":
                     # 120 mm/s in fixed-speed mode, which starves the bead to a thread
                     # at low flow — it reads as "not extruding at all".
                     help="hold this speed and ramp WIDTH instead (0 = ramp speed)")
+    ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
+    ap.add_argument("--aux", type=float, default=1.0, help="side/chamber fans 0-1")
     ap.add_argument("--bed-size", default=None, help="X,Y bed size, e.g. 229,225 for the K1C")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
@@ -223,11 +229,14 @@ if __name__ == "__main__":
     fl = [float(x) for x in a.flows.split(",")] if a.flows else m["flows"]
     q_lo, q_hi = min(fl), max(fl)
     temp = a.temp or m["temp"]
-    bed = a.bed if a.bed is not None else m["bed"]
+    # 0 means "ask the material", not "no heat" — and the material table wins over any
+    # habit of maxing the bed. See machine.BED_TEMP.
+    bed = a.bed or machine.BED_TEMP.get(a.material, m["bed"])
     g, st = emit(q_lo, q_hi, a.layer_h, a.line_w, temp, bed, a.fan, 1.75,
                  not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every,
                  a.spacing, a.fixed_speed or None,
-                 tuple(float(v) for v in a.bed_size.split(',')) if a.bed_size else None)
+                 tuple(float(v) for v in a.bed_size.split(',')) if a.bed_size else None,
+                 a.printer, a.aux)
     os.makedirs(a.out, exist_ok=True)
     # Machine tag in the filename. Two files that differ ONLY by bed size are a real hazard: the
     # K2's spiral is centred at 175,175 and the K1C's at 114,112, so starting the wrong one by hand
