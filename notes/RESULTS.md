@@ -212,3 +212,43 @@ frequency pair.
 ## Consequence
 `weave.py` (lissajous + per-crossing weld control) is now the coupon generator. `crackle.py` stays
 for the historical pillar sweep and its measured comparison, but Phase 2 runs on weave.
+
+---
+
+# WELD LADDER — the monotonicity test (printing 2026-07-25)
+
+The strongest available confirmation of Phase 1. Phase 1 compared the two extremes; this asks
+whether the response is **monotonic across the middle**, which is much harder to explain any other
+way.
+
+**Five rungs, identical to the gram.** Same path, same crossings, same 8.027 g, same 70 mm³/s,
+printed back-to-back in ONE session so bed temperature and nozzle state are shared. The only
+difference in the five files is how many crossings the nozzle lifts over.
+
+| plate x | `--weld` | lifts | meaning | loudness | compressions_to_quiet | character |
+|---|---|---|---|---|---|---|
+| 20 | 1.00 | 0 | every crossing FUSED (Phase 1 winner) | | | |
+| 85 | 0.75 | 144 | | | | |
+| 150 | 0.50 | 288 | half and half | | | |
+| 215 | 0.25 | 432 | | | | |
+| 280 | 0.00 | 592 | every crossing WOVEN, nothing fuses | | | |
+
+**Score barefoot, same floor, ideally in a shuffled order** — position on the plate reveals which is
+which, and expectation bias is real here.
+
+## What each outcome means
+- **Monotonic rise toward weld 1.0** → fusing confirmed a second, independent way, and the dial is
+  calibrated in the same print. Build on it.
+- **Flat or erratic** → the Phase 1 fused-vs-woven difference came from something other than weld
+  state. Re-examine before building further.
+- **PEAK IN THE MIDDLE** → the most interesting result: some fused junctions are needed to store
+  elastic energy, but too many make the structure rigid enough to BEND rather than snap. The optimum
+  would then be a mix, and `--weld` becomes a tuning parameter rather than a switch.
+
+**compressions_to_quiet is the number that decides product vs novelty.** Under ~3 in PLA and the
+honest answer is novelty, making Phase 2 (TPU/PETG, elastic recovery) the real project.
+
+## Also being tested by this run
+First sustained multi-print series at the corrected **70 mm³/s** (dropped from 80 after Oleg heard
+the extruder cracking). If the cracking is gone across five back-to-back prints, the ear-based
+ceiling holds.
