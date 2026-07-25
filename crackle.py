@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""Crackle coupon generator — emits gcode directly. Phase 1: is the effect controllable?
+
+THE THESIS (refined from the PRD, and the reason this emits gcode rather than CAD):
+The crackle is fused strand CROSSINGS breaking under load. Strands come from travel moves with
+retraction off. So the control variable is crossings-per-volume — and crossings are a *computable
+function of the order you visit the pillars in*, not an accident.
+
+  · visit pillars around the perimeter  -> chords never cross      -> ~0 crossings/layer
+  · visit pillars in "star" order       -> nearly every chord crosses -> max crossings/layer
+
+That is why this tool COUNTS crossings before printing (segment-intersection test) and prints the
+number in the filename and header. You dial a number; you don't sweep and hope. If crossing count
+turns out NOT to predict the feel, that falsifies the thesis cheaply — which is a valid Phase 1
+result and the fastest way to learn it.
+
+Deviations from the PRD's starting guess, and why:
+ 1. **Travel ORDER is axis #1, not last.** Per the argument above it is the only axis that changes
+    crossings-per-layer by an order of magnitude. Temperature/fan change whether crossings *weld*;
+    order changes how many there ARE.
+ 2. **A solid anchor base under the pillars.** The PRD lists bed adhesion and "must release intact
+    and be stood on" as rig problems. One feature solves both: 2 solid layers that tie every pillar
+    together, survive the nozzle dragging across them, and give a coupon you can peel off and stand
+    on without it disintegrating. Cost: ~1 g and ~40 s.
+ 3. **Per-layer rotation of the visit order.** Without it, every layer crosses at the same XY points
+    and you build vertical welded columns (which press, like the hex grid, instead of crackling).
+    Rotating the order spreads crossings through the volume — that is the "per-volume" in the thesis.
+ 4. **Web density is decoupled from pillar count** via `--passes`: extra crossing passes per layer
+    cost travel time only, ~no filament. This is the cheap knob the PRD predicted.
+
+Usage:
+  python3 crackle.py --preset A            # emit one coupon
+  python3 crackle.py --sweep order         # emit a one-factor-at-a-time sweep
+  python3 crackle.py --list                # show presets
+"""
+from __future__ import annotations
+import argparse, itertools, math, os, random, sys
+from dataclasses import dataclass, asdict, replace
+
+# ---------------------------------------------------------------- parameters
+@dataclass
+class Params:
+    name: str = "A"
+    origin: float = 40.0        # BUG FIX: coupon was at 0,0 so edge pillars ran off the bed
+    size: float = 60.0          # coupon footprint (mm, square)
+    n: int = 4                  # pillars per side (n*n total)
+    pitch: float = 20.0         # pillar spacing (mm) — set from size/n if 0
+    layer_h: float = 0.30
+    layers: int = 20            # ~6 mm tall — enough to stand on, inside the time budget
+    line_w: float = 0.60        # extrusion width (0.4 nozzle, fat line = sturdier pillar)
+    pillar_turns: float = 1.0   # how much material to lay down AT each pillar per layer
+    order: str = "star"         # perimeter | serpentine | star | random | maxcross
+    passes: int = 1             # extra crossing passes per layer (travel-only cost)
+    rotate_per_layer: bool = True
+    temp: int = 230
+    bed: int = 60
+    fan: int = 0                # 0 = crossings weld. This is the "does it fuse" axis.
+    travel_f: int = 6000        # mm/min. Slower = thicker, more-welded strands.
+    print_f: int = 1200
+    base_layers: int = 2        # solid anchor slab (adhesion + handleable coupon)
+    filament_d: float = 1.75
+    flow: float = 1.0
+    wipe_every: int = 0         # layers between a nozzle-wipe pass (0 = off)
+    inset: float = 8.0          # keep pillars off the coupon edge
+    base_f: int = 3000          # base is structural, not pretty — run it fast
+
+
+PRESETS = {
+    # The PRD's guess, made concrete — the control.
+    "A": Params(name="A", order="star"),
+    # Axis 1: ORDER (the thesis says this dominates). Same everything else.
+    "B": Params(name="B", order="perimeter"),      # ~0 crossings -> should NOT crackle
+    "C": Params(name="C", order="serpentine"),     # few crossings
+    "D": Params(name="D", order="maxcross"),       # most crossings
+    # Axis 2: crossing DENSITY at fixed order (travel-only cost)
+    "E": Params(name="E", order="star", passes=3),
+    # Axis 3: does it WELD? fan on should kill the crackle if welding matters
+    "F": Params(name="F", order="star", fan=255),
+    # Axis 4: finer web
+    "G": Params(name="G", order="star", n=6, pitch=0, layer_h=0.25, layers=16),  # time-budgeted
+}
+
+# ---------------------------------------------------------------- geometry
+def pillar_xy(p: Params):
+    """Pillars inset from the coupon edge, and the whole coupon offset onto the bed.
+    (Both were bugs the validator caught: span==size put pillars ON the edge, and origin 0,0
+    pushed their extrusion loops to negative coordinates.)"""
+    pitch = p.pitch if p.pitch else (p.size - 2 * p.inset) / max(p.n - 1, 1)
+    span = pitch * (p.n - 1)
+    x0 = p.origin + (p.size - span) / 2
+    return [(round(x0 + i * pitch, 3), round(x0 + j * pitch, 3))
+            for j in range(p.n) for i in range(p.n)]
+
+def visit_order(pts, mode, seed=0):
+    k = len(pts)
+    idx = list(range(k))
+    if mode == "serpentine":
+        return idx
+    if mode == "perimeter":
+        cx = sum(x for x, _ in pts) / k; cy = sum(y for _, y in pts) / k
+        return sorted(idx, key=lambda i: math.atan2(pts[i][1] - cy, pts[i][0] - cx))
+    if mode == "random":
+        r = random.Random(seed); o = idx[:]; r.shuffle(o); return o
+    if mode == "star":
+        # walk the convex-angular order with a large stride -> star polygon -> many crossings
+        cx = sum(x for x, _ in pts) / k; cy = sum(y for _, y in pts) / k
+        ring = sorted(idx, key=lambda i: math.atan2(pts[i][1] - cy, pts[i][0] - cx))
+        stride = max(2, k // 2 - 1)
+        while math.gcd(stride, k) != 1 and stride > 2:   # coprime stride visits every point once
+            stride -= 1
+        return [ring[(m * stride) % k] for m in range(k)]
+    if mode == "maxcross":
+        # greedy: always jump to the farthest unvisited pillar -> long chords -> maximal crossing
+        o = [0]; rest = set(idx) - {0}
+        while rest:
+            cur = pts[o[-1]]
+            nxt = max(rest, key=lambda i: (pts[i][0]-cur[0])**2 + (pts[i][1]-cur[1])**2)
+            o.append(nxt); rest.discard(nxt)
+        return o
+    raise SystemExit(f"unknown order: {mode}")
+
+def _seg_cross(a, b, c, d):
+    def o(p, q, r): return (q[1]-p[1])*(r[0]-q[0]) - (q[0]-p[0])*(r[1]-q[1])
+    def sgn(v): return (v > 1e-9) - (v < -1e-9)
+    return sgn(o(a,b,c)) != sgn(o(a,b,d)) and sgn(o(c,d,a)) != sgn(o(c,d,b))
+
+def count_crossings(pts, order):
+    """THE control number: how many times do this layer's travel chords cross each other."""
+    segs = [(pts[order[i]], pts[order[i+1]]) for i in range(len(order)-1)]
+    n = 0
+    for i in range(len(segs)):
+        for j in range(i+2, len(segs)):        # skip adjacent (they share an endpoint)
+            if _seg_cross(*segs[i], *segs[j]): n += 1
+    return n
+
+# ---------------------------------------------------------------- gcode
+class G:
+    def __init__(self, p: Params):
+        self.p = p; self.L = []; self.e = 0.0
+        area = math.pi * (p.filament_d/2)**2
+        self.mm_per_mm = (p.line_w * p.layer_h) / area * p.flow   # filament mm per mm of travel
+    def w(self, s): self.L.append(s)
+    def move(self, x, y, f=None):                      # TRAVEL — no retraction: this draws a strand
+        self.w(f"G0 F{f or self.p.travel_f} X{x:.3f} Y{y:.3f}")
+    def extrude_to(self, x, y, dist, f=None):
+        self.e += dist * self.mm_per_mm
+        self.w(f"G1 F{f or self.p.print_f} X{x:.3f} Y{y:.3f} E{self.e:.5f}")
+    def z(self, z): self.w(f"G0 Z{z:.3f}")
+
+def g_last(g):
+    return None
+
+def emit(p: Params) -> tuple[str, dict]:
+    pts = pillar_xy(p)
+    base_order = visit_order(pts, p.order)
+    xr = count_crossings(pts, base_order)
+
+    g = G(p)
+    g.w(f"; crackle coupon {p.name} — order={p.order} crossings/layer={xr} passes={p.passes}")
+    g.w(f"; {p.size}mm, {p.n}x{p.n} pillars, {p.layers}x{p.layer_h}mm, T{p.temp} fan{p.fan}")
+    g.w("; RETRACTION / COMBING / Z-HOP / WIPE ARE DELIBERATELY ABSENT — the travels are the product.")
+    for k, v in asdict(p).items(): g.w(f"; param {k}={v}")
+    # --- start ---
+    g.w("M190 S%d" % p.bed); g.w("M104 S%d" % p.temp)
+    g.w("G28"); g.w("G90"); g.w("M83")                  # absolute XYZ, RELATIVE E is safer to append
+    g.w("M109 S%d" % p.temp)
+    g.w(f"M106 S{p.fan}" if p.fan else "M107")
+    g.w("; prime line")
+    g.w(f"G0 Z{p.layer_h:.2f} F3000"); g.w("G0 X5 Y5 F6000")
+    g.w("G1 X55 Y5 E14 F1200"); g.w("G1 X55 Y5.6 E0.6 F1200"); g.w("G1 X5 Y5.6 E14 F1200")
+    g.w("G92 E0")
+    g.e = 0.0
+    # M83 relative-E: our absolute accumulator would be wrong, so switch to absolute for the body
+    g.w("M82"); g.w("G92 E0")
+
+    z = 0.0
+    # --- anchor base: solid-ish slab so pillars survive drag AND the coupon peels off intact ---
+    for b in range(p.base_layers):
+        z = round(z + p.layer_h, 3); g.z(z)
+        g.w(f"; base layer {b+1} — LATTICE, not a solid slab.")
+        # The validator showed a solid slab was ~88% of print time and blew the 6-min budget.
+        # The base only has two jobs: anchor every pillar against nozzle drag, and hold the coupon
+        # together so it peels off and can be stood on. A perimeter frame + ribs through every
+        # pillar row/column does both for ~1/8 the extrusion.
+        x0, y0 = p.origin + 3.0, p.origin + 3.0
+        x1, y1 = p.origin + p.size - 3.0, p.origin + p.size - 3.0
+        g.move(x0, y0)
+        for (tx, ty) in [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]:      # frame, 2 loops
+            g.extrude_to(tx, ty, math.dist((g_last(g) or (x0, y0)), (tx, ty)) if False else abs(tx - x0) + abs(ty - y0) or p.size, f=p.base_f)
+        off = p.line_w * 0.9
+        g.move(x0 + off, y0 + off)
+        for (tx, ty) in [(x1-off, y0+off), (x1-off, y1-off), (x0+off, y1-off), (x0+off, y0+off)]:
+            g.extrude_to(tx, ty, p.size, f=p.base_f)
+        rows = sorted({y for _, y in pts}); cols = sorted({x for x, _ in pts})
+        for yy in rows:                                                 # rib per pillar row
+            g.move(x0, yy); g.extrude_to(x1, yy, x1 - x0, f=p.base_f)
+        for xx in cols:                                                 # rib per pillar column
+            g.move(xx, y0); g.extrude_to(xx, y1, y1 - y0, f=p.base_f)
+
+    # --- web: pillars + crossing travels ---
+    for layer in range(p.layers):
+        z = round(z + p.layer_h, 3); g.z(z)
+        order = base_order if not p.rotate_per_layer else \
+            base_order[layer % len(base_order):] + base_order[:layer % len(base_order)]
+        g.w(f"; web layer {layer+1}  crossings~{xr*p.passes}")
+        for _ in range(p.passes):
+            for i, pi in enumerate(order):
+                x, y = pts[pi]
+                g.move(x, y)                      # <- the strand: molten drag through open air
+                # lay a little material AT the pillar so it has a body to anchor the web
+                r = p.line_w * 0.6
+                for a in range(4):
+                    ang = (a + 1) * math.pi / 2
+                    g.extrude_to(x + r*math.cos(ang), y + r*math.sin(ang), r*1.6, f=p.print_f)
+                g.extrude_to(x, y, r, f=p.print_f)
+        if p.wipe_every and (layer + 1) % p.wipe_every == 0:
+            g.w("; wipe pass — shed accumulated ooze on the base edge")
+            g.move(p.origin + 3.0, p.origin + 3.0, f=9000); g.extrude_to(p.origin + p.size - 3.0, p.origin + 3.0, p.size - 6.0, f=3000)
+    # --- end ---
+    g.w("M107"); g.w("M104 S0"); g.w("M140 S0")
+    g.w(f"G0 Z{z + 20:.2f} F1200"); g.w("G0 X5 Y{:.0f} F6000".format(p.origin + p.size + 20))
+    g.w("M84")
+    grams = g.e * math.pi * (p.filament_d/2)**2 * 1.24 / 1000
+    stats = {"crossings_per_layer": xr, "crossings_total": xr * p.passes * p.layers,
+             "filament_mm": round(g.e, 1), "grams": round(grams, 2),
+             "moves": len(g.L)}
+    return "\n".join(g.L) + "\n", stats
+
+# ---------------------------------------------------------------- cli
+def write(p: Params, outdir="out"):
+    gcode, st = emit(p)
+    os.makedirs(outdir, exist_ok=True)
+    fn = f"{outdir}/crackle_{p.name}_{p.order}_x{st['crossings_per_layer']}_T{p.temp}_fan{p.fan}.gcode"
+    open(fn, "w").write(gcode)
+    print(f"{p.name:>3}  order={p.order:<11} crossings/layer={st['crossings_per_layer']:>3} "
+          f"total={st['crossings_total']:>5}  {st['grams']:>5.2f} g  -> {fn}")
+    return fn, st
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--preset", default=None)
+    ap.add_argument("--sweep", default=None, choices=["order", "all"])
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--out", default="out")
+    a = ap.parse_args()
+    if a.list:
+        for k, v in PRESETS.items(): print(f"{k}: order={v.order} passes={v.passes} fan={v.fan} n={v.n}")
+        sys.exit(0)
+    if a.sweep == "order":
+        for k in ["B", "C", "A", "D"]: write(PRESETS[k], a.out)     # ~0 -> max crossings
+    elif a.sweep == "all":
+        for k in PRESETS: write(PRESETS[k], a.out)
+    else:
+        write(PRESETS[a.preset or "A"], a.out)
