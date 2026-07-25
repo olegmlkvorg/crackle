@@ -6,15 +6,27 @@
    a spaghetti web — the camera is built to spot exactly this and pause the job.
    **Also: clear and wipe the plate between coupons.** A plate still webbed from the previous run
    trips **AC0104 "foreign object detected"** at Z-homing, *before* the print starts.
-2. **Start from the touchscreen, not from Fluidd/Orca "send & print".** There's a reported bug where
-   remotely-started jobs crash the head (`No trigger on x after full movement`). `push.py` therefore
-   uploads only and never starts.
+2. **`push.py` uploads AND starts** (changed 2026-07-25 — Oleg: *"i have way higher risk tolerance
+   then you"*). `--no-start` opts out. The reported remote-start head-crash bug is real but is an
+   unhomed-axis failure, and it fails safely on this toolchain: no-home files error with "Must home
+   axis first" rather than crashing. The one non-overridable guard remains: never overwrite the file
+   Klipper is currently streaming, which is corruption rather than caution.
 3. **Bed:** clean PEI, 60 °C, slightly generous first-layer squish. The nozzle drags across the part
    all print; a lifted lattice ruins the coupon and is a rig problem, not a result.
 4. **Have tweezers and a spare nozzle wipe handy.** Retraction is off for the whole print — ooze
    accumulates. If a run ends in a blob, add `wipe_every=5` and rerun.
 5. **These are hand-emitted gcode files.** `validate.py` checks them structurally (no backwards E,
    no Z ploughing, nothing off the bed) but it cannot know your machine. Watch the first 30 s.
+6. **THE FAILURE MODE VALIDATE.PY CANNOT SEE — physics, not syntax.** On 2026-07-25 a flow tower
+   printed 3 mm-wide lines from a 0.8 mm nozzle. The file was perfect; the physics was not. A round
+   orifice cannot spread 1.2 mm2/mm to 3 mm, so the bead landed ~1.4 mm wide and therefore ~0.86 mm
+   TALL against a 0.4 mm Z step — the part climbed ~0.46 mm per layer past the nozzle, which
+   ploughed into it and dragged it off the plate at 56%.
+   **Narrow bead means TALL bead means collision.** Two rules came out of it:
+   - Anything that STACKS keeps commanded line width <= 1.5x nozzle. `crackle.py` now refuses
+     otherwise and prints the arithmetic.
+   - Anything wanting fat, visible beads is a **single layer**, where nothing can collide with
+     itself and any commanded width is safe. That is why `flowtest.py` is one layer.
 
 ## Already on the printer
 `crackle_B_…` and `crackle_A_…` are **uploaded to the K2 Plus** (192.168.3.140) and waiting in the
@@ -50,6 +62,25 @@ If loudness climbs with the number and then plateaus, you've found the useful ra
 is confirmed. If it's flat or random, crossings aren't the driver even if A beat B.
 Times rise with density (3.9 / 6.1 / 9.4 / 13.8 min) — that's inherent: more crossings means more
 travel moves. Sweep anything else the same way: `--vary passes=1,2,4`, `--vary temp=210,230,250`.
+
+## Machine calibration comes first (`flowtest.py`)
+Every coupon speed used to be a number I invented. They are now derived: `crackle.py --max-flow <n>`
+sets working flow to 0.85 x measured and computes strand and pillar speeds from it. So measure first.
+
+`flowtest.py` prints a **single-layer Archimedean spiral**, flow ramping outward, ~7 min:
+- **Spiral, not rows** — serpentine reverses 180 degrees at every row end, so the head decelerates
+  and never reaches commanded speed. A flow test that does not reach commanded speed measures the
+  motion planner, not the hotend. A spiral never turns.
+- **Outward ramp** — highest flow lands at the largest radius, the gentlest curvature on the plate.
+- **Fan 20%** — full fan chills the melt and would read as the flow ceiling. A melt-rate test must
+  not have a second cooling variable fighting the hotend.
+- **Bump spoke** — at every 5 mm3/s the spiral makes a 1 mm outward pimple, all at the same polar
+  angle, so they line up into one radial spoke. Count outward from the centre. It is a shape change,
+  never a gap, so it cannot be mistaken for the extrusion failure being hunted.
+- **Turn spacing = commanded width**, so the gaps between turns measure true landed bead width free.
+- `python3 where.py` prints the live mm3/s being extruded at this instant.
+
+Read it: find where the bead stops being continuous plastic. That is the ceiling; use 85% of it.
 
 ## Why it still "calibrates" — and the file set that doesn't
 **The expensive ceremony is inside `G28` on this machine, not only in `START_PRINT`.** The K2 probes

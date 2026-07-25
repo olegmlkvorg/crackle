@@ -1,170 +1,179 @@
 #!/usr/bin/env python3
-"""Max volumetric flow test — ONE LAYER, whole plate, flow ramping as it climbs in Y.
+"""Max volumetric flow test — ONE LAYER, Archimedean SPIRAL, flow ramping outward.
 
 Q (mm3/s) = line_width x layer_height x speed. The hotend can only melt so fast; past that it
 under-extrudes no matter what you command. This finds that ceiling.
 
-WHY THIS IS A SINGLE LAYER AND NOT A TOWER (learned the hard way, 2026-07-25)
-  v1 was a stacked tower. It printed 3 mm-wide lines from a 0.8 mm nozzle, which is 1.2 mm2 of
-  plastic per mm of path. The nozzle cannot spread that to 3 mm, so the bead landed ~1.4 mm wide
-  and therefore ~0.86 mm TALL — while Z stepped 0.4 mm per layer. The part grew twice as fast as
-  the nozzle climbed, the nozzle ploughed into it, and it dragged the tower off the plate at 56%.
-  Narrow bead means tall bead. Tall bead means collision.
-  A single layer has nothing to stack into, so wide commanded lines are safe — which is the whole
-  reason we can keep 3 mm lines and actually SEE the filament.
+WHY A SPIRAL AND NOT SERPENTINE ROWS (Oleg, 2026-07-25: "we have sharp turns in this test")
+  Serpentine rows reverse 180 degrees at every row end. The head must decelerate to zero and
+  accelerate back, so commanded feedrate is NOT actual feedrate near the ends — and a flow test is
+  only valid if the head really reaches the speed you asked for. A spiral never turns: one
+  continuous path, curvature decreasing smoothly, so speed is genuinely constant.
 
-WHY LONG STRAIGHT ROWS AND NOT A HILBERT / SPACE-FILLING CURVE
-  A flow test is only valid if the head actually reaches the commanded speed. A Hilbert curve is
-  nothing but 90-degree corners; acceleration limits mean you decelerate into every one and never
-  hit the speed you asked for, so you would be measuring the motion planner, not the hotend.
-  320 mm straight runs reach commanded speed with room to spare. (Hilbert is the right path for
-  the crackle/ORBE work, where corners and crossings ARE the point — just not for measurement.)
+  Orientation matters too. Flow ramps OUTWARD, so the highest flow lands at the largest radius —
+  the gentlest curvature on the plate. The fastest moves get the straightest geometry. Low flow
+  sits in the tight centre where the head would be slow anyway.
 
-CONTINUOUS RAMP, NOT BANDS (Oleg, 2026-07-25: "you could have easily done the progressions much
-smoother"). Every row gets its own flow, interpolated linearly across the plate. v1 repeated each
-flow for 8 rows — a habit carried over from the stacked tower, where a band genuinely needed several
-LAYERS to be readable. A single-layer row is already a 320mm constant-speed run, ~11 s of continuous
-extrusion, long past thermal steady state. So repeating it spent 8x the plate to learn one number.
-96 rows = 96 flow values = ~0.5 mm3/s resolution instead of 4, for the same time and material.
+WHY A SINGLE LAYER (learned the hard way, 2026-07-25)
+  v1 stacked a tower with 3 mm lines from a 0.8 mm nozzle. Commanded cross-section (3 x 0.4 =
+  1.2 mm2/mm) is conserved, but a round orifice cannot spread that far: the bead landed ~1.4 mm
+  wide and therefore ~0.86 mm TALL against a 0.4 mm Z step. The part climbed ~0.46 mm/layer past
+  the nozzle, which ploughed into it and dragged it off the plate at 56%. Narrow bead means tall
+  bead means collision. A single layer cannot stack into itself, so wide commanded lines are safe —
+  which is what makes the filament visible at low speed.
 
-HOW TO READ IT
-  Front of the plate (low Y) = lowest flow, back = highest. It degrades gradually, not in steps.
-  Find where the surface first goes THIN, GAPPY, MATTE or starts skipping.
-  SELF-LABELLING: rows at each multiple of 5 mm3/s are cut 15mm short, so the right-hand edge is a
-  comb. Count teeth from the front — the first tooth is the first multiple of 5 above the start
-  flow, and each tooth after it is +5. No ruler needed. Tell me the tooth and I have the number.
-
-FAN: 20%, not 100% (Oleg, 2026-07-25). Two reasons, and the second is the important one:
-  1. It is a single layer with nothing above it, so cooling buys nothing — but a 46 g sheet of fat
-     beads WILL curl and lift off the plate with full fan behind it.
-  2. Worse, full fan chills the melt and can make extrusion fail on its own. That would read as the
-     flow ceiling when it is really the fan, and we would set every downstream parameter too low.
+FAN 20%, not 100%. Two reasons, the second being the important one:
+  1. Nothing prints above it, so cooling buys nothing — but a heavy single-layer sheet of fat beads
+     will curl and lift with full fan behind it.
+  2. Full fan chills the melt and can make extrusion fail on its own. That would read as the flow
+     ceiling when it is really the fan, and every downstream parameter would then be set too low.
      A melt-rate test must not have a second cooling variable fighting the hotend.
 
-BONUS MEASUREMENT: row spacing equals the COMMANDED line width. Where the sheet seals with no gap,
-  the bead really is that wide. Where you see a gap, measure it — landed width = spacing - gap.
-  That number is what a hermetic single-layer sheet needs for its spacing, and it feeds the
-  crackle strand model too.
+BED 120 C (Oleg, 2026-07-25). Far above PLA's glass transition, so adhesion is excellent — which is
+  what a 40 g single-layer sheet needs. Trade-off to know: the sheet stays rubbery while hot, so let
+  the plate cool before lifting it or it will stretch out of shape as you peel.
+
+HOW TO READ IT
+  Centre = lowest flow, outer edge = highest. It degrades gradually, not in steps: find where the
+  bead stops being CONTINUOUS PLASTIC — first gaps, first skips, first matte stretches.
+
+  SELF-LABELLING: at every multiple of 5 mm3/s the spiral makes a small outward BUMP, and every bump
+  sits at the same polar angle, so they line up into one radial spoke of pimples. Count outward from
+  the centre: the first pimple is the first multiple of 5 above the start flow, each one after +5.
+  No ruler needed. The bump is 1 mm against 3 mm turn spacing, so it cannot touch its neighbour, and
+  it is a SHAPE change rather than a gap — it can never be mistaken for the extrusion failure we are
+  hunting for.
+
+BONUS MEASUREMENT: turn spacing equals the COMMANDED line width. Where the spiral seals into a
+  continuous surface the bead really is that wide; where there is a gap, landed width = spacing -
+  gap. That number feeds the crackle strand model.
+
+LIVE: `python3 where.py` prints the exact mm3/s being extruded at this instant.
 
 Usage:
-  python3 flowtest.py --no-home                       # full plate, 34..78 mm3/s
-  python3 flowtest.py --no-home --flows 40,50,60,70
+  python3 flowtest.py --no-home                       # spiral, 50..90 mm3/s
+  python3 flowtest.py --no-home --flows 60,100
 """
 import argparse, math, os
 
 MATERIALS = {
-    # start where the last run was still visibly fine and climb from there
-    "pla":  dict(temp=230, bed=60,  flows=[34, 38, 42, 46, 50, 54, 58, 62, 66, 70, 74, 78]),
-    "petg": dict(temp=245, bed=80,  flows=[10, 14, 18, 22, 26, 30, 34, 38]),
-    "tpu":  dict(temp=230, bed=50,  flows=[2, 3, 4, 5, 6, 8, 10, 12]),
-    "abs":  dict(temp=255, bed=100, flows=[8, 12, 16, 20, 24, 28, 32, 36]),
+    # floor rises as each run passes — no point reprinting known-good flow
+    "pla":  dict(temp=230, bed=120, flows=[50, 90]),
+    "petg": dict(temp=245, bed=80,  flows=[10, 38]),
+    "tpu":  dict(temp=230, bed=50,  flows=[2, 12]),
+    "abs":  dict(temp=255, bed=100, flows=[8, 36]),
 }
 BED = (350.0, 350.0)   # K2 Plus
 
 
-def emit(flows, n_rows, layer_h, line_w, temp, bed, fan, fil_d, home, margin):
+def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
+         bump_h, bump_arc):
     area = math.pi * (fil_d / 2) ** 2
-    e_per_mm = (line_w * layer_h) / area          # constant: volume per mm of path
-    x0, x1 = margin, BED[0] - margin
-    row_len = x1 - x0
-    q_lo, q_hi = min(flows), max(flows)
-    def q_at(r):                      # linear ramp: one flow per row
-        return q_lo + (q_hi - q_lo) * (r / max(n_rows - 1, 1))
-    NOTCH = 15.0                      # rows crossing a multiple of 5 mm3/s are cut short -> a comb
-    spacing = line_w                              # textbook sealed-sheet spacing; gaps = measurement
-    span = (n_rows - 1) * spacing
-    y0 = (BED[1] - span) / 2.0
-    if y0 < margin:
-        raise SystemExit(f"{n_rows} rows x {spacing}mm = {span:.0f}mm exceeds the plate. "
-                         f"Reduce --rows or --flows.")
+    e_per_mm = (line_w * layer_h) / area
+    cx, cy = BED[0] / 2, BED[1] / 2
+    r_max = min(cx, cy) - margin
+    b = line_w / (2 * math.pi)              # radius gained per radian
+    th_max = (r_max - r0) / b
+    turns = th_max / (2 * math.pi)
+
+    def q_at_r(r):                          # flow linear in radius
+        return q_lo + (q_hi - q_lo) * (r - r0) / (r_max - r0)
+
+    # Radius at which each multiple of 5 mm3/s is crossed. Each bump is placed on the NEXT pass
+    # through angle 0, so all bumps stack into one readable radial spoke.
+    marks = []
+    m = math.floor(q_lo / 5) * 5 + 5
+    while m < q_hi:
+        r_m = r0 + (m - q_lo) / (q_hi - q_lo) * (r_max - r0)
+        marks.append((m, math.ceil(((r_m - r0) / b) / (2 * math.pi)) * 2 * math.pi))
+        m += 5
 
     L = []; w = L.append
-    w(f"; MAX VOLUMETRIC FLOW — single layer, full plate, {n_rows} rows, continuous ramp")
-    w(f"; line_w={line_w} layer_h={layer_h} temp={temp} fan={fan} spacing={spacing}")
-    w("; READ IT: low Y (front) = lowest flow, ramping continuously to the back.")
-    w("; Rows at each multiple of 5 mm3/s are 15mm short -> comb on the right edge. Count teeth.")
-    w(f"; RAMP {q_lo:g} -> {q_hi:g} mm3/s over {n_rows} rows "
-      f"({(q_hi-q_lo)/max(n_rows-1,1):.2f} mm3/s per row)")
-    for r in range(n_rows):
-        q = q_at(r)
-        if math.floor(q / 5) != math.floor(q_at(r - 1) / 5) if r else False:
-            w(f"; NOTCH row {r}: {q:.1f} mm3/s at Y{y0 + r*spacing:.0f}")
+    w(f"; MAX VOLUMETRIC FLOW — single layer, Archimedean spiral, {turns:.0f} turns")
+    w(f"; line_w={line_w} layer_h={layer_h} temp={temp} bed={bed} fan={fan} spacing={line_w}")
+    w(f"; RAMP {q_lo:g} -> {q_hi:g} mm3/s outward, r {r0:g}..{r_max:g}mm about ({cx:g},{cy:g})")
+    w("; READ IT: centre = lowest flow. Find where the bead stops being continuous plastic.")
+    w("; BUMPS: 1mm outward pimples every 5 mm3/s, all at one angle -> a radial spoke. Count them.")
+    for mq, mth in marks:
+        w(f";   bump {mq:g} mm3/s at r{r0 + b*mth:.0f}mm")
     w("; HEADER_BLOCK_START"); w("; total layer number: 1"); w("; HEADER_BLOCK_END")
 
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
-    if home:
-        w("G28")
-    else:
-        w("; NO HOME — direct to print (errors safely if the machine lost its homed position)")
+    w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
     w(f"M190 S{bed}"); w(f"M109 S{temp}")
-    w("M204 S8000")                 # 320mm rows: high accel so commanded speed is actually reached
+    w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
     w("M82"); w("G92 E0")
-    # prime bead down the far left, clear of the test area
     w(f"G1 Z{layer_h:.2f} F600")
     w(f"G0 F9000 X{margin:.1f} Y{margin:.1f}")
-    w(f"G1 F1200 X{margin:.1f} Y{margin+80:.1f} E12")
-    w("G92 E0")
+    w(f"G1 F1200 X{margin:.1f} Y{margin+80:.1f} E12"); w("G92 E0")
 
     e = 0.0
-    for row in range(n_rows):
-        q = q_at(row)
-        v = q / (line_w * layer_h)
-        f_mm_min = round(v * 60)
-        y = y0 + row * spacing
-        # notch this row if the ramp crosses a multiple of 5 here — makes the plate self-labelling
-        notch = row > 0 and math.floor(q / 5) != math.floor(q_at(row - 1) / 5)
-        left_to_right = (row % 2 == 0)
-        sx, ex = (x0, x1) if left_to_right else (x1, x0)
-        if notch:
-            ex = ex - NOTCH if left_to_right else ex + NOTCH
-        if row == 0:
-            L.append(f"; ramp starts {q:.1f} mm3/s")
-            L.append(f"G0 F9000 X{sx:.2f} Y{y:.2f}")
-        else:
-            if notch:
-                L.append(f"; --- notch: {q:.1f} mm3/s @ {v:.0f} mm/s, Y{y:.0f} ---")
-            # y-shift is part of the sheet, drawn not travelled — no ooze gap between rows
-            e += spacing * e_per_mm
-            L.append(f"G1 F{f_mm_min} X{sx:.2f} Y{y:.2f} E{e:.5f}")
-        d = abs(ex - sx)
-        e += d * e_per_mm
-        L.append(f"G1 F{f_mm_min} X{ex:.2f} Y{y:.2f} E{e:.5f}")
+    th = 0.0
+    px, py = cx + r0, cy
+    L.append(f"G0 F9000 X{px:.3f} Y{py:.3f}")
+    while th < th_max:
+        r_base = r0 + b * th
+        th += min(seg_len / max(r_base, 1.0), 0.25)
+        r_base = r0 + b * th
+        dr = 0.0
+        for mq, mth in marks:                       # raised-cosine blip centred on the marked turn
+            d = th - mth
+            if abs(d) < bump_arc:
+                dr = bump_h * math.cos(math.pi * d / (2 * bump_arc)) ** 2
+                break
+        r = r_base + dr
+        x, y = cx + r * math.cos(th), cy + r * math.sin(th)
+        e += math.dist((px, py), (x, y)) * e_per_mm
+        L.append(f"G1 F{round(q_at_r(r_base) / (line_w * layer_h) * 60)} "
+                 f"X{x:.3f} Y{y:.3f} E{e:.5f}")
+        px, py = x, y
 
-    L += ["M107", "M104 S0", "M140 S0",
-          f"G1 Z{layer_h+40:.1f} F900", "G0 X10 Y340 F9000"]   # steppers stay on for the next run
+    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h+40:.1f} F900", "G0 X10 Y340 F9000"]
     grams = e * area * 1.24 / 1000
-    path_mm = n_rows * row_len + (n_rows - 1) * spacing
-    secs = sum((row_len + spacing) / (q_at(r) / (line_w * layer_h)) for r in range(n_rows))
-    return "\n".join(L) + "\n", dict(rows=n_rows, grams=round(grams, 1), mins=round(secs / 60, 1),
-                                     path=round(path_mm / 1000, 1), y0=round(y0), span=round(span))
+    secs = 0.0
+    th = 0.0
+    while th < th_max:
+        r = r0 + b * th
+        dth = min(seg_len / max(r, 1.0), 0.25)
+        secs += (r * dth) / (q_at_r(r) / (line_w * layer_h))
+        th += dth
+    return "\n".join(L) + "\n", dict(turns=round(turns), grams=round(grams, 1),
+                                     mins=round(secs / 60, 1), path=round(e / e_per_mm / 1000, 1),
+                                     lines=len(L), r_max=r_max, marks=[m for m, _ in marks])
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--material", default="pla", choices=list(MATERIALS))
-    ap.add_argument("--flows", default=None, help="comma list of mm3/s")
+    ap.add_argument("--flows", default=None, help="lo,hi in mm3/s")
     ap.add_argument("--temp", type=int, default=None)
-    ap.add_argument("--rows", type=int, default=96, help="total rows = flow resolution")
+    ap.add_argument("--bed", type=int, default=None)
     ap.add_argument("--layer_h", type=float, default=0.4)
-    ap.add_argument("--line_w", type=float, default=3.0)   # safe: single layer, nothing stacks
-    ap.add_argument("--fan", type=int, default=51)   # 20% — see FAN note in the docstring
+    ap.add_argument("--line_w", type=float, default=3.0)   # single layer: wide is safe
+    ap.add_argument("--fan", type=int, default=51)         # 20% — see the FAN note above
     ap.add_argument("--margin", type=float, default=15.0)
+    ap.add_argument("--r0", type=float, default=25.0, help="inner radius (tight centre = slow anyway)")
+    ap.add_argument("--seg", type=float, default=2.0, help="segment length mm")
+    ap.add_argument("--bump", type=float, default=1.0, help="marker bump height mm")
+    ap.add_argument("--bump-arc", type=float, default=0.12, help="marker half-width in radians")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     m = MATERIALS[a.material]
-    flows = [float(x) for x in a.flows.split(",")] if a.flows else m["flows"]
+    fl = [float(x) for x in a.flows.split(",")] if a.flows else m["flows"]
+    q_lo, q_hi = min(fl), max(fl)
     temp = a.temp or m["temp"]
-    g, st = emit(flows, a.rows, a.layer_h, a.line_w, temp, m["bed"], a.fan, 1.75,
-                 not a.no_home, a.margin)
+    bed = a.bed if a.bed is not None else m["bed"]
+    g, st = emit(q_lo, q_hi, a.layer_h, a.line_w, temp, bed, a.fan, 1.75,
+                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc)
     os.makedirs(a.out, exist_ok=True)
-    fn = (f"{a.out}/flowsheet_{'nohome_' if a.no_home else ''}{a.material}"
-          f"_T{temp}_{int(min(flows))}-{int(max(flows))}.gcode")
+    fn = (f"{a.out}/flowspiral_{'nohome_' if a.no_home else ''}{a.material}"
+          f"_T{temp}_{int(q_lo)}-{int(q_hi)}.gcode")
     open(fn, "w").write(g)
-    print(f"{fn}\n  ONE layer, {st['rows']} rows, Y {st['y0']}..{st['y0']+st['span']}, "
-          f"{st['path']} m of path, ~{st['mins']} min, {st['grams']} g")
-    lo, hi = min(flows), max(flows)
-    print(f"  ramp {lo:g}→{hi:g} mm3/s, {(hi-lo)/max(a.rows-1,1):.2f} per row "
-          f"({lo/(a.line_w*a.layer_h):.0f}→{hi/(a.line_w*a.layer_h):.0f} mm/s)")
-    print(f"  notches (15mm short rows) at every 5 mm3/s — count teeth from the front")
+    xs = a.line_w * a.layer_h
+    print(f"{fn}\n  ONE layer, spiral {st['turns']} turns to r{st['r_max']:.0f}mm, "
+          f"{st['path']} m path, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
+    print(f"  ramp {q_lo:g}->{q_hi:g} mm3/s outward ({q_lo/xs:.0f}->{q_hi/xs:.0f} mm/s), "
+          f"{(q_hi-q_lo)/max(st['turns'],1):.2f} per turn, bed {bed}C")
+    print(f"  bump spoke: {', '.join(f'{x:g}' for x in st['marks'])} mm3/s")

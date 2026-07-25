@@ -34,3 +34,25 @@ for i in range(lo, hi):
 for i in range(line_no - 1, -1, -1):
     if lines[i].startswith("; ") and any(k in lines[i] for k in ("layer", "band", "base")):
         print(f"\nsection: {lines[i][2:]}"); break
+
+# --- live volumetric flow -------------------------------------------------------------------
+# Q = line_w * layer_h * speed. The header of a generated file carries line_w/layer_h, and the last
+# F seen before the current line is the commanded speed, so the flow being extruded RIGHT NOW is
+# computable. On a ramped flow sheet that turns the camera into a live instrument: you can see the
+# surface degrade and read the number that caused it at the same moment.
+import re as _re
+_hdr = _re.search(r"line_w=([\d.]+)\s+layer_h=([\d.]+)", "\n".join(lines[:40]))
+if _hdr:
+    _lw, _lh = float(_hdr.group(1)), float(_hdr.group(2))
+    _f = None
+    for _i in range(min(line_no, len(lines)) - 1, -1, -1):
+        _m = _re.search(r"^G1 F([\d.]+)", lines[_i].strip())
+        if _m:
+            _f = float(_m.group(1)); break
+    if _f:
+        _v = _f / 60.0
+        _sf = gm.get("speed_factor", 1) or 1
+        print(f"\nNOW EXTRUDING  {_lw*_lh*_v:.1f} mm3/s   ({_v:.0f} mm/s commanded, "
+              f"{_lw}x{_lh}mm line)")
+        if abs(_sf - 1) > 0.01:
+            print(f"  speed factor {_sf*100:.0f}% -> actually {_lw*_lh*_v*_sf:.1f} mm3/s")
