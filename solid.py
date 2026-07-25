@@ -28,7 +28,7 @@ import argparse
 import math
 import os
 
-from shapely.geometry import Point, Polygon, box
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
 import machine
@@ -50,14 +50,40 @@ def contours(region, bead_w, max_rings=200):
         for g in geoms:
             if g.is_empty or g.area < (bead_w * bead_w):
                 continue
-            rings.append(list(g.exterior.coords))
+            rings.append((n, list(g.exterior.coords)))
             # A HOLE IS A WALL TOO. Dropping interiors here would print a bracket whose bores have
             # no wall on the inside -- the part looks right in plan and is hollow where it matters.
             for ring in g.interiors:
-                rings.append(list(ring.coords))
+                rings.append((n, list(ring.coords)))
         cur = cur.buffer(-bead_w)
         n += 1
-    return rings
+
+    # DROP INFILL RINGS THAT COLLIDE WITH ONE ALREADY KEPT.
+    # Walking inward from the outline and outward from a bore, the two ring families meet HEAD-ON
+    # wherever the wall is not an integer number of beads. On the foot they landed 0.475mm apart
+    # with a 1.2mm bead, overlapping over the ring's entire 47mm — and e_per_mm is a constant that
+    # never notices. Measured: the foot deposited 0.4416mm per 0.400mm layer (+10.4%), the only
+    # part in the batch over 1.0, and it climbed 0.042mm/layer until the nozzle ploughed it off the
+    # plate. Both failures stopped at the SAME HEIGHT, which is the signature of accumulation, not
+    # of adhesion.
+    #
+    # Generation 0 is never dropped — those are the part's outer wall and its bore walls. Only
+    # interior fill rings can go, and a small medial void is exactly what every part that printed
+    # correctly already had (bracket 7.5%, spacer 6.2%, coupler 16.5%).
+    kept = []
+    for gen, ring in rings:
+        if gen == 0:
+            kept.append(ring)
+            continue
+        line = LineString(ring)
+        if line.length < 1e-9:
+            continue
+        clash = sum(1 for k in kept
+                    if LineString(k).buffer(0.95 * bead_w).intersection(line).length
+                    > 0.5 * line.length)
+        if not clash:
+            kept.append(ring)
+    return kept
 
 
 def decimate(loop, min_seg):
@@ -159,11 +185,27 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # 14mm tall has almost no plate contact holding down a part the head keeps reversing around.
     # Extra contours OUTSIDE the region, layer 1 only, bought by buffering the region outward.
     rings = contours(region(0.0) if _is_fn else region, bead_w)
+
+    # FILL RATIO GUARD — measure the emitted artifact, and FAIL rather than print a part that
+    # climbs. fill = (total contour length x bead width) / region area. Above 1.0 the layer lays
+    # more material than the Z step can hold; it has nowhere to go but up, and the nozzle
+    # eventually ploughs the part off the plate. Below 1.0 is harmless porosity — every part that
+    # printed correctly sat at 0.83-0.96. The foot as originally emitted was 1.082.
+    _reg = region(0.0) if _is_fn else region
+    _fill = sum(LineString(r).length for r in rings) * bead_w / max(_reg.area, 1e-9)
+    if _fill > 1.02:
+        raise SystemExit(f"{name}: contours cover {_fill:.3f}x the region — every layer deposits "
+                         f"{(_fill-1)*100:.1f}% more than the {layer_h}mm Z step can hold, so the "
+                         f"part climbs into the nozzle. Adjust --wall.")
     base_extra = []
     if brim:
         src = region(0.0) if _is_fn else region
         for i in range(1, brim + 1):
-            g = src.buffer(bead_w * i)
+            # HALF a bead, not a whole one: the part's outermost CENTRELINE sits half a
+            # bead inside its boundary, so buffering by a full bead left the first brim
+            # ring 1.8mm away with a 1.2mm bead — a 0.6mm void. The brim was never
+            # touching the part, which is why adding one changed nothing.
+            g = src.buffer(bead_w * (i - 0.5))
             for geo in (list(g.geoms) if g.geom_type == "MultiPolygon" else [g]):
                 base_extra.append(list(geo.exterior.coords))
     if not rings:
@@ -219,8 +261,20 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
             e += layer_h * e_per_mm
             L.append(f"G1 F{round(min(speed, 15)*60)} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
-        _rk = rings_at(k) + (base_extra if k == 0 else [])
-        ordered = order_rings(_rk, (px - ox, py - oy) if px is not None else _rk[0][0])
+        # THE BRIM MUST GO DOWN FIRST. Appending it to the ring list let order_rings reach it
+        # LAST — measured at 75% through layer 1 — so the entire part was already printed before
+        # any brim existed. A brim laid after the part cannot hold the part's first moments, which
+        # is exactly why adding one did not stop the foot detaching.
+        # Outermost brim ring first, working inward, then the part.
+        if k == 0 and base_extra:
+            brim_first = sorted(base_extra, key=lambda r: -max(
+                (p[0] - ox) ** 2 + (p[1] - oy) ** 2 for p in r))
+            ordered = ([start_nearest(r, (px - ox, py - oy) if px is not None else brim_first[0][0])
+                        for r in brim_first]
+                       + order_rings(rings_at(k), brim_first[-1][-1]))
+        else:
+            _rk = rings_at(k)
+            ordered = order_rings(_rk, (px - ox, py - oy) if px is not None else _rk[0][0])
         for li, loop in enumerate(ordered):
             loop = decimate(densify(loop, 0.8), min_seg)
             for pi, (x, y) in enumerate(loop):
