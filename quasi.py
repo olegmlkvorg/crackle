@@ -104,6 +104,15 @@ class Q:
     v_cmd: float = 130.0         # mm/s commanded
     ds: float = 0.20             # analysis resampling (mm)
     min_angle_deg: float = 25.0  # below this a "crossing" is a shallow merge, not a junction
+    anchor: float = 0.12         # FIRST-LAYER FIX. A pure ramp lifts the nozzle to z0+layer_h by
+                                 # the end of layer 1, so the back half of layer 1 is extruded up
+                                 # to 0.4mm ABOVE the bare plate with nothing under it -> it gets
+                                 # dragged. Layer 1 therefore uses a ramp slope of anchor*normal,
+                                 # so it stays within 0.12*0.4 = 0.048mm of the plate and bonds
+                                 # along its whole length. Cost: the first ~12% of layer 2 skims
+                                 # the tops of layer-1 beads (clearance 0 -> 0.048mm) instead of
+                                 # clearing them. That skim welds layer 2 to the anchor, which is
+                                 # where you want the strongest weld anyway.
     d4: bool = False             # MEASURED USELESS: cumulative coverage CV 0.330 without it,
                                  # 0.325 with. It also breaks continuity (a jump at every layer
                                  # boundary). t simply continuing is enough. Left in to show the
@@ -444,7 +453,10 @@ def emit(q: Q, chord_err=0.015, out="out"):
             pts.append(min(sacc, cs[-1]))
         su = np.array(pts)
         X, Y = np.interp(su, cs, x), np.interp(su, cs, y)
-        Z = q.layer_h + q.layer_h * (np.interp(su, cs, t) - 0.0) / q.T   # continuous ramp from t=0
+        tt_ = np.interp(su, cs, t)
+        Z = np.where(tt_ <= q.T,
+                     q.layer_h + q.layer_h * q.anchor * tt_ / q.T,
+                     q.layer_h * (1 + q.anchor) + q.layer_h * (tt_ - q.T) / q.T)
         if k == 0:
             L.append(f"G0 F3000 X{X[0]:.3f} Y{Y[0]:.3f} Z{Z[0]:.3f}")
             px, py = X[0], Y[0]

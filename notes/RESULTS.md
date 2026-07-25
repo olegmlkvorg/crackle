@@ -132,3 +132,45 @@ asks, approached from the other side — fan removes heat, speed removes time.
 sqrt(8000 × 20) = 400 mm/s, so the fastest variant is right at the accel limit on short moves and
 fully reached only on long diagonals. The effective spread is therefore under the nominal 4×.
 Read it as a ladder, not as calibrated speeds.
+
+---
+
+# ⭐ PHASE 1 ANSWERED — 2026-07-25, weave pair
+
+**Oleg, on the two coupons: "second one is way better."** Second = `weld1` = **fused**.
+
+The pair was the cleanest test built: identical geometry, identical 2.71 g, identical 10.9 m path,
+identical 372 crossings, printed back-to-back on ONE plate in ONE session (so bed temp, ambient,
+spool and nozzle state are shared, not drifting). The only difference in either file is whether Z
+rose when the path crossed its own line.
+
+| coupon | crossings | lifts | result |
+|---|---|---|---|
+| weld0 | 372 | 372 — fully woven, nothing fuses | worse |
+| **weld1** | 372 | **0 — every crossing fused** | **way better** |
+
+**Verdict: welding IS the mechanism.** The sound comes from fused junctions snapping, not from
+mechanical interlock between woven strands. Crossings matter *because they weld* — so the dial is
+weld state first, and crossing count second as the thing that sets how many welds exist.
+
+**`--weld` is now the primary control**, ahead of fan and temperature. Those two were only ever
+indirect proxies for the same variable; `--weld` sets it per crossing, deterministically.
+
+## Defect found on the printed coupon (Oleg: "why the extrusion lines are not solid, are you retracting?")
+Not retraction — 15,001 extruding moves, zero retracts (the one E decrease is the G92 reset).
+**strand_w was 0.5 mm from a 0.8 mm nozzle: 0.62x the orifice.** A nozzle cannot deposit a bead
+narrower than its own hole; the melt is drawn thin and breaks into discontinuous beads, which reads
+exactly like retraction stringing. This is the MIRROR of the morning's tower failure — that one
+commanded a width far too WIDE (bead landed tall, ploughed the part off the plate), this one far too
+NARROW. Both silent, both syntactically valid, both invisible until something physical was examined.
+
+v1 made this same mistake with `line_w` (0.6 from 0.8) and it was fixed; it returned when `strand_w`
+was decoupled from `line_w` and set to 0.5 without re-checking against the orifice. **Guard added:
+weave.py refuses strand_w < 0.8; defaults raised to 0.85.**
+
+## Next
+1. Re-run the pair at strand_w 0.85 to confirm the verdict holds with solid strands (a broken-up
+   strand may have handicapped the WOVEN one more, since its lifted spans bridge in air).
+2. `--weld 0.25 / 0.5 / 0.75` — is the response monotonic? If loudness tracks weld fraction, the
+   mechanism is confirmed twice over and the dial is calibrated.
+3. Only then return to crossing COUNT as a secondary axis.

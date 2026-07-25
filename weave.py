@@ -52,6 +52,12 @@ def lissajous(a, b, size, cx, cy, n, phase):
 
 def emit(a_f, b_f, size, origin, layers, layer_h, line_w, strand_w, flow, weld, lift, lift_win,
          temp, bed, fan, fil_d, home, samples):
+    # STRAND WIDTH BELOW THE ORIFICE — the mirror of the wide-line failure, and just as silent.
+    # A nozzle cannot deposit a bead NARROWER than its own hole. Command it and the melt is drawn
+    # thin, breaks into discontinuous beads, and reads as retraction stringing. v1 made this exact
+    # mistake with line_w (0.6 from a 0.8 nozzle); it came back when strand_w was decoupled and set
+    # to 0.5 without re-checking it against the orifice. Oleg spotted it on the printed coupon:
+    # "why the extrusion lines are not solid, are you retracting?" — no, they were impossible.
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
     speed = flow / (strand_w * layer_h)
@@ -140,7 +146,7 @@ if __name__ == "__main__":
     ap.add_argument("--layers", type=int, default=10)
     ap.add_argument("--layer_h", type=float, default=0.4)
     ap.add_argument("--line_w", type=float, default=0.9)
-    ap.add_argument("--strand_w", type=float, default=0.5)
+    ap.add_argument("--strand_w", type=float, default=0.85)   # >= nozzle: see the note in emit()
     ap.add_argument("--lift", type=float, default=0.5, help="mm to clear the bead below")
     ap.add_argument("--lift-win", type=float, default=6.0, help="mm of path to rise and fall over")
     ap.add_argument("--temp", type=int, default=230)
@@ -150,6 +156,10 @@ if __name__ == "__main__":
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    if a.strand_w < 0.8:
+        raise SystemExit(f"--strand_w {a.strand_w} is below the 0.8mm orifice. A nozzle cannot lay "
+                         f"a bead narrower than its hole; the melt stretches thin and breaks into "
+                         f"beads that look like retraction stringing. Use >= 0.8.")
     g, st = emit(a.a, a.b, a.size, a.origin, a.layers, a.layer_h, a.line_w, a.strand_w, a.flow,
                  a.weld, a.lift, a.lift_win, a.temp, a.bed, a.fan, 1.75, not a.no_home, a.samples)
     os.makedirs(a.out, exist_ok=True)

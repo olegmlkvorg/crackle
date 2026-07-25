@@ -76,7 +76,8 @@ class Params:
     prime_f: int = 3000         # from filament_max_volumetric_speed/0.3*60 (PLA ~15mm3/s)
     tally: int = 1              # raised bars on the base = which coupon this is
     home: bool = True           # False = skip G28 (only when already homed; saves the whole calibration)
-    strand_w: float = 0.5       # STRAND width (mm) — ABSOLUTE, deliberately decoupled from line_w.
+    strand_w: float = 0.85      # STRAND width (mm) — ABSOLUTE, decoupled from line_w, but NEVER
+                                # below the orifice (0.8): a nozzle cannot lay a narrower bead.
                                 # Pillars and strands want opposite things: pillars chunky (wide
                                 # line = sturdy anchor), strands THIN. The crackle is thin fused
                                 # crossings SNAPPING; a fat strand bends quietly instead. So a wide
