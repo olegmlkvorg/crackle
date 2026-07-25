@@ -112,7 +112,7 @@ def round_corners(pts, fillet, seg=0.8):
     return out
 
 
-def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan, fillet=3.0, layers=1):
+def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan, fillet=3.0, layers=1, printer='k1c'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
@@ -156,7 +156,10 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w(f"G0 F9000 X{_apx:.3f} Y{_apy:.3f}")
     w("G1 E25 F300                      ; stationary purge — pressure before motion")
     w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E37   ; prime ends where the comb begins")
-    w("G92 E0"); w("; BODY_START")
+    w("G92 E0"); # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
+    # knowing which plate, and a filename is not a contract.
+    w(f"; PRINTER={printer}")
+    w("; BODY_START")
 
     e = 0.0
     px, py = pts[0]
@@ -217,7 +220,7 @@ if __name__ == "__main__":
     bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
            else machine.BED[a.printer])
     g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75,
-                 bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers)
+                 bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers, a.printer)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     fn = f"{a.out}/waves_{tag}_{a.cols}x{a.rows}_c{a.cell:g}_T{a.temp}.gcode"

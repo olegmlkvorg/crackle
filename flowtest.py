@@ -62,10 +62,13 @@ MATERIALS = {
     # floor rises as each run passes — no point reprinting known-good flow
     "pla":  dict(temp=210, bed=60, flows=[20, 90]),   # translucent PLA is rated 210
     "petg": dict(temp=245, bed=80,  flows=[10, 38]),
-    "tpu":  dict(temp=230, bed=50,  flows=[2, 12]),
+    "tpu":  dict(temp=machine.TPU_TEMP, _unused_temp=230, bed=50,  flows=[2, 12]),
     "abs":  dict(temp=255, bed=100, flows=[8, 36]),
 }
-BED = (350.0, 350.0)   # K2 Plus — overridden by --bed
+# NO MODULE-LEVEL BED. This was (350,350) while --printer only selected the FAN syntax, so
+# `--printer k1c` emitted a 350mm-plate spiral — X 10..335 on a 220mm machine — saved under a "k2"
+# filename, and validate.py (which hardcoded the same 350) passed it clean. The plate now comes
+# from machine.BED[printer], like every other generator.
 
 
 def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
@@ -82,7 +85,7 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     tall and plough. (Oleg, 2026-07-25: cap head movement at 50 mm/s, thick walls always.)"""
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
-    _B = bed_xy or BED
+    _B = bed_xy
     cx, cy = _B[0] / 2, _B[1] / 2
     r_max = min(cx, cy) - margin
     b = (spacing_mm or line_w) / (2 * math.pi)              # radius gained per radian
@@ -132,6 +135,7 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     w(f"G0 F9000 X{_sx - 60:.3f} Y{_sy:.3f}")
     w(f"G1 F1200 X{_sx:.3f} Y{_sy:.3f} E12"); w("G92 E0")
 
+    L.append(f"; PRINTER={printer}")
     L.append("; BODY_START")
     e = 0.0
     th = 0.0
@@ -232,7 +236,7 @@ if __name__ == "__main__":
             a.line_w = round(a.spacing * a.overlap, 3)
     m = MATERIALS[a.material]
     bed_xy_for_name = (tuple(float(v) for v in a.bed_size.split(','))
-                       if a.bed_size else None)
+                       if a.bed_size else machine.BED[a.printer])
     fl = [float(x) for x in a.flows.split(",")] if a.flows else m["flows"]
     q_lo, q_hi = min(fl), max(fl)
     temp = a.temp or m["temp"]
@@ -242,7 +246,8 @@ if __name__ == "__main__":
     g, st = emit(q_lo, q_hi, a.layer_h, a.line_w, temp, bed, a.fan, 1.75,
                  not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every,
                  a.spacing, a.fixed_speed or None,
-                 tuple(float(v) for v in a.bed_size.split(',')) if a.bed_size else None,
+                 (tuple(float(v) for v in a.bed_size.split(',')) if a.bed_size
+                  else machine.BED[a.printer]),
                  a.printer, a.aux)
     os.makedirs(a.out, exist_ok=True)
     # Machine tag in the filename. Two files that differ ONLY by bed size are a real hazard: the
@@ -250,7 +255,10 @@ if __name__ == "__main__":
     # on the touchscreen drives the head off the plate. Same-name-different-machine is exactly the
     # kind of thing that reads as harmless right up until it is not.
     _bx, _by = (bed_xy_for_name or BED)
-    _tag = {(350.0, 350.0): 'k2', (229.0, 225.0): 'k1c'}.get((_bx, _by), f'{int(_bx)}x{int(_by)}')
+    # THE TAG IS THE PRINTER, not a reverse-lookup of the bed size. The old map only produced
+    # 'k1c' for (229,225) — the kinematic reach that machine.py explicitly warns is NOT the plate —
+    # so the only input that yielded a machine-named file was the wrong one.
+    _tag = a.printer
     fn = (f"{a.out}/flowspiral_{_tag}_{'nohome_' if a.no_home else ''}{a.material}"
           f"_T{temp}_{int(q_lo)}-{int(q_hi)}.gcode")
     open(fn, "w").write(g)

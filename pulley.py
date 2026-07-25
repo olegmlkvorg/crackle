@@ -57,6 +57,24 @@ def d_bore(r, flat_depth, n=180, a_start=0.0, sweep=None):
     return pts
 
 
+def decimate(pts, min_seg=0.25):
+    """Drop points closer together than `min_seg`.
+
+    d_bore projects every circle point that falls beyond the chord ONTO the flat, so a whole arc of
+    angles collapses onto a few millimetres of straight line — segments down to 0.006mm, which is
+    5145 moves/s at 30 mm/s against a ~300/s host limit. Klipper freezes with no error. Same failure
+    as shapely's fixed-96-segment circles in solid.py, different source; both are "points generated
+    by angle, consumed by distance"."""
+    if len(pts) < 3:
+        return pts
+    out = [pts[0]]
+    for p in pts[1:-1]:
+        if math.dist(p, out[-1]) >= min_seg:
+            out.append(p)
+    out.append(pts[-1])
+    return out
+
+
 def ring(r, n=240, phase=0.0):
     return [(r * math.cos(2 * math.pi * i / n + phase),
              r * math.sin(2 * math.pi * i / n + phase)) for i in range(n + 1)]
@@ -182,7 +200,7 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
                                           cur_ang, 0.06, n=20)
                     cur_ang += 0.06 * 2 * math.pi
             cur_ang += spoke_adv
-            path_layers.append(pts)
+            path_layers.append(decimate(pts))
             continue
         # ONE UNBROKEN CIRCUIT PER LAYER, with every join at the same point/radius:
         #   full rim circle (ends where it began)
@@ -207,7 +225,7 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         # Spiralling BACK the other way cancels it, so the layer advances by exactly spoke_adv.
         pts += spiral_between(r_b, r_rim, a_in, -0.12)
         cur_ang = a_in - 0.12 * 2 * math.pi + spoke_adv
-        path_layers.append(pts)
+        path_layers.append(decimate(pts))
 
     # BRIM. Oleg: "for puley first layer adhesion was not perfect, double check (start with brim
     # layer)". A 40mm pulley standing 29mm tall has a tiny footprint holding down a tall part that
@@ -241,6 +259,9 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     w("G1 E25 F300                      ; stationary purge — pressure before motion")
     w(f"G1 F1200 X{cx + x0:.3f} Y{cy + y0:.3f} E37   ; prime ends where the rim begins")
     w("G92 E0")
+    # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
+    # knowing which plate, and a filename is not a contract.
+    w(f"; PRINTER={printer}")
     w("; BODY_START")
 
     e = 0.0
@@ -287,7 +308,8 @@ if __name__ == "__main__":
     ap.add_argument("--layer-h", type=float, default=0.4)
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
-    ap.add_argument("--bed", type=int, default=120)
+    ap.add_argument("--bed", type=int, default=0,
+                    help="0 = machine.BED_TEMP for the material; 120 WELDS TPU")
     ap.add_argument("--press", type=float, default=0.10, help="base-layer gap — pressed")
     ap.add_argument("--first-w", type=float, default=3.0, help="base-layer ribbon width")
     ap.add_argument("--aux", type=float, default=0.2, help="side/chassis fan speed 0-1")
@@ -299,7 +321,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     bxy = machine.BED[a.printer]
     g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,
-                 a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
+                 a.flow, a.temp, a.bed or machine.BED_TEMP['pla'], 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
                  a.sleeve, a.first_w, a.aux, a.brim, a.printer)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/pulley_{a.printer}_od{a.od:.0f}_w{a.width:.0f}_b{a.bore:.0f}D_T{a.temp}.gcode"

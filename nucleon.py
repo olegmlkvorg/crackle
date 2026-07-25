@@ -132,7 +132,9 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
     # a calm head beat chasing volumetric throughput; and on stacked geometry the two cannot both
     # be satisfied anyway (see machine.MACHINE_MAX_SPEED).
-    speed = min(flow / (strand_w * layer_h), machine.MACHINE_MAX_SPEED)
+    # machine.MAX_SPEED is the limit of the WORK (30). MACHINE_MAX_SPEED (120) is what the
+    # machine could do — capping against it emitted files validate.py rejects outright.
+    speed = min(flow / (strand_w * layer_h), machine.MAX_SPEED)
     actual_flow = strand_w * layer_h * speed
     f_mm_min = round(speed * 60)
     b = a * ratio
@@ -193,7 +195,10 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
-    w(f"M190 S{bed}"); w(f"M109 S{temp}")
+    # M190 only waits for HEATING; a hotter bed returns instantly and the part prints on
+    # whatever the last job left. TEMPERATURE_WAIT blocks both ways.
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
+    w(f"M109 S{temp}")
     w("M204 S8000")
     # FANS OFF FOR LAYER 1, ALWAYS. Cooling the first layer chills the bead before it can wet the
     # plate; on a tall open structure the nozzle drag then peels the whole part. That is what
@@ -441,4 +446,4 @@ if __name__ == "__main__":
     open(fn, "w").write(g)
     print(f"{fn}\n  N={a.N} ({2*a.N*(a.N-1)} junctions/layer predicted, {st['junctions']} measured "
           f"over {a.layers} layers), {st['lifts']} lifts")
-    print(f"  {st['speed']} mm/s (capped at {machine.MACHINE_MAX_SPEED:.0f}), flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
+    print(f"  {st['speed']} mm/s (capped at {machine.MAX_SPEED:.0f}), flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")

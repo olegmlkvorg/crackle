@@ -195,6 +195,9 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     w("G1 E20 F300                      ; stationary purge — pressure before motion")
     w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E30")
     w("G92 E0")
+    # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
+    # knowing which plate, and a filename is not a contract.
+    w(f"; PRINTER={printer}")
     w("; BODY_START")
 
     e = 0.0

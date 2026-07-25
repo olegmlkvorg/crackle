@@ -115,6 +115,19 @@ def _validated(path):
     return True
 
 
+def printer_of(path):
+    """The machine a file was BUILT for, from its own `; PRINTER=` stamp."""
+    try:
+        for ln in open(path):
+            if ln.startswith('; PRINTER='):
+                return ln.split('=', 1)[1].strip()
+            if 'BODY_START' in ln:
+                break
+    except OSError:
+        pass
+    return None
+
+
 def upload(ip, path, force=False, skip_validate=False):
     if not skip_validate and not _validated(path):
         return False
@@ -163,6 +176,13 @@ if __name__ == "__main__":
             print(f"  {k:<7} {ip:<15} {info(ip):<14} {st['state']:<10} {st.get('pct',0):>3}%  {str(st.get('file'))[:44]}")
         sys.exit(0)
     ip = PRINTERS[a.printer]
+    # THE FILE MUST MATCH THE MACHINE. push knows both facts and never compared them: a K2 file
+    # started on the K1C runs 130mm past the plate. The stamp is written by every generator.
+    for _f in a.files:
+        _built = printer_of(_f)
+        if _built and _built != a.printer:
+            raise SystemExit(f"{os.path.basename(_f)} was built for {_built}, but you are sending "
+                             f"it to {a.printer}. Regenerate with --printer {a.printer}.")
     ok = all(upload(ip, f, a.force, a.skip_validate) for f in a.files)
     if ok and not a.no_start:
         if len(a.files) > 1:

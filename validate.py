@@ -12,12 +12,28 @@ import re, sys, math, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
 
-BED = (350, 350)   # K2 Plus
+# THE PLATE IS PER MACHINE and must come from the file, not from a constant. This was hardcoded to
+# the K2's 350x350 while five of the seven generators DEFAULT to the K1C's 220x220 — so the widest
+# machine's plate was used to bounds-check files built for the narrowest, and an off-plate K1C file
+# passed clean and was auto-started. machine.BED has held the real plates all along.
+DEFAULT_BED = (350, 350)
+
+
+def bed_for(path):
+    """Plate size from the file's own `; PRINTER=` stamp."""
+    for ln in open(path):
+        if ln.startswith('; PRINTER='):
+            return machine.BED.get(ln.split('=', 1)[1].strip(), DEFAULT_BED)
+        if 'BODY_START' in ln:
+            break
+    return None
 
 FIL_AREA = math.pi * (1.75 / 2) ** 2
 
 
 def check(path):
+    BED = bed_for(path) or DEFAULT_BED
+    _unstamped = bed_for(path) is None
     # The machine start block (START_PRINT + Creality's own prime) legitimately lifts to Z3 and
     # comes back down to Z0.2, and homes inside a macro rather than a literal G28. Checking the
     # body only — a validator that cries wolf on correct machine gcode trains you to ignore it.

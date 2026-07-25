@@ -181,7 +181,7 @@ def joint_layers(pts, layers, bead_w, tenon_n, mortise_n, slot_gap, wall_n):
 
 
 def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         fillet, layers, closed):
+         fillet, layers, closed, printer='k1c'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
@@ -235,6 +235,9 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     w("G1 E25 F300                      ; stationary purge — pressure before motion")
     w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E37   ; prime ends where the curve begins")
     w("G92 E0")
+    # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
+    # knowing which plate, and a filename is not a contract.
+    w(f"; PRINTER={printer}")
     w("; BODY_START")
 
     e = 0.0
@@ -296,7 +299,7 @@ if __name__ == "__main__":
     pitch = span / ((2 ** (a.order + 1) if not a.open else 2 ** a.order) - 1)
     fillet = a.fillet or max(0.8, pitch * 0.45)
     g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75, bxy,
-                 not a.no_home, a.press, a.fan, fillet, a.layers, not a.open)
+                 not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     kind = "hilbert" if a.open else "moore"

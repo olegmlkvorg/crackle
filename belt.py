@@ -244,6 +244,9 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     w("G1 E25 F300                      ; stationary purge — pressure before motion")
     w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E37   ; prime ends where the loop begins")
     w("G92 E0")
+    # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
+    # knowing which plate, and a filename is not a contract.
+    w(f"; PRINTER={printer}")
     w("; BODY_START")
 
     e = 0.0
@@ -310,7 +313,8 @@ if __name__ == "__main__":
     ap.add_argument("--layer-h", type=float, default=0.6)
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
-    ap.add_argument("--bed", type=int, default=120)
+    ap.add_argument("--bed", type=int, default=0,
+                    help="0 = machine.BED_TEMP for the material; 120 WELDS TPU")
     ap.add_argument("--press", type=float, default=0.10, help="base-layer gap — pressed")
     ap.add_argument("--first-w", type=float, default=3.0)
     ap.add_argument("--aux", type=float, default=0.2)
@@ -345,7 +349,7 @@ if __name__ == "__main__":
                 f"{2*a.cleat_h + a.bead_w + 2:.1f}mm — the cleats would print into the neighbouring "
                 f"run. Lower --fold or --cleat-h.")
     g, st = emit(length, a.ring_w, a.belt_w, a.cleats, a.cleat_h, a.cleat_w, a.bead_w, a.layer_h,
-                 a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.walls,
+                 a.flow, a.temp, a.bed or machine.BED_TEMP['pla'], 1.75, bxy, not a.no_home, a.press, a.fan, a.walls,
                  a.fold, span, a.first_w, a.aux, a.printer, a.dish, a.rail)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/belt_{a.printer}_c{a.centres:.0f}_p{a.pulley_d:.0f}_"
