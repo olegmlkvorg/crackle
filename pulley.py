@@ -76,7 +76,8 @@ def spiral_between(r0, r1, a0, turns_frac, n=60):
 
 
 def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, flow, temp, bed,
-         fil_d, bed_xy, home, press, fan, spoke_adv, sleeve=0, first_w=3.0, aux=0.2):
+         fil_d, bed_xy, home, press, fan, spoke_adv, sleeve=0, first_w=3.0, aux=0.2,
+         brim=0):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
@@ -183,6 +184,32 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         cur_ang = a_in + 0.12 * 2 * math.pi + spoke_adv
         path_layers.append(pts)
 
+    # BRIM. Oleg: "for puley first layer adhesion was not perfect, double check (start with brim
+    # layer)". A 40mm pulley standing 29mm tall has a tiny footprint holding down a tall part that
+    # the head keeps reversing around — the base layer being pressed is necessary but not
+    # sufficient, it also needs AREA.
+    #
+    # Built as an Archimedean spiral running INWARD, which is the shape that needs no joins at all:
+    # r falls linearly while theta advances, so consecutive brim rings are one unbroken curve with
+    # no corner anywhere, and it arrives exactly at the point where layer 1 starts. No travel, no
+    # seam, and the last ring touches the part so it actually holds it.
+    if brim:
+        r_first = math.dist((0, 0), path_layers[0][0])
+        gap = first_w * 0.9                      # slight overlap so rings fuse into one sheet
+        r_out = r_first + brim * gap
+        if 2 * (r_out + 4) > min(bed_xy):
+            raise SystemExit(f"a {brim}-ring brim reaches r{r_out:.0f}mm — off a "
+                             f"{bed_xy[0]:.0f}mm plate. Lower --brim.")
+        a_start = math.atan2(path_layers[0][0][1], path_layers[0][0][0])
+        n_b = max(60, int(brim * 120))
+        brim_pts = []
+        for i in range(n_b + 1):
+            t = i / n_b
+            th = a_start + (t - 1.0) * 2 * math.pi * brim
+            r = r_out + (r_first - r_out) * t
+            brim_pts.append((r * math.cos(th), r * math.sin(th)))
+        path_layers[0] = brim_pts + path_layers[0]
+
     x0, y0 = path_layers[0][0]
     w(f"G1 Z{press:.3f} F600")
     w(f"G0 F9000 X{cx + x0 - 45:.3f} Y{cy + y0:.3f}")
@@ -239,6 +266,7 @@ if __name__ == "__main__":
     ap.add_argument("--press", type=float, default=0.10, help="base-layer gap — pressed")
     ap.add_argument("--first-w", type=float, default=3.0, help="base-layer ribbon width")
     ap.add_argument("--aux", type=float, default=0.2, help="side/chassis fan speed 0-1")
+    ap.add_argument("--brim", type=int, default=5, help="brim rings on layer 1 (0 = none)")
     ap.add_argument("--fan", type=int, default=80)
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")
@@ -247,7 +275,7 @@ if __name__ == "__main__":
     bxy = machine.BED[a.printer]
     g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,
                  a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
-                 a.sleeve, a.first_w, a.aux)
+                 a.sleeve, a.first_w, a.aux, a.brim)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/pulley_{a.printer}_od{a.od:.0f}_w{a.width:.0f}_b{a.bore:.0f}D_T{a.temp}.gcode"
     open(fn, "w").write(g)
