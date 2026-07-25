@@ -44,7 +44,7 @@ def win_for(amp, speed, aspect):
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
          bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean, reach,
-         petal_w, petal_h, touches, prelift):
+         petal_w, petal_h, touches, prelift, swing, heart_mm, heart_z):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -171,12 +171,17 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             # petal can be a long low throw: far out, barely up, and back. Oleg: "throw it way
             # further, to the edge of the printer", having already fixed the height at 40mm.
             Lr = reach if reach else amp / 2.0
+            swing_r = swing * Lr        # swing circle radius, a multiple of the reach
             # KEEP THE FLOW AT THE CAP. Extrusion must be computed for the speed the head can
             # ACTUALLY reach, not the speed commanded. The petal is short segments, so acceleration
             # limits it well below 400 mm/s — computing E for 400 and then moving at 207 delivers
             # only 16 mm3/s instead of 55, i.e. a starved, broken strand. Oleg: "dont slow down the
             # flow of filament".
-            n_p = 48
+            # Sample count MUST be a multiple of the lobe count, or the feet are never sampled.
+            # With 10 lobes over 48 samples the zeros of sin(lobes*phi) fall at fractional indices
+            # (4.8, 9.6, 14.4 ...), so the touchdown test almost never fired and only one foot in
+            # ten got a heart — or a weld. The structure was flying between anchors that did not
+            # exist. 12 samples per lobe puts a point exactly on every zero.
             # Build the petal as POINTS first, then emit. Charging extrusion inside the point loop
             # meant special-casing the first segment, and the special case was wrong — it billed
             # 1mm of filament for a 17mm move and the flow audit came back at 854 mm3/s. With the
@@ -203,9 +208,11 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             # climb at each foot draws real material upward first; only then does the head move
             # sideways, and what moves is a strand that already exists. That is the difference
             # between drawing an arc and throwing a petal.
+            lobes_pre = touches + 1
+            n_p = lobes_pre * 12    # exact samples on every foot
             pts_p = []
             touches_at = set()
-            lobes = touches + 1
+            lobes = lobes_pre
             prev_phi_lobe = 0
             for k in range(1, n_p + 1):
                 phi = math.pi * k / n_p
@@ -213,16 +220,30 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                 if lobe_i != prev_phi_lobe:
                     # a new lobe begins here: climb straight up before any sideways motion
                     u0 = Lr * math.sin(math.pi * lobe_i / lobes)
-                    w0 = lean * Lr * math.sin(math.pi * lobe_i / lobes) ** 2
-                    bx, by = px + ux * u0 + tx * w0, py + uy * u0 + ty * w0
+                    a0 = u0 / swing_r
+                    bx = px + ux * (math.sin(a0) * swing_r) + tx * ((1 - math.cos(a0)) * swing_r)
+                    by = py + uy * (math.sin(a0) * swing_r) + ty * ((1 - math.cos(a0)) * swing_r)
                     steps = max(2, int(prelift / 3))
                     for q in range(1, steps + 1):
                         pts_p.append((bx, by, anchor + prelift * q / steps))
                     prev_phi_lobe = lobe_i
+                # THE THROW IS AN ARC, NOT A LINE. Oleg: "you cant go by straight line to get a
+                # petal, it need to be a circlish movement with way bigger dia than the petal
+                # itself". You do not throw by pushing something away from you — you swing it, and
+                # the curve is what flings it. So the distance u is now travelled ALONG a circle of
+                # radius swing_r (several times the reach), not along a straight radial line. With
+                # a large radius the path is a gentle sweep rather than a turn, which is exactly
+                # what carries the strand outward instead of dragging it.
                 u = Lr * math.sin(phi)
-                w = lean * Lr * math.sin(phi) * math.sin(phi)
-                zc = anchor + prelift + (amp - prelift) * abs(math.sin(lobes * phi))
-                pts_p.append((px + ux * u + tx * w, py + uy * u + ty * w, zc))
+                al = u / swing_r                       # angle subtended by that arc length
+                ox = math.sin(al) * swing_r            # along the tangent
+                oy = (1 - math.cos(al)) * swing_r      # the sideways bulge the swing creates
+                # The feet must reach the PLATE. Folding prelift into this formula raised the
+                # minimum to anchor+prelift, so no throw ever landed and no foot was ever welded —
+                # the whole structure was floating. prelift is the separate vertical climb inserted
+                # at each foot, not an offset on the arc.
+                zc = anchor + amp * abs(math.sin(lobes * phi))
+                pts_p.append((px + ux * ox + tx * oy, py + uy * ox + ty * oy, zc))
                 if abs(math.sin(lobes * phi)) < 0.03 and 1 < k < n_p:
                     touches_at.add(len(pts_p) - 1)
             # ONE cross-section for the whole petal, sized from the MEAN segment.
@@ -255,9 +276,43 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                          + (f"   ; petal reach {Lr:.0f}mm apex {amp:.0f}mm" if k == 0 else ""))
                 prev = (hx, hy, zc)
                 if k in touches_at:
-                    # glue the far foot: press and dab, exactly as at the near feet
+                    # A LITTLE HEART AT EVERY FOOT. Oleg: "when you land to glue it, make a little
+                    # pretty heart in there". The foot has to dwell on the plate anyway to weld —
+                    # so instead of a blind dab of filament, spend that same material drawing
+                    # something. It costs nothing extra and every landing becomes a mark.
+                    # The classic heart curve, scaled to `heart_mm` across, traced on the plate:
+                    #     x = 16 sin^3 t
+                    #     y = 13 cos t - 5 cos 2t - 2 cos 3t - cos 4t
+                    hp = []
+                    for hk in range(0, 25):
+                        t = 2 * math.pi * hk / 24
+                        hxx = 16 * math.sin(t) ** 3
+                        hyy = (13 * math.cos(t) - 5 * math.cos(2 * t)
+                               - 2 * math.cos(3 * t) - math.cos(4 * t))
+                        sc = heart_mm / 32.0
+                        hp.append((hx + (ux * hxx + tx * hyy) * sc,
+                                   hy + (uy * hxx + ty * hyy) * sc))
+                    # PRESSED HARD. The heart is the only part of a throw that must SURVIVE being
+                    # pulled on by every arc that leaves it, so it is squashed well below the
+                    # anchor height — the flatter and wider it is crushed, the more plate it grips.
+                    # Oleg: "hearts need to be much larger diameter and pressed to bed as much as
+                    # possible".
+                    hz = max(heart_z, 0.12)
+                    e += (anchor - hz) * e_per_mm
+                    L.append(f"G1 F600 Z{hz:.4f} E{e:.5f}            ; press the heart into the plate")
+                    hprev = (hx, hy, hz)
+                    for hi, (qx, qy) in enumerate(hp):
+                        dh = math.dist(hprev, (qx, qy, anchor))
+                        if dh < 1e-9:
+                            continue
+                        e += dh * (xsec_petal / area)
+                        L.append(f"G1 F{round(petal_v*60)} X{qx:.3f} Y{qy:.3f} Z{hz:.4f} "
+                                 f"E{e:.5f}" + (f"   ; heart {heart_mm:.0f}mm, pressed to {hz:.2f}"
+                                                if hi == 0 else ""))
+                        hprev = (qx, qy, hz)
                     e += weld_dab
-                    L.append(f"G1 F180 E{e:.5f}                     ; glue a foot mid-throw")
+                    L.append(f"G1 F180 E{e:.5f}                     ; weld the foot")
+                    prev = (hp[-1][0], hp[-1][1], hz)
             e += weld_dab
             L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
             e += (z_base - anchor) * e_per_mm
@@ -284,6 +339,12 @@ if __name__ == "__main__":
     ap.add_argument("--petal-v", type=float, default=400.0,
                     help="throw speed mm/s — at a fixed flow cap this sets how THIN the\n                          flying strand is, which is what lets its own arc carry it")
     ap.add_argument("--lean", type=float, default=0.35, help="sideways lean: petal, not disc")
+    ap.add_argument("--heart-z", type=float, default=0.18,
+                    help="absolute Z the heart is crushed to — lower grips more plate")
+    ap.add_argument("--heart", type=float, default=18.0,
+                    help="size of the little heart drawn at each landing foot, mm")
+    ap.add_argument("--swing", type=float, default=1.2,
+                    help="swing-circle radius as a MULTIPLE of the reach. Bigger = gentler\n                          sweep. This is the arc that throws the strand.")
     ap.add_argument("--prelift", type=float, default=12.0,
                     help="pure vertical climb at each foot BEFORE any sideways move —\n                          this is what makes a petal to throw instead of an arc to lay")
     ap.add_argument("--touches", type=int, default=3,
@@ -320,7 +381,7 @@ if __name__ == "__main__":
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
                  a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean, a.reach,
-                 a.petal_w, a.petal_h, a.touches, a.prelift)
+                 a.petal_w, a.petal_h, a.touches, a.prelift, a.swing, a.heart, a.heart_z)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
