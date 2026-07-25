@@ -96,7 +96,7 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None):
 
 def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_win,
          temp, bed, fan, fil_d, home, n_per, first_slow=0, first_speed_frac=1.0,
-         first_squish=0.85, vase=False):
+         first_squish=0.85, vase=False, z_step=None):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
@@ -107,6 +107,12 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     f_mm_min = round(speed * 60)
     b = a * ratio
     cx = cy = origin + a
+    # Z RISE IS NOT THE SAME AS BEAD HEIGHT, and assuming it is caused today's tower failure in
+    # another form. The part grows by the DEPOSITED height: cross-section / landed width. The
+    # nozzle only squashes the bead when the gap is under the orifice; above that the bead lands
+    # roughly round and deposits MORE than commanded, so the part climbs into the nozzle.
+    # z_step defaults to layer_h (the old behaviour) but can be set to the MEASURED deposit.
+    z_rise = z_step if z_step else layer_h
 
     if strand_w < machine.NOZZLE:
         raise SystemExit(f"strand_w {strand_w} is below the {machine.NOZZLE}mm orifice — a nozzle "
@@ -183,7 +189,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                  f"Z {layer_h*first_squish:.2f} -> {layer_h*layers:.2f}, {total_x} junctions")
         L.append(f"; continuous from the prime — no reposition")
         z_lo = layer_h * first_squish
-        z_hi = layer_h * layers
+        z_hi = z_rise * layers
         for i in range(1, len(full)):
             frac = cum[i] / total
             z = z_lo + (z_hi - z_lo) * frac
@@ -207,7 +213,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                                           mins=round(total / speed / 60, 1))
 
     for layer in range(layers):
-        z0 = layer_h * (layer + 1)
+        z0 = z_rise * (layer + 1)
         # FIRST LAYER. The balls failure (2026-07-25) came from 235 mm/s giving the bead no dwell to
         # wet the plate. With the head now capped at 50 mm/s the whole print runs at what IS a
         # first-layer speed, so no slowdown is needed and --first-slow defaults to 0.
@@ -288,6 +294,8 @@ if __name__ == "__main__":
                     help="layers slowed for adhesion — 0 by default: the whole print now runs\n                          at 50 mm/s, which IS a first-layer speed, so nothing needs slowing.\n                          Oleg: thick and irregular lines are good, always.")
     ap.add_argument("--first-frac", type=float, default=1.0, help="first-layer speed fraction")
     ap.add_argument("--first-squish", type=float, default=0.85, help="first-layer Z as a fraction")
+    ap.add_argument("--z-step", type=float, default=None,
+                    help="Z rise per layer — set to the MEASURED deposit, not the bead height")
     ap.add_argument("--vase", action="store_true",
                     help="one continuous extrusion, Z rising with path — no travels at all")
     ap.add_argument("--no-home", action="store_true")
@@ -295,7 +303,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     g, st = emit(a.N, a.a, a.ratio, a.origin, a.layers, a.layer_h, a.strand_w, a.flow, a.weld,
                  a.lift, a.lift_win, a.temp, a.bed, a.fan, 1.75, not a.no_home, a.n_per,
-                 a.first_slow, a.first_frac, a.first_squish, a.vase)
+                 a.first_slow, a.first_frac, a.first_squish, a.vase, a.z_step)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/nucleon_{'nohome_' if a.no_home else ''}{'vase_' if a.vase else ''}"
           f"N{a.N}_weld{a.weld:g}_T{a.temp}.gcode")
