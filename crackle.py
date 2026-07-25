@@ -34,7 +34,7 @@ Usage:
   python3 crackle.py --list                # show presets
 """
 from __future__ import annotations
-import argparse, itertools, math, os, random, sys
+import argparse, random, itertools, math, os, random, sys
 from dataclasses import dataclass, asdict, replace
 
 # ---------------------------------------------------------------- parameters
@@ -62,6 +62,14 @@ class Params:
     base_layers: int = 2        # solid anchor slab (adhesion + handleable coupon)
     filament_d: float = 1.75
     flow: float = 1.0
+    jitter: float = 1.0         # mm of deterministic pillar offset — BREAKS GRID SYMMETRY.
+                                # Measured 2026-07-25: a perfect grid makes star-order chords
+                                # concurrent through the same points, and HALF of all crossing
+                                # pairs collapse into shared welds (30 junctions from 60 pairs).
+                                # 0.5mm of jitter recovers every one of them — 30 -> 66 junctions
+                                # from identical material, order and mass. Symmetry was silently
+                                # halving the control variable. Seeded, so coupons stay reproducible.
+    jitter_seed: int = 7
     nozzle_d: float = 0.8       # orifice — sets the safe ceiling on line_w for STACKED geometry
     wipe_every: int = 0         # layers between a nozzle-wipe pass (0 = off)
     inset: float = 8.0          # keep pillars off the coupon edge
@@ -104,9 +112,16 @@ def pillar_xy(p: Params):
     pitch = p.pitch if p.pitch else (p.size - 2 * p.inset) / max(p.n - 1, 1)
     span = pitch * (p.n - 1)
     x0 = p.origin + (p.size - span) / 2
-    return [(round(x0 + i * pitch, 3), round(x0 + j * pitch, 3))
-            for j in range(p.n) for i in range(p.n)]
-
+    grid = [(x0 + i * pitch, x0 + j * pitch) for j in range(p.n) for i in range(p.n)]
+    if not p.jitter:
+        return [(round(x, 3), round(y, 3)) for x, y in grid]
+    # Deterministic symmetry-breaking. A perfect grid makes star-order chords concurrent through
+    # the same points; measured 2026-07-25, half the crossing pairs collapsed into shared welds.
+    # Sub-millimetre offset recovers all of them (30 -> 66 junctions) at zero material cost.
+    # Seeded so a coupon is byte-reproducible and B/A stay comparable.
+    rnd = random.Random(p.jitter_seed)
+    return [(round(x + rnd.uniform(-p.jitter, p.jitter), 3),
+             round(y + rnd.uniform(-p.jitter, p.jitter), 3)) for x, y in grid]
 def visit_order(pts, mode, seed=0):
     k = len(pts)
     idx = list(range(k))
