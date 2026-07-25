@@ -195,7 +195,17 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         total_x += len(hits)
         second = []
         for k, (i, j, x, y) in enumerate(sorted(hits, key=lambda h: max(h[0], h[1]))):
-            if (k % 100) >= weld * 100:
+            # Deterministic, evenly distributed, and correct for ANY crossing count.
+            # The old rule was `(k % 100) >= weld*100`, which silently assumed >=100 crossings per
+            # layer. There are 70, so k never reached 75 and --weld 0.75 lifted NOTHING while
+            # reporting success; 0.5 lifted 64% and 0.25 lifted 100%. The primary control variable
+            # of the whole project was miscalibrated at every setting except 0 and 1.
+            # The golden-ratio low-discrepancy sequence: uniform for ANY count, and it spreads
+            # the choice through the layer instead of fusing the early crossings and lifting
+            # the late ones, which a plain k/n threshold would do. An integer hash mod 1000
+            # does NOT work here — 997 = -3 mod 1000, so 70 crossings only ever sampled the
+            # top fifth of the range and almost everything lifted.
+            if ((k * 0.6180339887498949) % 1.0) >= weld:
                 second.append(cum[max(i, j)]); total_lift += 1
         L.append(f"; layer {layer+1}  z{z0:.2f}  junctions {len(hits)}  lifts {len(second)}")
         L.append(f"G0 F9000 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}")
