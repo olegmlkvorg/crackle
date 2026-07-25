@@ -291,7 +291,7 @@ def emit(p: Params) -> tuple[str, dict]:
         if p.fast:
             g.w("M107"); g.w("M104 S0"); g.w("M140 S0")
             g.w(f"G1 Z{z + 30:.1f} F900")                    # lift clear so you can grab the coupon
-            g.w("G1 X10 Y330 F9000")                          # park front-left, plate accessible
+            g.w("G1 X10 Y330 F9000")                          # park at the BACK — head clear of the plate
             g.w("M84")
         else:
             g.w("END_PRINT")
@@ -324,6 +324,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default=None)
     ap.add_argument("--sweep", default=None, choices=["order", "all"])
+    ap.add_argument("--layers", type=int, default=None, help="override layer count (ladders: keep constant)")
+    ap.add_argument("--vary", default=None,
+                    help="one-factor-at-a-time sweep of ANY parameter, e.g. --vary n=4,5,6,7 "
+                         "or --vary passes=1,2,4 or --vary temp=210,230,250 (base preset via --preset)")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--out", default="out")
     ap.add_argument("--fast", action="store_true", help="skip calibration + nozzle cleaning for quick iteration")
@@ -336,6 +340,21 @@ if __name__ == "__main__":
     for k in PRESETS: PRESETS[k] = replace(PRESETS[k], fast=a.fast, machine=a.machine, start_gcode=_sg, end_gcode=_eg)
     if a.list:
         for k, v in PRESETS.items(): print(f"{k}: order={v.order} passes={v.passes} fan={v.fan} n={v.n}")
+        sys.exit(0)
+    if a.vary:
+        # One factor at a time, per the PRD. Everything else stays at the base preset so a
+        # difference in feel is attributable to ONE change.
+        key, _, vals = a.vary.partition("=")
+        base = PRESETS[a.preset or "A"]
+        if not hasattr(base, key): raise SystemExit(f"no such parameter: {key}")
+        cast = type(getattr(base, key))
+        for i, raw in enumerate(v.strip() for v in vals.split(",")):
+            val = cast(raw) if cast is not bool else raw.lower() in ("1", "true", "yes")
+            # Ladder coupons keep layers CONSTANT (thickness must not vary — a thicker coupon has
+            # more to crush and would confound the comparison) but shorter than the main sweep,
+            # because print time rises with crossing density. Override with --layers.
+            write(replace(base, **{key: val}, name=f"{base.name}{key[:3]}{raw}", tally=i + 1,
+                          layers=a.layers or base.layers), a.out)
         sys.exit(0)
     if a.sweep == "order":
         for k in ["B", "C", "A", "D"]: write(PRESETS[k], a.out)     # ~0 -> max crossings

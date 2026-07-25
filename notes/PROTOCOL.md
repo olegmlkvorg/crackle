@@ -41,6 +41,16 @@ crackle, and it is computed for you — it's in every filename.
 crackles, the effect is controllable and everything after is calibration. If they feel the same, the
 thesis is dead and you've spent nine minutes learning it.
 
+## If A crackles: the dose-response ladder (already on the printer)
+The single strongest confirmation of the thesis isn't "A crackles" — it's **more crossings → more
+crackle, monotonically**. That ladder is generated and uploaded:
+`crackle_fast_An4/An5/An6/An7` = **77 → 205 → 524 → 954 crossings per layer**, constant thickness
+(12 layers, so none has more material to crush than another), 0.54–0.93 g each.
+If loudness climbs with the number and then plateaus, you've found the useful range and the mechanism
+is confirmed. If it's flat or random, crossings aren't the driver even if A beat B.
+Times rise with density (3.9 / 6.1 / 9.4 / 13.8 min) — that's inherent: more crossings means more
+travel moves. Sweep anything else the same way: `--vary passes=1,2,4`, `--vary temp=210,230,250`.
+
 ## Fast iteration (`crackle_fast_*` files)
 The normal files call Creality's `START_PRINT`, which heats to 140 °C, homes, cleans the nozzle,
 re-homes Z, reheats and cleans **again** — often longer than the 4-minute coupon itself. The
