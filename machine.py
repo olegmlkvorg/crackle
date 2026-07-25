@@ -102,3 +102,19 @@ SPREAD_RATIO = 1.91         # landed width / nozzle, unaided by squish
 TEMP = 210
 TEMP_RATED = 210        # manufacturer spec for the translucent PLA
 # ---------------------------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------------------------
+# TWO MACHINES, SAME CEILING — measured 2026-07-25.
+#
+#     K2 Plus, 0.8 nozzle : clean through 60 mm3/s (true ceiling higher, 60-100 ramp pending)
+#     K1C,     1.0 nozzle : skips at 59.6 mm3/s  (Oleg: "keep it at 40% progress speed")
+#
+# A 1.0 orifice has 1.56x the cross-sectional area of a 0.8 and gives NO more flow. So the limit is
+# the HOTEND — heater power and melt-zone length — not the hole. Two consequences worth holding:
+#   · a bigger nozzle buys a WIDER BEAD, not a faster print. Fitting one to go faster is a
+#     misunderstanding of where the constraint lives.
+#   · ~60 mm3/s is a property of this class of machine, so a third printer can be assumed to sit
+#     near it rather than needing a full ramp from zero — one confirmation run, not a hunt.
+K1C_FLOW = 53.0         # 90% of the measured 59.6
+K1C_MEASURED = 59.6     # where it began skipping, 1.0 nozzle, 210C
+# ---------------------------------------------------------------------------------------------
