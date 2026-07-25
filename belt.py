@@ -135,7 +135,8 @@ def add_cleats(pts, per, n_cleats, height, width, ease=0.35):
 
 
 def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flow, temp, bed,
-         fil_d, bed_xy, home, press, fan, walls, fold=0, span=0.0, first_w=3.0, aux=0.2):
+         fil_d, bed_xy, home, press, fan, walls, fold=0, span=0.0, first_w=3.0, aux=0.2,
+         printer='k2plus'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
@@ -203,8 +204,11 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     w(f"M109 S{temp}")
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
-    w(f"SET_FAN_SPEED FAN=side_fan SPEED={aux:.2f}")
-    w(f"SET_FAN_SPEED FAN=chassis_fan SPEED={aux:.2f}")
+    # PER-MACHINE fan syntax. Hardcoding the K1C form here put SET_FAN_SPEED
+    # FAN=side_fan into a K2 file — a command that machine does not have, which
+    # would have errored out a 76-minute print. Ask machine.aux_fans().
+    for _ln in machine.aux_fans(printer, aux):
+        w(_ln)
     w("M82")
     w("G92 E0")
     x0, y0 = ring[0]
@@ -292,7 +296,7 @@ if __name__ == "__main__":
                 f"run. Lower --fold or --cleat-h.")
     g, st = emit(length, a.ring_w, a.belt_w, a.cleats, a.cleat_h, a.cleat_w, a.bead_w, a.layer_h,
                  a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.walls,
-                 a.fold, span, a.first_w, a.aux)
+                 a.fold, span, a.first_w, a.aux, a.printer)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/belt_{a.printer}_c{a.centres:.0f}_p{a.pulley_d:.0f}_"
           f"w{a.belt_w:.0f}_{a.cleats}cleat_T{a.temp}.gcode")

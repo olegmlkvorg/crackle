@@ -33,6 +33,8 @@ from shapely.ops import unary_union
 
 import machine
 
+SHRINK = 0.25   # measured: printed bore = modelled - 0.25 on these machines
+
 
 def contours(region, bead_w, max_rings=200):
     """Concentric centrelines, outermost first, spaced one bead apart."""
@@ -106,7 +108,7 @@ def order_rings(rings, here):
 
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         first_w, aux, printer, name, link_max=2.0):
+         first_w, aux, printer, name, link_max=2.0, link_flow=0.3):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
@@ -182,9 +184,17 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                 # "long move = travel" rule turned this bracket's 30mm flat side into a travel and
                 # produced 17 hops per layer. The link is pi == 0, and nothing else.
                 if pi == 0 and d > link_max:
-                    L.append(f"G0 F{round(min(speed * 2, 60) * 60)} X{X:.3f} Y{Y:.3f}")
+                    # LINK BETWEEN CONTOURS: extrude, but THIN. Two bad options were tried first.
+                    # Extruding at full rate lays a second bead on top of one already at this Z --
+                    # double height, and the nozzle drags through it next layer, which is how a
+                    # tower came off the plate this morning. A G0 travel avoids that but breaks the
+                    # project's no-travel rule and produced 133 travels in a 3-bore plate.
+                    # A reduced-rate link is a thin connecting thread: it keeps the path continuous
+                    # (the extruder never stops, so no ooze/restart artefact) and adds too little
+                    # material to build a ridge.
+                    e += d * (e_first if k == 0 else e_per_mm) * link_flow
+                    L.append(f"G1 X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
                     px, py = X, Y
-                    L.append(f"G1 F{f_first if k == 0 else f}")
                     continue
                 e += d * (e_first if k == 0 else e_per_mm)
                 L.append(f"G1 {'F%d ' % (f_first if k == 0 else f) if (px, py) == (x0, y0) else ''}"
@@ -198,6 +208,38 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                                      speed=round(speed), flow=round(flow, 1),
                                      mins=round(e / e_per_mm / speed / 60, 1),
                                      size=(round(max(xs)-min(xs)), round(max(ys)-min(ys))))
+
+
+def plate(bores, wall, thickness=None):
+    """A plate with N vertical bores — the general bamboo joint.
+
+    Why vertical bores and not angled sockets: this generator extrudes a 2D region up the Z axis, so
+    any feature whose axis is VERTICAL is a constant cross-section and prints with no bridging and
+    no support. A socket lying horizontal is a bridged hole and this toolchain has no support to
+    give it. So the whole joint family is built from vertical bores in flat plates:
+
+      · foot plate      one bore, wide skirt      — stands a stick up
+      · inline coupler  one bore, tall            — joins two sticks end to end (pulley.py --sleeve)
+      · spacer          N bores in a row          — holds verticals parallel at intervals
+      · bearing bracket axle bore + stick bore    — carries the pulley shaft off the frame
+
+    `bores` is a list of (x, y, diameter). Each is modelled OVERSIZE by the measured printed-hole
+    shrink so a real stick actually goes in.
+    """
+    parts = []
+    for (x, y, d) in bores:
+        parts.append(Point(x, y).buffer(d / 2.0 + wall, 96))
+    body = unary_union(parts)
+    if len(bores) > 1:
+        # a spine joining the bores, so a near-collinear set does not depend on the circles touching
+        xs = [b[0] for b in bores]
+        ys = [b[1] for b in bores]
+        h = max(b[2] / 2.0 + wall for b in bores) if thickness is None else thickness / 2.0
+        body = unary_union([body, Polygon([(min(xs), min(ys) - h), (max(xs), min(ys) - h),
+                                           (max(xs), max(ys) + h), (min(xs), max(ys) + h)])])
+    for (x, y, d) in bores:
+        body = body.difference(Point(x, y).buffer((d + SHRINK) / 2.0, 96))
+    return body
 
 
 def bracket(axle_d, stick_d, centres, wall, shrink=0.25):
@@ -226,7 +268,8 @@ def bracket(axle_d, stick_d, centres, wall, shrink=0.25):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--part", default="bracket", choices=["bracket"])
+    ap.add_argument("--part", default="bracket",
+                    choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=12.7, help="1/2 inch bamboo")
     ap.add_argument("--centres", type=float, default=32.0)
@@ -245,13 +288,21 @@ if __name__ == "__main__":
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
-    region = bracket(a.axle, a.stick, a.centres, a.wall)
+    if a.part == "bracket":
+        region = bracket(a.axle, a.stick, a.centres, a.wall)
+    elif a.part == "foot":
+        region = plate([(0, 0, a.stick)], a.wall * 3)
+    elif a.part == "coupler":
+        region = plate([(0, 0, a.stick)], a.wall)
+    else:
+        n = int(a.part[-1])
+        region = plate([(i * a.centres, 0, a.stick) for i in range(n)], a.wall)
     g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                  a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
-                 f"BRACKET axle{a.axle:g} stick{a.stick:g} centres{a.centres:g}")
+                 f"{a.part.upper()} stick{a.stick:g} wall{a.wall:g}")
     os.makedirs(a.out, exist_ok=True)
-    fn = f"{a.out}/bracket_{a.printer}_a{a.axle:g}_s{a.stick:g}_c{a.centres:g}_T{a.temp}.gcode"
+    fn = f"{a.out}/{a.part}_{a.printer}_s{a.stick:g}_c{a.centres:g}_h{a.height:g}_T{a.temp}.gcode"
     open(fn, "w").write(g)
     print(f"{fn}")
     print(f"  {st['size'][0]}x{st['size'][1]}mm, {st['rings']} concentric contours, "
