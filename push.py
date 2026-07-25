@@ -75,8 +75,20 @@ def start(ip, name, src=None):
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             json.load(r)
-        print(f"   ▶ started {name}")
-        return True
+        # A 200 from Moonraker means the REQUEST was accepted, not that printing began. After a
+        # firmware_restart the K2 answers "The motor parameters are initializing, please try again
+        # later" and silently ignores both G28 and the print start -- and this used to report
+        # "started" regardless. Confirm against the machine.
+        for _ in range(20):
+            st = api(ip, "/printer/objects/query?print_stats")
+            state = st.get("result", {}).get("status", {}).get("print_stats", {}).get("state")
+            if state in ("printing", "paused"):
+                print(f"   ▶ started {name}")
+                return True
+            time.sleep(3)
+        print(f"   start NOT CONFIRMED: {name} — machine still {state!r} after 60s "
+              f"(motor params initializing after a restart? try again)")
+        return False
     except Exception as e:
         print(f"   start FAILED: {e}")
         return False
