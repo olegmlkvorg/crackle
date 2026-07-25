@@ -64,6 +64,7 @@ class Params:
     inset: float = 8.0          # keep pillars off the coupon edge
     prime_f: int = 3000         # from filament_max_volumetric_speed/0.3*60 (PLA ~15mm3/s)
     tally: int = 1              # raised bars on the base = which coupon this is
+    fast: bool = False          # skip calibration/nozzle-clean ceremony (see notes)
     machine: str = "k2"         # k2 | generic — k2 uses Creality's START_PRINT/END_PRINT macros
     start_gcode: str = ""       # if set, used VERBATIM instead of the generic start (see README)
     end_gcode: str = ""         # ditto
@@ -170,7 +171,27 @@ def emit(p: Params) -> tuple[str, dict]:
     # slice anything in Creality Print, open the .gcode, and copy everything before the first layer
     # into a file -> pass it with --start-gcode. It already has the right homing, probing, chamber
     # and prime for this machine. The generic block below is only a fallback.
-    if p.machine == "k2" and not p.start_gcode.strip():
+    if p.machine == "k2" and p.fast and not p.start_gcode.strip():
+        # FAST START — for iterating. Skips START_PRINT's 140C soak, its TWO nozzle-clean passes and
+        # its second Z home. That ceremony can cost more minutes than a 4-minute coupon.
+        # KEPT: G28. Homing is not ceremony — Klipper refuses to move an unhomed axis, and a wrong
+        # Z here gouges the plate. This is the one thing that must not be removed.
+        # TRADE-OFF, honestly: no nozzle clean before probing means an oozy nozzle can bias Z. This
+        # print doesn't need a pretty first layer — it needs the lattice to STICK. Eyeball the first
+        # layer on your first fast run; if adhesion is poor, do one normal (non-fast) print to
+        # re-establish a clean Z, then go back to fast.
+        g.w("; HEADER_BLOCK_START"); g.w(f"; total layer number: {p.base_layers + p.layers}")
+        g.w("; HEADER_BLOCK_END")
+        g.w("; FAST START — no START_PRINT macro, no nozzle clean, no 140C soak, single home.")
+        g.w(f"M140 S{p.bed}"); g.w(f"M104 S{p.temp}")
+        g.w("G90"); g.w("G28")
+        g.w(f"M190 S{p.bed}"); g.w(f"M109 S{p.temp}")
+        g.w("M204 S2000"); g.w("M83")
+        g.w("G1 Z0.3 F600")                                  # short prime line at the bed edge
+        g.w("G1 X10 Y10 F9000"); g.w("G1 X90 Y10 E9 F1200")
+        g.w("G92 E0"); g.w("G1 Z1 F600")
+        g.w(f"M106 S{p.fan}" if p.fan else "M107")
+    elif p.machine == "k2" and not p.start_gcode.strip():
         # EXTRACTED VERBATIM from this machine's own profile on this laptop:
         #   Creality Print 7.0 / system/Creality/machine/"Creality K2 Plus 0.4 nozzle.json"
         #   -> machine_start_gcode, single-colour ({else}) branch, template vars resolved.
@@ -267,8 +288,14 @@ def emit(p: Params) -> tuple[str, dict]:
             g.move(p.origin + 3.0, p.origin + 3.0, f=9000); g.extrude_to(p.origin + p.size - 3.0, p.origin + 3.0, p.size - 6.0, f=3000)
     # --- end ---
     if p.machine == "k2" and not p.end_gcode.strip():
-        g.w("END_PRINT")     # macro handles retract, lift, cool-down, chamber off
-        g.w("M84")
+        if p.fast:
+            g.w("M107"); g.w("M104 S0"); g.w("M140 S0")
+            g.w(f"G1 Z{z + 30:.1f} F900")                    # lift clear so you can grab the coupon
+            g.w("G1 X10 Y330 F9000")                          # park front-left, plate accessible
+            g.w("M84")
+        else:
+            g.w("END_PRINT")
+            g.w("M84")
     elif p.end_gcode.strip():
         g.w("; ---- machine end block (supplied verbatim) ----")
         for line in p.end_gcode.splitlines(): g.w(line)
@@ -286,7 +313,8 @@ def emit(p: Params) -> tuple[str, dict]:
 def write(p: Params, outdir="out"):
     gcode, st = emit(p)
     os.makedirs(outdir, exist_ok=True)
-    fn = f"{outdir}/crackle_{p.name}_{p.order}_x{st['crossings_per_layer']}_T{p.temp}_fan{p.fan}.gcode"
+    tag = "fast_" if p.fast else ""
+    fn = f"{outdir}/crackle_{tag}{p.name}_{p.order}_x{st['crossings_per_layer']}_T{p.temp}_fan{p.fan}.gcode"
     open(fn, "w").write(gcode)
     print(f"{p.name:>3}  order={p.order:<11} crossings/layer={st['crossings_per_layer']:>3} "
           f"total={st['crossings_total']:>5}  {st['grams']:>5.2f} g  -> {fn}")
@@ -298,13 +326,14 @@ if __name__ == "__main__":
     ap.add_argument("--sweep", default=None, choices=["order", "all"])
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--out", default="out")
+    ap.add_argument("--fast", action="store_true", help="skip calibration + nozzle cleaning for quick iteration")
     ap.add_argument("--machine", default="k2", choices=["k2","generic"])
     ap.add_argument("--start-gcode", default=None, help="file with your machine's start block, used verbatim")
     ap.add_argument("--end-gcode", default=None, help="file with your machine's end block")
     a = ap.parse_args()
     _sg = open(a.start_gcode).read() if a.start_gcode else ""
     _eg = open(a.end_gcode).read() if a.end_gcode else ""
-    for k in PRESETS: PRESETS[k] = replace(PRESETS[k], machine=a.machine, start_gcode=_sg, end_gcode=_eg)
+    for k in PRESETS: PRESETS[k] = replace(PRESETS[k], fast=a.fast, machine=a.machine, start_gcode=_sg, end_gcode=_eg)
     if a.list:
         for k, v in PRESETS.items(): print(f"{k}: order={v.order} passes={v.passes} fan={v.fan} n={v.n}")
         sys.exit(0)

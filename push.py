@@ -46,6 +46,12 @@ def info(ip):
 
 def upload(ip, path, force=False):
     st = status(ip)
+    # HARD guard, not overridable: Klipper streams the running job progressively off disk.
+    # Overwriting that file mid-print can corrupt the job. --force does NOT bypass this.
+    if os.path.basename(path) == os.path.basename(st.get("file") or "") and st["state"] == "printing":
+        print(f"BLOCKED: {os.path.basename(path)} is the file currently PRINTING on {ip}.")
+        print("         Overwriting it mid-print can corrupt the job. Rename or wait.")
+        return False
     if st["state"] == "printing" and not force:
         print(f"REFUSING: {ip} is PRINTING ({st['file'][:40]}, {st['pct']}%).")
         print("          Uploading is safe, but I won't touch a busy machine without --force.")

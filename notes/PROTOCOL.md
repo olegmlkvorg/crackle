@@ -41,6 +41,20 @@ crackle, and it is computed for you — it's in every filename.
 crackles, the effect is controllable and everything after is calibration. If they feel the same, the
 thesis is dead and you've spent nine minutes learning it.
 
+## Fast iteration (`crackle_fast_*` files)
+The normal files call Creality's `START_PRINT`, which heats to 140 °C, homes, cleans the nozzle,
+re-homes Z, reheats and cleans **again** — often longer than the 4-minute coupon itself. The
+`crackle_fast_*` variants skip all of that: heat, one `G28`, a short prime, go. They also park the
+head high and to the front at the end so you can grab the coupon immediately.
+
+**What is deliberately NOT removed: `G28`.** Homing isn't ceremony — Klipper refuses to move an
+unhomed axis, and a wrong Z gouges the plate.
+
+**The honest trade-off:** without a nozzle clean before probing, an oozy nozzle can bias Z slightly.
+This print doesn't need a pretty first layer, it needs the lattice to *stick*. Eyeball the first
+layer on your first fast run. If adhesion goes bad, run one normal (non-fast) coupon to re-establish
+a clean Z, then go back to fast.
+
 ## Telling them apart afterwards
 Six identical black squares are unscoreable in a pile, so each coupon has **raised tally bars on its
 base** — count them by eye or by fingertip:
