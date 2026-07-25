@@ -28,12 +28,16 @@ import argparse
 import math
 import os
 
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
 
 import machine
 
-SHRINK = 0.25   # measured: printed bore = modelled - 0.25 on these machines
+# CONFIRMED 2026-07-25 at ~6mm: the pulley's D-bore was modelled 6.25 for a 6.0mm shaft and Oleg
+# reports "the holes in puleys are perfect fit". So printed = model - 0.25 holds here, and a 1/4"
+# stick (6.35) takes a 6.60 modelled bore. The spiral-vase README had flagged this figure as
+# calibrated on a 4mm hole and unverified at larger sizes — it is now verified at 6.
+SHRINK = 0.25
 
 
 def contours(region, bead_w, max_rings=200):
@@ -136,12 +140,27 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     e_first = (first_w * press) / area
     f_first = round(min(flow / (first_w * press), 20.0) * 60)
 
-    rings = contours(region, bead_w)
+    # A region may be a fixed polygon OR a callable of layer fraction (see adapter()). Contours
+    # are cached per distinct region so a 35-layer part does not re-buffer shapely 35 times.
+    _is_fn = callable(region)
+    _cache = {}
+
+    def rings_at(kk):
+        if not _is_fn:
+            return rings
+        t = kk / max(1, layers - 1)
+        key = round(t, 3) < 0.5 if True else t
+        if key not in _cache:
+            _cache[key] = contours(region(t), bead_w)
+        return _cache[key]
+
+    rings = contours(region(0.0) if _is_fn else region, bead_w)
     if not rings:
         raise SystemExit(f"{name}: the region is smaller than one {bead_w}mm bead — nothing to print.")
 
-    xs = [p[0] for r in rings for p in r]
-    ys = [p[1] for r in rings for p in r]
+    _allr = rings + (contours(region(1.0), bead_w) if _is_fn else [])
+    xs = [p[0] for r in _allr for p in r]
+    ys = [p[1] for r in _allr for p in r]
     ox = (bed_xy[0] - (max(xs) + min(xs))) / 2.0
     oy = (bed_xy[1] - (max(ys) + min(ys))) / 2.0
     if min(xs) + ox < 4 or min(ys) + oy < 4 or max(xs) + ox > bed_xy[0] - 4 \
@@ -186,7 +205,8 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
             e += layer_h * e_per_mm
             L.append(f"G1 F{round(min(speed, 15)*60)} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
-        ordered = order_rings(rings, (px - ox, py - oy) if px is not None else rings[0][0])
+        _rk = rings_at(k)
+        ordered = order_rings(_rk, (px - ox, py - oy) if px is not None else _rk[0][0])
         for li, loop in enumerate(ordered):
             loop = decimate(densify(loop, 0.8), min_seg)
             for pi, (x, y) in enumerate(loop):
@@ -226,6 +246,43 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                                      speed=round(speed), flow=round(flow, 1),
                                      mins=round(e / e_per_mm / speed / 60, 1),
                                      size=(round(max(xs)-min(xs)), round(max(ys)-min(ys))))
+
+
+def d_profile(d, flat_depth, n=96):
+    """A D-shaped shaft profile: a circle of diameter `d` with one side cut to a flat chord.
+
+    Built as circle INTERSECT half-plane rather than by hand-ordering points. Walking the circle and
+    dropping the points above the chord produced a self-intersecting ring (the coordinates wrap past
+    the cut and rejoin across it), which shapely rejects with a side-location conflict. An
+    intersection cannot produce an invalid ring.
+
+    The flat is what transmits torque — a round bore on a D shaft simply spins.
+    """
+    r = d / 2.0
+    y_flat = r - flat_depth
+    return Point(0, 0).buffer(r, n).intersection(box(-r - 1, -r - 1, r + 1, y_flat))
+
+
+def adapter(shaft_d, flat_depth, stick_d, wall, split=0.5):
+    """Motor D-shaft -> bamboo stick. Returns a FUNCTION of layer fraction, not a fixed region.
+
+    Oleg: "the shaft is D form. we will also need adapter". The two ends need different bores, so
+    the cross-section changes partway up -- which a single extruded region cannot express. emit()
+    therefore accepts a callable.
+
+    The D end goes at the BOTTOM. Going up, the round stick bore is LARGER than the D bore, so the
+    transition only ever REMOVES material — nothing is printed over air and no bridging is needed.
+    Printed the other way up, the flat would have to bridge across the bore.
+    """
+    od = max(shaft_d, stick_d) + 2 * wall
+    outer = Point(0, 0).buffer(od / 2.0, 96)
+
+    def region_at(t):
+        if t < split:
+            return outer.difference(d_profile(shaft_d + SHRINK, flat_depth, 96))
+        return outer.difference(Point(0, 0).buffer((stick_d + SHRINK) / 2.0, 96))
+
+    return region_at
 
 
 def plate(bores, wall, thickness=None):
@@ -287,11 +344,12 @@ def bracket(axle_d, stick_d, centres, wall, shrink=0.25):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", default="bracket",
-                    choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4", "gauge"])
+                    choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4", "gauge", "adapter"])
     ap.add_argument("--axle", type=float, default=6.0)
-    ap.add_argument("--stick", type=float, default=12.7, help="1/2 inch bamboo")
+    ap.add_argument("--stick", type=float, default=6.35, help="1/4 inch bamboo (6.35mm)")
     ap.add_argument("--centres", type=float, default=32.0)
     ap.add_argument("--wall", type=float, default=4.0)
+    ap.add_argument("--flat", type=float, default=0.5, help="D-shaft flat depth mm")
     ap.add_argument("--height", type=float, default=12.0)
     ap.add_argument("--bead-w", type=float, default=1.2)
     ap.add_argument("--layer-h", type=float, default=0.4)
@@ -310,11 +368,14 @@ if __name__ == "__main__":
         region = bracket(a.axle, a.stick, a.centres, a.wall)
     elif a.part == "foot":
         region = plate([(0, 0, a.stick)], a.wall * 3)
+    elif a.part == "adapter":
+        region = adapter(a.axle, a.flat, a.stick, a.wall)
     elif a.part == "gauge":
         # FIT GAUGE — three bores, one print. The shrink figure (printed = model - 0.25) was
         # calibrated on a 4mm hole and is unverified at 12.7mm, and a coupler bored for ZERO
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
-        region = plate([(i * 26.0, 0, a.stick + 0.2 + 0.3 * i) for i in range(3)], 3.5)
+        region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
+                        for i in range(3)], 3.0)
     elif a.part == "coupler":
         region = plate([(0, 0, a.stick)], a.wall)
     else:
