@@ -44,7 +44,7 @@ def win_for(amp, speed, aspect):
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
          bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean, reach,
-         petal_w, petal_h):
+         petal_w, petal_h, touches):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -191,16 +191,21 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             # strand rises, arcs, TOUCHES DOWN at maximum reach where it is welded, rises again, and
             # lands home. The long span stops being a cantilever hanging off one foot and becomes
             # two arches sharing a middle anchor. That is what lets the throw be long.
+            # MANY FEET, NOT ONE. With a single mid-throw touchdown the two lobes are so long they
+            # read as straight lines. |sin((touches+1)*phi)| puts `touches` zeros inside the throw,
+            # so the strand scallops down and up repeatedly — visibly arched, and no span is longer
+            # than reach/(touches+1) unsupported.
             pts_p = []
-            touch_at = None
+            touches_at = set()
+            lobes = touches + 1
             for k in range(1, n_p + 1):
                 phi = math.pi * k / n_p
                 u = Lr * math.sin(phi)
                 w = lean * Lr * math.sin(phi) * math.sin(phi)
-                zc = anchor + amp * abs(math.sin(2 * phi))
+                zc = anchor + amp * abs(math.sin(lobes * phi))
                 pts_p.append((px + ux * u + tx * w, py + uy * u + ty * w, zc))
-                if touch_at is None and phi >= math.pi / 2:
-                    touch_at = len(pts_p) - 1        # the far foot, where it glues down
+                if zc < anchor + amp * 0.02 and 1 < k < n_p:
+                    touches_at.add(len(pts_p) - 1)
             # ONE cross-section for the whole petal, sized from the MEAN segment.
             # Per-segment sizing was wrong in a way that only showed up in the audit: where the lean
             # makes points cluster, the segment shrinks, the "achievable speed" collapses, and
@@ -221,13 +226,19 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                 if d3 < 1e-9:
                     continue
                 e += d3 * (xsec_petal / area)
+                # ONE SPEED FOR THE WHOLE THROW. Extrusion per mm is fixed, so constant speed IS
+                # constant flow — and varying it was swinging the flow 17x (3 mm3/s at a F600 press
+                # against 55 in flight). Oleg: "speed is not following the extrusion volume, lets aim
+                # for uniformed lines speed wise". The feet still weld, because the dab is a
+                # STATIONARY extrusion: it adds material without laying a line, so it cannot make
+                # the line uneven.
                 L.append(f"G1 F{round(petal_v*60)} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
                          + (f"   ; petal reach {Lr:.0f}mm apex {amp:.0f}mm" if k == 0 else ""))
                 prev = (hx, hy, zc)
-                if k == touch_at:
+                if k in touches_at:
                     # glue the far foot: press and dab, exactly as at the near feet
                     e += weld_dab
-                    L.append(f"G1 F180 E{e:.5f}                     ; GLUE the far foot at full reach")
+                    L.append(f"G1 F180 E{e:.5f}                     ; glue a foot mid-throw")
             e += weld_dab
             L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
             e += (z_base - anchor) * e_per_mm
@@ -254,6 +265,8 @@ if __name__ == "__main__":
     ap.add_argument("--petal-v", type=float, default=400.0,
                     help="throw speed mm/s — at a fixed flow cap this sets how THIN the\n                          flying strand is, which is what lets its own arc carry it")
     ap.add_argument("--lean", type=float, default=0.35, help="sideways lean: petal, not disc")
+    ap.add_argument("--touches", type=int, default=3,
+                    help="glue-downs inside the throw — more feet, shorter arcs, visibly curved")
     ap.add_argument("--petal-w", type=float, default=0.8,
                     help="flying strand width mm — thin enough to fly, thick enough not to split")
     ap.add_argument("--petal-h", type=float, default=0.4, help="flying strand height mm")
@@ -286,7 +299,7 @@ if __name__ == "__main__":
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
                  a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean, a.reach,
-                 a.petal_w, a.petal_h)
+                 a.petal_w, a.petal_h, a.touches)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
