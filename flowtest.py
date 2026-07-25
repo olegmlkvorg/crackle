@@ -20,10 +20,19 @@ WHY LONG STRAIGHT ROWS AND NOT A HILBERT / SPACE-FILLING CURVE
   320 mm straight runs reach commanded speed with room to spare. (Hilbert is the right path for
   the crackle/ORBE work, where corners and crossings ARE the point — just not for measurement.)
 
+CONTINUOUS RAMP, NOT BANDS (Oleg, 2026-07-25: "you could have easily done the progressions much
+smoother"). Every row gets its own flow, interpolated linearly across the plate. v1 repeated each
+flow for 8 rows — a habit carried over from the stacked tower, where a band genuinely needed several
+LAYERS to be readable. A single-layer row is already a 320mm constant-speed run, ~11 s of continuous
+extrusion, long past thermal steady state. So repeating it spent 8x the plate to learn one number.
+96 rows = 96 flow values = ~0.5 mm3/s resolution instead of 4, for the same time and material.
+
 HOW TO READ IT
-  Bottom of the plate (low Y) = lowest flow. Each band up = more flow.
-  The first band that goes THIN, GAPPY, MATTE or starts skipping = past the ceiling.
-  Max stable flow = the last good band below it. Use ~85% of it as the working number.
+  Front of the plate (low Y) = lowest flow, back = highest. It degrades gradually, not in steps.
+  Find where the surface first goes THIN, GAPPY, MATTE or starts skipping.
+  SELF-LABELLING: rows at each multiple of 5 mm3/s are cut 15mm short, so the right-hand edge is a
+  comb. Count teeth from the front — the first tooth is the first multiple of 5 above the start
+  flow, and each tooth after it is +5. No ruler needed. Tell me the tooth and I have the number.
 
 FAN: 20%, not 100% (Oleg, 2026-07-25). Two reasons, and the second is the important one:
   1. It is a single layer with nothing above it, so cooling buys nothing — but a 46 g sheet of fat
@@ -53,12 +62,15 @@ MATERIALS = {
 BED = (350.0, 350.0)   # K2 Plus
 
 
-def emit(flows, rows_per_band, layer_h, line_w, temp, bed, fan, fil_d, home, margin):
+def emit(flows, n_rows, layer_h, line_w, temp, bed, fan, fil_d, home, margin):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area          # constant: volume per mm of path
     x0, x1 = margin, BED[0] - margin
     row_len = x1 - x0
-    n_rows = len(flows) * rows_per_band
+    q_lo, q_hi = min(flows), max(flows)
+    def q_at(r):                      # linear ramp: one flow per row
+        return q_lo + (q_hi - q_lo) * (r / max(n_rows - 1, 1))
+    NOTCH = 15.0                      # rows crossing a multiple of 5 mm3/s are cut short -> a comb
     spacing = line_w                              # textbook sealed-sheet spacing; gaps = measurement
     span = (n_rows - 1) * spacing
     y0 = (BED[1] - span) / 2.0
@@ -67,14 +79,16 @@ def emit(flows, rows_per_band, layer_h, line_w, temp, bed, fan, fil_d, home, mar
                          f"Reduce --rows or --flows.")
 
     L = []; w = L.append
-    w(f"; MAX VOLUMETRIC FLOW — single layer, full plate, {len(flows)} bands x {rows_per_band} rows")
+    w(f"; MAX VOLUMETRIC FLOW — single layer, full plate, {n_rows} rows, continuous ramp")
     w(f"; line_w={line_w} layer_h={layer_h} temp={temp} fan={fan} spacing={spacing}")
-    w("; READ IT: low Y (front) = lowest flow. First band that goes thin/gappy/matte = past the ceiling.")
-    for i, q in enumerate(flows, 1):
-        v = q / (line_w * layer_h)
-        ya = y0 + (i - 1) * rows_per_band * spacing
-        yb = ya + (rows_per_band - 1) * spacing
-        w(f"; band {i}: {q:g} mm3/s -> {v:.0f} mm/s   Y {ya:.0f}..{yb:.0f}")
+    w("; READ IT: low Y (front) = lowest flow, ramping continuously to the back.")
+    w("; Rows at each multiple of 5 mm3/s are 15mm short -> comb on the right edge. Count teeth.")
+    w(f"; RAMP {q_lo:g} -> {q_hi:g} mm3/s over {n_rows} rows "
+      f"({(q_hi-q_lo)/max(n_rows-1,1):.2f} mm3/s per row)")
+    for r in range(n_rows):
+        q = q_at(r)
+        if math.floor(q / 5) != math.floor(q_at(r - 1) / 5) if r else False:
+            w(f"; NOTCH row {r}: {q:.1f} mm3/s at Y{y0 + r*spacing:.0f}")
     w("; HEADER_BLOCK_START"); w("; total layer number: 1"); w("; HEADER_BLOCK_END")
 
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
@@ -92,31 +106,36 @@ def emit(flows, rows_per_band, layer_h, line_w, temp, bed, fan, fil_d, home, mar
     w(f"G1 F1200 X{margin:.1f} Y{margin+80:.1f} E12")
     w("G92 E0")
 
-    e = 0.0; row = 0
-    for i, q in enumerate(flows, 1):
+    e = 0.0
+    for row in range(n_rows):
+        q = q_at(row)
         v = q / (line_w * layer_h)
         f_mm_min = round(v * 60)
-        L.append(f"; ---- band {i}: {q:g} mm3/s @ {v:.0f} mm/s ----")
-        for r in range(rows_per_band):
-            y = y0 + row * spacing
-            left_to_right = (row % 2 == 0)
-            sx, ex = (x0, x1) if left_to_right else (x1, x0)
-            if row == 0:
-                L.append(f"G0 F9000 X{sx:.2f} Y{y:.2f}")
-            else:
-                # y-shift is part of the sheet, drawn not travelled — no ooze gap between rows
-                e += spacing * e_per_mm
-                L.append(f"G1 F{f_mm_min} X{sx:.2f} Y{y:.2f} E{e:.5f}")
-            e += row_len * e_per_mm
-            L.append(f"G1 F{f_mm_min} X{ex:.2f} Y{y:.2f} E{e:.5f}")
-            row += 1
+        y = y0 + row * spacing
+        # notch this row if the ramp crosses a multiple of 5 here — makes the plate self-labelling
+        notch = row > 0 and math.floor(q / 5) != math.floor(q_at(row - 1) / 5)
+        left_to_right = (row % 2 == 0)
+        sx, ex = (x0, x1) if left_to_right else (x1, x0)
+        if notch:
+            ex = ex - NOTCH if left_to_right else ex + NOTCH
+        if row == 0:
+            L.append(f"; ramp starts {q:.1f} mm3/s")
+            L.append(f"G0 F9000 X{sx:.2f} Y{y:.2f}")
+        else:
+            if notch:
+                L.append(f"; --- notch: {q:.1f} mm3/s @ {v:.0f} mm/s, Y{y:.0f} ---")
+            # y-shift is part of the sheet, drawn not travelled — no ooze gap between rows
+            e += spacing * e_per_mm
+            L.append(f"G1 F{f_mm_min} X{sx:.2f} Y{y:.2f} E{e:.5f}")
+        d = abs(ex - sx)
+        e += d * e_per_mm
+        L.append(f"G1 F{f_mm_min} X{ex:.2f} Y{y:.2f} E{e:.5f}")
 
     L += ["M107", "M104 S0", "M140 S0",
           f"G1 Z{layer_h+40:.1f} F900", "G0 X10 Y340 F9000"]   # steppers stay on for the next run
     grams = e * area * 1.24 / 1000
     path_mm = n_rows * row_len + (n_rows - 1) * spacing
-    secs = sum((rows_per_band * row_len + rows_per_band * spacing) / (q / (line_w * layer_h))
-               for q in flows)
+    secs = sum((row_len + spacing) / (q_at(r) / (line_w * layer_h)) for r in range(n_rows))
     return "\n".join(L) + "\n", dict(rows=n_rows, grams=round(grams, 1), mins=round(secs / 60, 1),
                                      path=round(path_mm / 1000, 1), y0=round(y0), span=round(span))
 
@@ -126,7 +145,7 @@ if __name__ == "__main__":
     ap.add_argument("--material", default="pla", choices=list(MATERIALS))
     ap.add_argument("--flows", default=None, help="comma list of mm3/s")
     ap.add_argument("--temp", type=int, default=None)
-    ap.add_argument("--rows", type=int, default=8, help="rows per flow band")
+    ap.add_argument("--rows", type=int, default=96, help="total rows = flow resolution")
     ap.add_argument("--layer_h", type=float, default=0.4)
     ap.add_argument("--line_w", type=float, default=3.0)   # safe: single layer, nothing stacks
     ap.add_argument("--fan", type=int, default=51)   # 20% — see FAN note in the docstring
@@ -145,4 +164,7 @@ if __name__ == "__main__":
     open(fn, "w").write(g)
     print(f"{fn}\n  ONE layer, {st['rows']} rows, Y {st['y0']}..{st['y0']+st['span']}, "
           f"{st['path']} m of path, ~{st['mins']} min, {st['grams']} g")
-    print("  " + "  ".join(f"{q:g}→{q/(a.line_w*a.layer_h):.0f}mm/s" for q in flows))
+    lo, hi = min(flows), max(flows)
+    print(f"  ramp {lo:g}→{hi:g} mm3/s, {(hi-lo)/max(a.rows-1,1):.2f} per row "
+          f"({lo/(a.line_w*a.layer_h):.0f}→{hi/(a.line_w*a.layer_h):.0f} mm/s)")
+    print(f"  notches (15mm short rows) at every 5 mm3/s — count teeth from the front")
