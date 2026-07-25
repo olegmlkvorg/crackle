@@ -43,7 +43,8 @@ def win_for(amp, speed, aspect):
 
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
-         bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean):
+         bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean, reach,
+         petal_w, petal_h):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -56,6 +57,18 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
     # With STAPLE hops the span is chosen, not forced by the Z axis — XY is stopped while Z moves,
     # so height no longer drags span with it. The only requirement is that a staple finishes before
     # the next one begins.
+    if reach and r_max + reach > min(cx, cy) - 4:
+        raise SystemExit(
+            f"a {reach}mm throw from the outer base radius {r_max:.0f}mm reaches "
+            f"{r_max + reach:.0f}mm — past the {min(cx,cy):.0f}mm bed edge.\n"
+            f"  Raise --margin so the base spiral stays inside {min(cx,cy) - reach - 4:.0f}mm, "
+            f"or shorten --reach below {min(cx,cy) - r_max - 4:.0f}.")
+    _xp = petal_w * petal_h
+    _vmax = flow / _xp
+    if petal_v > _vmax * 0.9:
+        # 10% margin: E is written to 5 decimals and the petal has short segments, so rounding
+        # alone put the measured strand 10% over the stated one and the flow with it.
+        petal_v = _vmax * 0.9
     span_hi = aspect * a_hi
     if span_hi > pitch * 0.8:
         raise SystemExit(f"largest staple carries {span_hi:.1f}mm against a {pitch}mm pitch — they "
@@ -153,23 +166,53 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             L.append(f"G1 F600 Z{anchor:.4f} E{e:.5f}            ; PRESS in — anchor the petal foot")
             e += weld_dab
             L.append(f"G1 F180 E{e:.5f}                     ; dab a foot")
-            R = amp / 2.0                       # vertical loop radius: apex sits at 2R = amp
-            e_petal = (flow / petal_v) / area   # thin, and it respects the flow cap by construction
-            f_p = round(petal_v * 60)
-            ux, uy = math.cos(th), math.sin(th)          # radial direction, the way the petal throws
-            tx, ty = -uy, ux                             # tangential, for the sideways lean
+            # Reach and height are INDEPENDENT. A circle in a vertical plane locks them at 1:2 —
+            # throwing 130mm out would have meant a 260mm apex. An ellipse decouples them, so the
+            # petal can be a long low throw: far out, barely up, and back. Oleg: "throw it way
+            # further, to the edge of the printer", having already fixed the height at 40mm.
+            Lr = reach if reach else amp / 2.0
+            # KEEP THE FLOW AT THE CAP. Extrusion must be computed for the speed the head can
+            # ACTUALLY reach, not the speed commanded. The petal is short segments, so acceleration
+            # limits it well below 400 mm/s — computing E for 400 and then moving at 207 delivers
+            # only 16 mm3/s instead of 55, i.e. a starved, broken strand. Oleg: "dont slow down the
+            # flow of filament".
             n_p = 48
+            # Build the petal as POINTS first, then emit. Charging extrusion inside the point loop
+            # meant special-casing the first segment, and the special case was wrong — it billed
+            # 1mm of filament for a 17mm move and the flow audit came back at 854 mm3/s. With the
+            # points in hand every distance is exact and the flow cap holds by construction.
+            ux, uy = math.cos(th), math.sin(th)     # radial: the direction the petal throws
+            tx, ty = -uy, ux                        # tangential: the sideways lean
+            pts_p = []
             for k in range(1, n_p + 1):
                 phi = 2 * math.pi * k / n_p
-                u = R * math.sin(phi)                    # out and back
-                w = lean * R * math.sin(phi) * math.sin(phi / 2)   # a lean, so it is a petal not a disc
-                zc = anchor + R * (1 - math.cos(phi))    # up and over
-                hx = px + ux * u + tx * w
-                hy = py + uy * u + ty * w
-                seglen = math.hypot(R * 2 * math.pi / n_p, 0) or 0.5
-                e += seglen * e_petal
-                L.append(f"G1 F{f_p} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
-                         + (f"   ; petal {amp:.0f}mm, thrown at {petal_v:.0f} mm/s" if k == 1 else ""))
+                u = Lr * math.sin(phi)
+                w = lean * Lr * math.sin(phi) * math.sin(phi / 2)
+                zc = anchor + (amp / 2.0) * (1 - math.cos(phi))
+                pts_p.append((px + ux * u + tx * w, py + uy * u + ty * w, zc))
+            # ONE cross-section for the whole petal, sized from the MEAN segment.
+            # Per-segment sizing was wrong in a way that only showed up in the audit: where the lean
+            # makes points cluster, the segment shrinks, the "achievable speed" collapses, and
+            # flow/v demands an absurd bead — 872 mm3/s against a 55 cap. Physically the strand does
+            # not change thickness because two sample points happen to be close together. Size it
+            # once from the mean and the flow holds across the whole throw.
+            prev = (px, py, anchor)
+            # The flying strand is SET, not derived. Three attempts at deriving it from speed and
+            # the flow cap each produced a different wrong answer (0.14 too thin, 2.19 a rope,
+            # 872 mm3/s in the audit) because the derivation chains through achievable speed, which
+            # depends on segment length, which the lean makes wildly non-uniform.
+            # Oleg: "while you fly thru the air, flow need to be managable so it does not split
+            # apart". Too thin and it necks and snaps mid-flight; too thick and it is a rope with
+            # nothing holding it. So state the strand directly and CHECK the flow it implies.
+            xsec_petal = petal_w * petal_h
+            for k, (hx, hy, zc) in enumerate(pts_p):
+                d3 = math.dist(prev, (hx, hy, zc))
+                if d3 < 1e-9:
+                    continue
+                e += d3 * (xsec_petal / area)
+                L.append(f"G1 F{round(petal_v*60)} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
+                         + (f"   ; petal reach {Lr:.0f}mm apex {amp:.0f}mm" if k == 0 else ""))
+                prev = (hx, hy, zc)
             e += weld_dab
             L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
             e += (z_base - anchor) * e_per_mm
@@ -196,6 +239,11 @@ if __name__ == "__main__":
     ap.add_argument("--petal-v", type=float, default=400.0,
                     help="throw speed mm/s — at a fixed flow cap this sets how THIN the\n                          flying strand is, which is what lets its own arc carry it")
     ap.add_argument("--lean", type=float, default=0.35, help="sideways lean: petal, not disc")
+    ap.add_argument("--petal-w", type=float, default=0.8,
+                    help="flying strand width mm — thin enough to fly, thick enough not to split")
+    ap.add_argument("--petal-h", type=float, default=0.4, help="flying strand height mm")
+    ap.add_argument("--reach", type=float, default=0.0,
+                    help="how far the petal throws, mm. 0 = tie it to height (a circle)")
     ap.add_argument("--anchor", type=float, default=0.35,
                     help="absolute Z (mm) to press to before rising — well under the bead")
     ap.add_argument("--weld-dab", type=float, default=1.2,
@@ -222,7 +270,8 @@ if __name__ == "__main__":
     bed_xy = tuple(float(v) for v in a.bed_size.split(","))
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
-                 a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean)
+                 a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean, a.reach,
+                 a.petal_w, a.petal_h)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
