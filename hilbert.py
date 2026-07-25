@@ -130,6 +130,56 @@ def round_corners(pts, fillet, seg=0.8):
     return out
 
 
+def offset_closed(pts, d):
+    """Offset a closed polyline by d (positive = outward, using the local normal).
+
+    Used to turn one wall into a two-walled SLOT for the stacking joint. Safe here because the
+    Moore curve's passes are a whole pitch apart (13.3mm at order 3) and the fillet radii are much
+    larger than the offset, so nothing folds back on itself -- but the caller checks that rather
+    than trusting it.
+    """
+    core = pts[:-1] if math.dist(pts[0], pts[-1]) < 1e-9 else pts[:]
+    n = len(core)
+    out = []
+    for i in range(n):
+        a, b = core[i - 1], core[(i + 1) % n]
+        tx, ty = b[0] - a[0], b[1] - a[1]
+        L = math.hypot(tx, ty)
+        if L < 1e-12:
+            out.append(core[i])
+            continue
+        out.append((core[i][0] + (ty / L) * d, core[i][1] - (tx / L) * d))
+    out.append(out[0])
+    return out
+
+
+def joint_layers(pts, layers, bead_w, tenon_n, mortise_n, slot_gap, wall_n):
+    """Per-layer (points, bead width) for a stackable module.
+
+    Oleg: "we need to make it connectable, will go may be few meters high".
+
+    BOTTOM `mortise_n` layers: two walls offset either side of the path, leaving a slot.
+    TOP    `tenon_n`   layers: one NARROW centred wall that drops into the slot above.
+    Middle layers: the plain single wall.
+
+    The slot is modelled WIDER than the tenon because a printed gap comes out about 0.25mm tighter
+    than modelled on these machines -- a measured empiric from this project, not a guess. Modelling
+    it nominally would produce a joint that cannot be assembled at all.
+    """
+    tenon_w = bead_w * 0.6
+    half = (slot_gap + wall_n) / 2.0
+    plan = []
+    for k in range(layers):
+        if k < mortise_n:
+            plan.append(("mortise", offset_closed(pts, +half), wall_n))
+            plan.append(("mortise2", offset_closed(pts, -half), wall_n))
+        elif k >= layers - tenon_n:
+            plan.append(("tenon", pts, tenon_w))
+        else:
+            plan.append(("body", pts, bead_w))
+    return plan
+
+
 def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          fillet, layers, closed):
     area = math.pi * (fil_d / 2) ** 2

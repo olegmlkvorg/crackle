@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""CROWNED PULLEY — for the cleated belt lift, emitted as one continuous extrusion.
+
+Oleg: "you can use k1 to print gears and holder stuff meanwhile".
+
+A pulley is normally a SOLID part: perimeters plus infill, which nothing in this toolchain emits,
+and which would mean going out to trimesh -> STL -> a slicer GUI. So it is built here the way
+everything else is -- as one continuous path -- by making the solid parts rings and the fill a web:
+
+    per layer:  outer rim  ->  spoke inward  ->  bore ring  ->  spoke outward  ->  next layer
+
+The spoke angles ADVANCE every layer, so the web is a spiral staircase of struts rather than three
+tall unsupported blades stacked on themselves. That both braces the rim and means no spoke is ever
+printed in mid-air over the gap.
+
+CROWN. The rim radius bulges by `crown` at mid-height, following a circular arc. This is not
+decoration: a flat pulley lets a flat belt wander off the end, while a crowned one self-centres --
+the belt always climbs toward the largest diameter, which is the middle. It is why every flat-belt
+machine has crowned pulleys.
+
+BORE. A 6mm D-profile socket to match a standard motor shaft, cut as a flat chord. Printed bores
+come out about 0.25mm undersize on these machines (measured, see connector_family.py in
+~/Desktop/spiral-vase), so the modelled bore is oversized to compensate rather than hoping.
+"""
+import argparse
+import math
+import os
+
+import machine
+
+SHRINK = 0.25       # measured: printed bore = modelled - 0.25 on the Creality machines
+
+
+def d_bore(r, flat_depth, n=180, a_start=0.0, sweep=None):
+    """A D-profile: a circle of radius r with one side cut back to a flat chord.
+
+    `a_start`/`sweep` let each spoke walk its OWN arc of the bore. Taking the first N points three
+    times instead drew the same arc three times over and left a 60-degree hole in the bore wall --
+    caught by measuring the largest angular gap between emitted bore points, not by looking at it.
+    """
+    if sweep is None:
+        sweep = 2 * math.pi
+    y_flat = r - flat_depth
+    pts = []
+    steps = max(4, int(n * sweep / (2 * math.pi)))
+    for i in range(steps + 1):
+        a = a_start + sweep * i / steps
+        x, y = r * math.cos(a), r * math.sin(a)
+        if y > y_flat:                       # inside the cut-off cap -> project onto the flat
+            if abs(math.cos(a)) < 1e-9:
+                continue
+            x = y_flat / math.tan(a) if abs(math.tan(a)) > 1e-9 else x
+            x = max(-r, min(r, x))
+            y = y_flat
+        pts.append((x, y))
+    pts.append(pts[0])
+    return pts
+
+
+def ring(r, n=240, phase=0.0):
+    return [(r * math.cos(2 * math.pi * i / n + phase),
+             r * math.sin(2 * math.pi * i / n + phase)) for i in range(n + 1)]
+
+
+def spiral_between(r0, r1, a0, turns_frac, n=60):
+    """A gentle spiral from radius r0 to r1 — the spoke. Not a straight radial line: a radial jump
+    is a 90-degree corner at each end, and a corner is where Klipper drops to square_corner_velocity
+    while E keeps metering per mm of path."""
+    out = []
+    for i in range(n + 1):
+        t = i / n
+        r = r0 + (r1 - r0) * t
+        a = a0 + turns_frac * 2 * math.pi * t
+        out.append((r * math.cos(a), r * math.sin(a)))
+    return out
+
+
+def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, flow, temp, bed,
+         fil_d, bed_xy, home, press, fan, spoke_adv):
+    area = math.pi * (fil_d / 2) ** 2
+    e_per_mm = (bead_w * layer_h) / area
+    speed = flow / (bead_w * layer_h)
+    f = round(speed * 60)
+    layers = max(2, int(round(width / layer_h)))
+
+    r_bore = bore_d / 2 + SHRINK / 2
+    if r_bore + 2.5 * bead_w >= od / 2 - 2 * bead_w:
+        raise SystemExit(f"a {bore_d}mm bore leaves no material inside a {od}mm pulley.")
+
+    cx, cy = bed_xy[0] / 2.0, bed_xy[1] / 2.0
+    L = []
+    w = L.append
+    w(f"; CROWNED PULLEY — OD {od}mm, {width}mm wide, {bore_d}mm D-bore, {spokes} spokes")
+    w(f"; crown +{crown}mm at mid-height (self-centres a flat belt), flange +{flange}mm at the ends")
+    w(f"; bead {bead_w}x{layer_h} at {speed:.0f} mm/s -> flow={flow} mm3/s, {layers} layers")
+    w("; HEADER_BLOCK_START")
+    w(f"; total layer number: {layers}")
+    w("; HEADER_BLOCK_END")
+    w(f"M140 S{bed}")
+    w(f"M104 S{temp}")
+    w("G90")
+    w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
+    w(f"M190 S{bed}")
+    w(f"M109 S{temp}")
+    w("M204 S8000")
+    w("M107" if not fan else f"M106 S{fan}")
+    w("M82")
+    w("G92 E0")
+
+    path_layers = []
+    cur_ang = 0.0
+    for k in range(layers):
+        t = k / max(1, layers - 1)
+        # crown: circular bulge, maximum at mid-height
+        r_rim = od / 2 + crown * math.sin(math.pi * t)
+        # flanges: the outer few layers step out to keep the belt on
+        edge = min(k, layers - 1 - k) * layer_h
+        if edge < 2.0:
+            # ramp, not a step: a sudden +2.5mm between two layers is a 2.5mm jump in the path
+            r_rim += flange * (1.0 - edge / 2.0)
+        a0 = spoke_adv * k
+        # START THE RIM WHERE THE LAST SPOKE LEFT OFF. Restarting it at a fixed angle left a chord
+        # across the pulley face -- a 31mm straight extruded move, the same class of artifact as the
+        # honeycomb's closing chord. The rim is a circle, so it can start anywhere.
+        # ONE UNBROKEN CIRCUIT PER LAYER, with every join at the same point/radius:
+        #   full rim circle (ends where it began)
+        #   -> spiral inward
+        #   -> full bore circle (ends where it began)
+        #   -> spiral outward, landing on the rim
+        # and the NEXT layer's rim starts exactly there. Two spokes per layer, rotating with
+        # spoke_adv. My earlier attempts advanced the angle by hand at each stage and left a 36mm
+        # chord and a 170-degree hole in the bore -- the fix is to make every segment start where
+        # the previous one ended, by construction, rather than to keep correcting the arithmetic.
+        r_b = r_bore + bead_w
+        pts = [(r_rim * math.cos(cur_ang + 2 * math.pi * t / 240),
+                r_rim * math.sin(cur_ang + 2 * math.pi * t / 240)) for t in range(241)]
+        a_in = cur_ang + 0.12 * 2 * math.pi
+        pts += spiral_between(r_rim, r_b, cur_ang, 0.12)
+        pts += d_bore(r_b, flat_depth, a_start=a_in, sweep=2 * math.pi)
+        pts += spiral_between(r_b, r_rim, a_in, 0.12)
+        cur_ang = a_in + 0.12 * 2 * math.pi + spoke_adv
+        path_layers.append(pts)
+
+    x0, y0 = path_layers[0][0]
+    w(f"G1 Z{press:.3f} F600")
+    w(f"G0 F9000 X{cx + x0 - 45:.3f} Y{cy + y0:.3f}")
+    w("G1 E25 F300                      ; stationary purge — pressure before motion")
+    w(f"G1 F1200 X{cx + x0:.3f} Y{cy + y0:.3f} E37   ; prime ends where the rim begins")
+    w("G92 E0")
+    w("; BODY_START")
+
+    e = 0.0
+    px = py = None
+    for k, pts in enumerate(path_layers):
+        z = press + k * layer_h
+        if k:
+            e += layer_h * e_per_mm
+            L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
+            L.append(f"G1 F{f}")
+        for (x, y) in pts:
+            X, Y = cx + x, cy + y
+            if px is None:
+                px, py = X, Y
+                continue
+            d = math.dist((px, py), (X, Y))
+            if d < 1e-9:
+                continue
+            e += d * e_per_mm
+            L.append(f"G1 {'F%d ' % f if k == 0 and e < 1 else ''}X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
+            px, py = X, Y
+
+    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + width + 40:.1f} F900",
+          f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
+    grams = e * area * 1.24 / 1000
+    return "\n".join(L) + "\n", dict(layers=layers, grams=round(grams, 1), speed=round(speed),
+                                     mins=round(e / e_per_mm / speed / 60, 1))
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--od", type=float, default=40.0)
+    ap.add_argument("--width", type=float, default=29.0, help="belt width + flange room")
+    ap.add_argument("--bore", type=float, default=6.0, help="D-shaft diameter")
+    ap.add_argument("--flat", type=float, default=0.5, help="depth of the D flat")
+    ap.add_argument("--crown", type=float, default=0.6)
+    ap.add_argument("--flange", type=float, default=2.5)
+    ap.add_argument("--spokes", type=int, default=3)
+    ap.add_argument("--spoke-adv", type=float, default=0.09, help="radians the web advances/layer")
+    ap.add_argument("--bead-w", type=float, default=1.2)
+    ap.add_argument("--layer-h", type=float, default=0.4)
+    ap.add_argument("--flow", type=float, default=machine.FLOW)
+    ap.add_argument("--temp", type=int, default=machine.TEMP)
+    ap.add_argument("--bed", type=int, default=60)
+    ap.add_argument("--press", type=float, default=0.25)
+    ap.add_argument("--fan", type=int, default=80)
+    ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
+    ap.add_argument("--no-home", action="store_true")
+    ap.add_argument("--out", default="out")
+    a = ap.parse_args()
+    bxy = machine.BED[a.printer]
+    g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,
+                 a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv)
+    os.makedirs(a.out, exist_ok=True)
+    fn = f"{a.out}/pulley_{a.printer}_od{a.od:.0f}_w{a.width:.0f}_b{a.bore:.0f}D_T{a.temp}.gcode"
+    open(fn, "w").write(g)
+    print(f"{fn}")
+    print(f"  OD {a.od}mm (+{a.crown} crown, +{a.flange} flange), {a.width}mm wide, "
+          f"{a.bore}mm D-bore modelled {a.bore + SHRINK:.2f} for shrink")
+    print(f"  {st['layers']} layers, {a.spokes} spokes advancing {a.spoke_adv} rad/layer")
+    print(f"  {st['speed']} mm/s at flow {a.flow} mm3/s, ~{st['mins']} min, {st['grams']} g")
