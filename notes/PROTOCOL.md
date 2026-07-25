@@ -1,15 +1,27 @@
 # Phase 1 run protocol — is the crackle controllable?
 
 ## ⚠️ Before you print anything (2 minutes, saves hours)
-1. **Turn OFF the AI / spaghetti detection on the K2 Plus.** This print is *deliberately* a spaghetti
-   web. The failure-detection camera is designed to spot exactly this and pause or abort the job.
-   (Being verified; do not skip it on my say-so — just check the toggle before the first run.)
-2. **Bed:** clean PEI, 60 °C, slightly generous first-layer squish. The nozzle drags across the part
+1. **Turn OFF AI detection: Settings → Camera → AI function → uncheck "fault pause" / disable AI
+   detection.** (Creality's own wiki, code AC0101, applies to K2 Plus.) This print is *deliberately*
+   a spaghetti web — the camera is built to spot exactly this and pause the job.
+   **Also: clear and wipe the plate between coupons.** A plate still webbed from the previous run
+   trips **AC0104 "foreign object detected"** at Z-homing, *before* the print starts.
+2. **Start from the touchscreen, not from Fluidd/Orca "send & print".** There's a reported bug where
+   remotely-started jobs crash the head (`No trigger on x after full movement`). `push.py` therefore
+   uploads only and never starts.
+3. **Bed:** clean PEI, 60 °C, slightly generous first-layer squish. The nozzle drags across the part
    all print; a lifted lattice ruins the coupon and is a rig problem, not a result.
-3. **Have tweezers and a spare nozzle wipe handy.** Retraction is off for the whole print — ooze
+4. **Have tweezers and a spare nozzle wipe handy.** Retraction is off for the whole print — ooze
    accumulates. If a run ends in a blob, add `wipe_every=5` and rerun.
-4. **These are hand-emitted gcode files.** `validate.py` checks them structurally (no backwards E,
+5. **These are hand-emitted gcode files.** `validate.py` checks them structurally (no backwards E,
    no Z ploughing, nothing off the bed) but it cannot know your machine. Watch the first 30 s.
+
+## Already on the printer
+`crackle_B_…` and `crackle_A_…` are **uploaded to the K2 Plus** (192.168.3.140) and waiting in the
+file list. The start block is taken **verbatim from this laptop's own Creality Print K2 Plus 0.4
+profile** — `START_PRINT`/`END_PRINT` macros, adaptive-probe bounds, `T0` for the CFS — so homing and
+the strain-gauge Z-probe behave exactly as they do for a normal sliced job.
+Push more with `python3 push.py out/crackle_G_*.gcode` (it refuses a busy printer unless `--force`).
 
 ## The experiment
 **Thesis:** the crackle is fused strand *crossings* breaking. If true, crossings-per-layer predicts

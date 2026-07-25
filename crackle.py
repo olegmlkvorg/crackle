@@ -62,6 +62,8 @@ class Params:
     flow: float = 1.0
     wipe_every: int = 0         # layers between a nozzle-wipe pass (0 = off)
     inset: float = 8.0          # keep pillars off the coupon edge
+    prime_f: int = 3000         # from filament_max_volumetric_speed/0.3*60 (PLA ~15mm3/s)
+    machine: str = "k2"         # k2 | generic — k2 uses Creality's START_PRINT/END_PRINT macros
     start_gcode: str = ""       # if set, used VERBATIM instead of the generic start (see README)
     end_gcode: str = ""         # ditto
     base_f: int = 3000          # base is structural, not pretty — run it fast
@@ -167,7 +169,33 @@ def emit(p: Params) -> tuple[str, dict]:
     # slice anything in Creality Print, open the .gcode, and copy everything before the first layer
     # into a file -> pass it with --start-gcode. It already has the right homing, probing, chamber
     # and prime for this machine. The generic block below is only a fallback.
-    if p.start_gcode.strip():
+    if p.machine == "k2" and not p.start_gcode.strip():
+        # EXTRACTED VERBATIM from this machine's own profile on this laptop:
+        #   Creality Print 7.0 / system/Creality/machine/"Creality K2 Plus 0.4 nozzle.json"
+        #   -> machine_start_gcode, single-colour ({else}) branch, template vars resolved.
+        # Ground truth beats a reconstruction. DO NOT hand-roll G28: the K2 probes with a strain
+        # gauge through the nozzle and START_PRINT cleans it twice before homing Z.
+        g.w("; HEADER_BLOCK_START")
+        g.w(f"; total layer number: {p.base_layers + p.layers}")
+        g.w("; HEADER_BLOCK_END")
+        g.w("; SET PRINT AREA MIN AND MAX COORDINATES TO ENABLE ADAPTIVE PROBING")
+        g.w(f"; MINX = {p.origin:.1f}"); g.w(f"; MINY = {p.origin:.1f}")
+        g.w(f"; MAXX = {p.origin + p.size:.1f}"); g.w(f"; MAXY = {p.origin + p.size:.1f}")
+        g.w("M140 S0"); g.w("M104 S0")
+        g.w(f"START_PRINT EXTRUDER_TEMP={p.temp} BED_TEMP={p.bed}")
+        g.w("T0")
+        g.w(f"M104 S{p.temp}")
+        g.w("M204 S2000")
+        g.w("G1 Z3 F600")
+        g.w("M83")
+        g.w("G1 Y150 F12000"); g.w("G1 X0 F12000")
+        g.w("G1 Z0.2 F600"); g.w("G1 X0 Y150 F6000")
+        g.w("G1 E0.8 F300")
+        g.w(f"G1 X0 Y0 E9 F{p.prime_f}"); g.w(f"G1 X150 Y0 E9 F{p.prime_f}")
+        g.w("G92 E0"); g.w("G1 Z1 F600")
+        g.w(f"M109 S{p.temp}")
+        g.w(f"M106 S{p.fan}" if p.fan else "M107")   # OUR fan — the experiment depends on it
+    elif p.start_gcode.strip():
         g.w("; ---- machine start block (supplied verbatim) ----")
         for line in p.start_gcode.splitlines(): g.w(line)
         g.w("; ---- end machine start block ----")
@@ -230,7 +258,10 @@ def emit(p: Params) -> tuple[str, dict]:
             g.w("; wipe pass — shed accumulated ooze on the base edge")
             g.move(p.origin + 3.0, p.origin + 3.0, f=9000); g.extrude_to(p.origin + p.size - 3.0, p.origin + 3.0, p.size - 6.0, f=3000)
     # --- end ---
-    if p.end_gcode.strip():
+    if p.machine == "k2" and not p.end_gcode.strip():
+        g.w("END_PRINT")     # macro handles retract, lift, cool-down, chamber off
+        g.w("M84")
+    elif p.end_gcode.strip():
         g.w("; ---- machine end block (supplied verbatim) ----")
         for line in p.end_gcode.splitlines(): g.w(line)
     else:
@@ -259,13 +290,13 @@ if __name__ == "__main__":
     ap.add_argument("--sweep", default=None, choices=["order", "all"])
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--out", default="out")
+    ap.add_argument("--machine", default="k2", choices=["k2","generic"])
     ap.add_argument("--start-gcode", default=None, help="file with your machine's start block, used verbatim")
     ap.add_argument("--end-gcode", default=None, help="file with your machine's end block")
     a = ap.parse_args()
     _sg = open(a.start_gcode).read() if a.start_gcode else ""
     _eg = open(a.end_gcode).read() if a.end_gcode else ""
-    if _sg or _eg:
-        for k in PRESETS: PRESETS[k] = replace(PRESETS[k], start_gcode=_sg, end_gcode=_eg)
+    for k in PRESETS: PRESETS[k] = replace(PRESETS[k], machine=a.machine, start_gcode=_sg, end_gcode=_eg)
     if a.list:
         for k, v in PRESETS.items(): print(f"{k}: order={v.order} passes={v.passes} fan={v.fan} n={v.n}")
         sys.exit(0)
