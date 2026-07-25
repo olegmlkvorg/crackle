@@ -42,6 +42,27 @@ def _ellipse_R(a, b, t):
     return num / max(a * b, 1e-9)
 
 
+def nested_path(N, a, ratio, N2, a2, ratio2, cx, cy, n_per, phase, speed, accel, max_seg):
+    """Core ellipses, then cage ellipses, as ONE continuous run.
+
+    The cage-around-core nodule is what the pop-up DIG station needs: a brittle outer shell that
+    picks away in fragments, around a tough inner ring that survives and goes home in a palm. Both
+    in a single job — "one print, one job, no assembly" is the whole claim.
+
+    Toughness and brittleness come from DIFFERENT variables, which is why one file can hold both:
+      · core  — few ellipses, THICK strand. Long members, lots of material per junction: tough.
+      · cage  — many ellipses, THIN strand. Short members, many junctions: it fragments.
+    Fusing is not the lever here (Phase 1 established fused junctions are what snap, so BOTH are
+    fused); the lever is strand thickness and junction density.
+
+    Returns (points, cage_start_index) so the caller can switch extrusion width at the boundary.
+    The join between core and cage is DRAWN, never travelled — the no-travel rule holds.
+    """
+    core = nucleon_path(N, a, a * ratio, cx, cy, n_per, phase, speed, accel, max_seg)
+    cage = nucleon_path(N2, a2, a2 * ratio2, cx, cy, n_per, phase + 0.37, speed, accel, max_seg)
+    return core + cage, len(core)
+
+
 def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_seg=None):
     """ADAPTIVE sampling: dense only where the curve is actually tight.
 
@@ -104,7 +125,8 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_
 
 def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_win,
          temp, bed, fan, fil_d, home, n_per, first_slow=0, first_speed_frac=1.0,
-         first_squish=0.85, vase=False, z_step=None, wave_amp=0.0, wave_len=8.0):
+         first_squish=0.85, vase=False, z_step=None, wave_amp=0.0, wave_len=8.0,
+         cage_N=0, cage_a=0.0, cage_ratio=0.55, cage_w=0.0):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
@@ -121,6 +143,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # roughly round and deposits MORE than commanded, so the part climbs into the nozzle.
     # z_step defaults to layer_h (the old behaviour) but can be set to the MEASURED deposit.
     z_rise = z_step if z_step else layer_h
+    cage_e_per_mm = ((cage_w or strand_w) * layer_h) / area
     # ARCH vs LAYER STEP — the collision rule. A lift deposits plastic `lift` mm ABOVE the surface
     # it left. The next pass comes round at z_rise. If lift >= z_rise the nozzle arrives BELOW its
     # own arch and knocks the part off the plate — which is exactly what happened at 28% on
@@ -223,11 +246,16 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # layer_h*(N-1)/N. For N=6 that is 0.50mm against a 0.60mm-tall bead, so strands still
         # overlap and fuse. It only fails if the spread exceeds the bead height, i.e. never, since
         # the spread is always < layer_h by construction.
-        full = []
+        full = []; cage_marks = []
         for layer in range(layers):
             ph = (math.pi / N) * (layer * 0.5)
-            seg = nucleon_path(N, a, b, cx, cy, n_per, ph, speed=speed,
-                               max_seg=(lift_win / 6.0) if weld < 1.0 else None)
+            _ms = (lift_win / 6.0) if weld < 1.0 else None
+            if cage_N:
+                seg, ci = nested_path(N, a, ratio, cage_N, cage_a, cage_ratio,
+                                      cx, cy, n_per, ph, speed, None, _ms)
+                cage_marks.append((len(full) + (0 if layer == 0 else -1) + ci, len(full) + len(seg)))
+            else:
+                seg = nucleon_path(N, a, b, cx, cy, n_per, ph, speed=speed, max_seg=_ms)
             full.extend(seg if layer == 0 else seg[1:])
         cum = [0.0]
         for i in range(len(full) - 1):
@@ -278,7 +306,13 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                 L.append(f"M106 S{fan}")
                 L.append("SET_PIN PIN=fan1 VALUE=255      ; blowers on — layer 1 has bonded")
                 L.append("SET_PIN PIN=fan2 VALUE=255")
-            e += math.dist(full[i - 1], full[i]) * e_per_mm
+            _epm = e_per_mm
+            if cage_N:
+                for cs, ce in cage_marks:
+                    if cs <= i < ce:
+                        _epm = cage_e_per_mm      # thin strand in the cage
+                        break
+            e += math.dist(full[i - 1], full[i]) * _epm
             L.append(f"G1 {'F%d ' % lf if i == 1 or (frac >= 1.0/layers and cum[i-1]/total < 1.0/layers) else ''}"
                      f"X{full[i][0]:.3f} Y{full[i][1]:.3f} Z{z+dz:.4f} E{e:.5f}")
         L += ["M107", "SET_PIN PIN=fan1 VALUE=0", "SET_PIN PIN=fan2 VALUE=0",
@@ -385,6 +419,10 @@ if __name__ == "__main__":
     ap.add_argument("--first-squish", type=float, default=0.85, help="first-layer Z as a fraction")
     ap.add_argument("--z-step", type=float, default=None,
                     help="Z rise per layer — set to the MEASURED deposit, not the bead height")
+    ap.add_argument("--cage-N", type=int, default=0, help="ellipses in the brittle outer cage")
+    ap.add_argument("--cage-a", type=float, default=0.0, help="cage semi-major axis mm")
+    ap.add_argument("--cage-ratio", type=float, default=0.55)
+    ap.add_argument("--cage-w", type=float, default=0.9, help="cage strand width — thin = brittle")
     ap.add_argument("--wave-amp", type=float, default=0.0,
                     help="continuous Z wave amplitude mm — the high-Z-travel mode")
     ap.add_argument("--wave-len", type=float, default=8.0, help="wave period, mm of path")
@@ -396,7 +434,7 @@ if __name__ == "__main__":
     g, st = emit(a.N, a.a, a.ratio, a.origin, a.layers, a.layer_h, a.strand_w, a.flow, a.weld,
                  a.lift, a.lift_win, a.temp, a.bed, a.fan, 1.75, not a.no_home, a.n_per,
                  a.first_slow, a.first_frac, a.first_squish, a.vase, a.z_step,
-                 a.wave_amp, a.wave_len)
+                 a.wave_amp, a.wave_len, a.cage_N, a.cage_a, a.cage_ratio, a.cage_w)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/nucleon_{'nohome_' if a.no_home else ''}{'vase_' if a.vase else ''}"
           f"N{a.N}_weld{a.weld:g}_T{a.temp}.gcode")
