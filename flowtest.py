@@ -139,13 +139,28 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
         r = r_base + dr
         x, y = cx + r * math.cos(th), cy + r * math.sin(th)
         if fixed_speed:
+            fixed_speed = min(fixed_speed, machine.MAX_SPEED)
             # ramp WIDTH at constant speed: removes speed as a confound in a flow test
             _w = q_at_r(r_base) / (fixed_speed * layer_h)
             e_local = (_w * layer_h) / area
-            f_now = round(fixed_speed * 60)
+            f_now = round(min(fixed_speed, machine.MAX_SPEED) * 60)
         else:
-            e_local = e_per_mm
-            f_now = round(q_at_r(r_base) / (line_w * layer_h) * 60)
+            # HARD CAP the head speed (machine.MAX_SPEED). If the flow the ramp wants would need
+            # a faster head than the work tolerates, WIDEN THE BEAD instead -- that keeps the flow
+            # honest, which is the whole point of a flow test, while the head stays slow. Oleg:
+            # "big line height and big line width is our way, that how we get high volume not
+            # moving head like crazy".
+            _v = q_at_r(r_base) / (line_w * layer_h)
+            if _v > machine.MAX_SPEED:
+                _w_now = q_at_r(r_base) / (machine.MAX_SPEED * layer_h)
+                _v = machine.MAX_SPEED
+            else:
+                _w_now = line_w
+            # E MUST FOLLOW THE WIDENED BEAD. Capping the speed while still metering the original
+            # width would deliver LESS flow than the label says, and a flow test that lies about
+            # its own flow is worse than no test.
+            e_local = (_w_now * layer_h) / area
+            f_now = round(_v * 60)
         e += math.dist((px, py), (x, y)) * e_local
         L.append(f"G1 F{f_now} X{x:.3f} Y{y:.3f} E{e:.5f}")
         px, py = x, y
@@ -184,7 +199,12 @@ if __name__ == "__main__":
                     help="turn spacing mm; lines OVERLAP when < the landed bead width")
     ap.add_argument("--overlap", type=float, default=1.10,
                     help="material multiple vs spacing (1.10 = 10%% squeeze)")
-    ap.add_argument("--fixed-speed", type=float, default=machine.MACHINE_MAX_SPEED,
+    ap.add_argument("--fixed-speed", type=float, default=0,
+                    # NOT MACHINE_MAX_SPEED. This is the speed the HEAD moves, so it is
+                    # bounded by machine.MAX_SPEED (the work cap), not by what the
+                    # machine could do. Defaulting it to 120 ran an entire flow ramp at
+                    # 120 mm/s in fixed-speed mode, which starves the bead to a thread
+                    # at low flow — it reads as "not extruding at all".
                     help="hold this speed and ramp WIDTH instead (0 = ramp speed)")
     ap.add_argument("--bed-size", default=None, help="X,Y bed size, e.g. 229,225 for the K1C")
     ap.add_argument("--no-home", action="store_true")

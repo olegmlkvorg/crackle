@@ -243,9 +243,20 @@ def check(path):
     # The feedrate is STICKY in gcode: a bare "G1 F6900" line sets the speed for every move after
     # it. So the check must track the current F and test it at each MOVE, not only on lines that
     # happen to carry both F and E — my first version did the latter and passed a 115 mm/s file.
+    # Only the BODY is checked. The prime/purge line runs fast on purpose (flowtest.py primes at
+    # F7200) and is not part geometry — flagging it reported a 120 mm/s violation in a file whose
+    # actual ramp tops out at 20. A guard that fires on the wrong thing is as useless as one that
+    # does not fire.
     _f = 0.0
     _worst = (0.0, 0)
+    _in_body = False
     for _i, _ln in enumerate(open(path)):
+        if 'BODY_START' in _ln:
+            _in_body = True
+            _f = 0.0
+            continue
+        if not _in_body:
+            continue
         _mf = re.search(r'\bF(\d+(?:\.\d+)?)', _ln)
         if _mf and _ln.startswith(('G1', 'G0')):
             _f = float(_mf.group(1)) / 60.0
