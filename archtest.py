@@ -43,7 +43,7 @@ def win_for(amp, speed, aspect):
 
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
-         bed_xy, home, spacing, fan, squish):
+         bed_xy, home, spacing, fan, squish, anchor, weld_dab):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -137,6 +137,17 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             f_z = round(min(machine.MAX_Z_V,
                             math.sqrt(2 * machine.MAX_Z_A * amp),
                             flow / (line_w * layer_h)) * 60)
+            # 0. ANCHOR — press HARD into the plate and weld a foot before flying.
+            # Oleg: "make head put it reall hard on the plate before going up. it is detaching all
+            # the time". A post rising from a lightly-laid bead has almost nothing holding it: the
+            # nozzle pulls upward on a strand whose only bond is the squish it happened to get in
+            # passing. Dropping to `anchor` mm — well under the bead height — presses the plastic
+            # into the plate, and a stationary dab builds an actual foot for the post to grow from.
+            e += (z_base - anchor) * e_per_mm
+            L.append(f"G1 F600 Z{anchor:.4f} E{e:.5f}            ; PRESS into the plate")
+            e += weld_dab
+            L.append(f"G1 F180 E{e:.5f}                     ; dab a foot, XY and Z both still")
+            z_top = anchor + amp
             # 1. STALL, rise — pure Z, XY frozen
             e += amp * e_per_mm
             L.append(f"G1 F{f_z} Z{z_top:.4f} E{e:.5f}          ; stall + rise {amp:.1f}mm")
@@ -146,9 +157,13 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             dd = math.dist((px, py), (x2, y2)); s += dd
             e += dd * e_per_mm
             L.append(f"G1 F{f_mm_min} X{x2:.3f} Y{y2:.3f} E{e:.5f}   ; carry {dd:.1f}mm at height")
-            # 3. STALL, descend
+            # 3. STALL, descend — land on the plate and weld a second foot
             e += amp * e_per_mm
-            L.append(f"G1 F{f_z} Z{z_base:.4f} E{e:.5f}          ; stall + descend")
+            L.append(f"G1 F{f_z} Z{anchor:.4f} E{e:.5f}          ; stall + descend onto the plate")
+            e += weld_dab
+            L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
+            e += (z_base - anchor) * e_per_mm
+            L.append(f"G1 F600 Z{z_base:.4f} E{e:.5f}            ; back to the squished baseline")
             th = th2; px, py = x2, y2
             arcs.append((round(amp, 2), round(r)))
             next_arc = s + pitch
@@ -164,8 +179,12 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--a-lo", type=float, default=0.3)
+    ap.add_argument("--a-lo", type=float, default=10.0)
     ap.add_argument("--a-hi", type=float, default=4.0)
+    ap.add_argument("--anchor", type=float, default=0.35,
+                    help="absolute Z (mm) to press to before rising — well under the bead")
+    ap.add_argument("--weld-dab", type=float, default=1.2,
+                    help="mm of filament dabbed stationary to build a foot")
     ap.add_argument("--squish", type=float, default=0.72,
                     help="baseline Z as a fraction of layer_h — under 1 presses the base in")
     ap.add_argument("--aspect", type=float, default=1.6,
@@ -188,7 +207,7 @@ if __name__ == "__main__":
     bed_xy = tuple(float(v) for v in a.bed_size.split(","))
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
-                 a.squish)
+                 a.squish, a.anchor, a.weld_dab)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
