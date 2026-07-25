@@ -4,7 +4,7 @@ Oleg, 2026-07-25: "you should be extruding at max speed we know nozzle can flow.
 negotiable. 100% of the time."
 """
 MAX_FLOW = 81.2        # mm3/s, MEASURED (spiral ramp, first skips at 81.2 @ r137, 0.8 nozzle, PLA 230C)
-FLOW = 60.0            # CORRECTED TWICE on 2026-07-25 from audible feedback: cracking at 80,
+FLOW = 54.0            # working = 90% of 60, the highest flow CONFIRMED CLEAN at 210C on a
                        # then still cracking at 70. Oleg heard the extruder
                        # CRACKING (skipping) at 80 during sustained printing. The spiral ramp put
                        # first visual skips at 81.2, but a ramp only holds each flow for a few
@@ -12,7 +12,15 @@ FLOW = 60.0            # CORRECTED TWICE on 2026-07-25 from audible feedback: cr
                        # multi-layer printing loads the extruder continuously and reveals a lower
                        # practical ceiling. Trust the ear over the ramp: audible skipping is the
                        # extruder losing grip, and it is upstream of anything visible on the plate.
-MEASURED_INSTANT = 81.2  # what the ramp showed; kept for the record, not for use
+                       # healthy nozzle (45-60 ramp printed clean end to end, 2026-07-25).
+                       # The true ceiling is HIGHER — 60 was the top of the window, not a limit.
+                       # A 60-100 ramp is uploaded to find it.
+VOID_MEASUREMENTS = {  # kept visible so nobody re-adopts them
+    81.2: "ramp measured with a clog present or developing",
+    80.0: "cracked — clog, not flow",
+    70.0: "cracked — clog, not flow",
+    60.0: "set while still chasing the clog; later printed CLEAN, so never a limit",
+}
 NOZZLE = 0.8
 MAX_VELOCITY = 800.0
 MAX_ACCEL = 30000.0     # config ceiling
