@@ -48,3 +48,15 @@ the commanded one.** Silent clamp, no error, no warning: a run you believe was a
 Practical: any run commanding >120 actually ran at 120, so those runs remain comparable to each
 other. Check with:
     curl -s "http://192.168.3.140:7125/printer/objects/query?heater_bed"
+
+## M190 is a MINIMUM wait — it does not cool (found 2026-07-25, the hard way)
+`M190 S60` with the bed at 100 returns **immediately**. Klipper's M190 is `TEMPERATURE_WAIT
+MINIMUM=`, so it only ever waits for heating. Coupon B was believed to print at bed 60 and actually
+printed at ~95-100. Silent: no error, no warning, and the gcode looks correct.
+
+**Consequence for any back-to-back series:** a passively-cooling bed means every coupon prints at a
+different temperature, which silently confounds the comparison they exist to make.
+
+**Fix:** set the target and poll until the bed has actually arrived BEFORE starting the series.
+    curl -s -X POST ".../printer/gcode/script?script=M140%20S60"
+    # then poll heater_bed.temperature until <= target+2, and only then start
