@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Push gcode straight to a Creality printer over Moonraker. Upload only — never auto-starts.
+"""Push gcode straight to a Creality printer over Moonraker — uploads AND starts it.
 
 The K2/K1 run Klipper + Moonraker, so the file API is open on :7125. This uploads; you press
 Print on the touchscreen.
 
-WHY IT WILL NOT START THE PRINT FOR YOU (deliberate, and I'd keep it this way):
-  1. There is a known bug where a job *started* remotely on recent firmware can crash the head into
-     an unhomed axis. Starting from the screen avoids it entirely.
-  2. Starting a print is a physical action on a hot machine in a room I can't see. Uploading is
-     reversible; starting is not.
-  3. All three of your printers are usually busy — this refuses to upload to a printer that is
-     mid-print unless you pass --force, so a stray command can't touch a running job.
+It starts the job by default (2026-07-25: Oleg — "i have way higher risk tolerance then you").
+Iteration speed is the point; a wasted coupon costs pennies and a minute. Pass --no-start to only
+upload.
+
+The ONE guard that stays and is NOT overridable: never overwrite the file Klipper is currently
+streaming off disk. That isn't caution, it's corruption — Klipper reads the running job
+progressively, so rewriting it mid-print garbles the remainder. Everything else is now opt-out.
 
 Usage:
   python3 push.py --list                      # what's on the network + what each is doing
@@ -44,6 +44,19 @@ def info(ip):
     j = api(ip, "/printer/info")
     return j.get("result", {}).get("hostname", "?") if "_error" not in j else "unreachable"
 
+def start(ip, name):
+    req = urllib.request.Request(f"http://{ip}:7125/printer/print/start?filename={name}",
+                                 data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            json.load(r)
+        print(f"   ▶ started {name}")
+        return True
+    except Exception as e:
+        print(f"   start FAILED: {e}")
+        return False
+
+
 def upload(ip, path, force=False):
     st = status(ip)
     # HARD guard, not overridable: Klipper streams the running job progressively off disk.
@@ -70,7 +83,6 @@ def upload(ip, path, force=False):
         with urllib.request.urlopen(req, timeout=60) as r:
             json.load(r)
         print(f"uploaded {name} ({len(data)/1024:.0f} KB) -> {ip}")
-        print("   now press Print on the touchscreen and pick it. (I don't start prints; see the docstring.)")
         return True
     except Exception as e:
         print(f"upload FAILED to {ip}: {e}")
@@ -82,6 +94,7 @@ if __name__ == "__main__":
     ap.add_argument("--printer", default="k2plus", choices=list(PRINTERS))
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--force", action="store_true", help="upload even if that printer is mid-print")
+    ap.add_argument("--no-start", action="store_true", help="upload only, do not start")
     a = ap.parse_args()
     if a.list or not a.files:
         for k, ip in PRINTERS.items():
@@ -90,4 +103,9 @@ if __name__ == "__main__":
         sys.exit(0)
     ip = PRINTERS[a.printer]
     ok = all(upload(ip, f, a.force) for f in a.files)
+    if ok and not a.no_start:
+        if len(a.files) > 1:
+            print("   multiple files uploaded — not auto-starting; name one file to start it")
+        else:
+            ok = start(ip, os.path.basename(a.files[0]))
     sys.exit(0 if ok else 1)
