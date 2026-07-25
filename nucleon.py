@@ -42,7 +42,7 @@ def _ellipse_R(a, b, t):
     return num / max(a * b, 1e-9)
 
 
-def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None):
+def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_seg=None):
     """ADAPTIVE sampling: dense only where the curve is actually tight.
 
     Uniform sampling at n_per=600 gave 0.237mm segments, which at 235 mm/s is 990 moves/second.
@@ -78,6 +78,14 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None):
             pts.append((cx + x * c - y * s, cy + x * s + y * c))
             R = _ellipse_R(a, b, t)
             seg = max(2.0 * R * h, 0.15)              # arc length we may travel before turning
+            if max_seg:
+                # A Z ARCH IS A FEATURE ON THE PATH, and a feature cannot be finer than the
+                # sampling that carries it. Curvature-adaptive sampling gives ~1.8mm segments; a
+                # 2mm lift window then contains ONE sample, so the arch renders as a single blip
+                # and the Z axis barely moves — measured 0.27m of Z travel where the amplitude
+                # predicted 3.47m. Same defect the sine-sampling guard was written for; it was
+                # never carried across to this generator.
+                seg = min(seg, max_seg)
             dRdt = math.hypot(a * math.sin(t), b * math.cos(t))   # |dP/dt|
             t += max(seg / max(dRdt, 1e-9), 1e-4)
         x, y = a, 0.0
@@ -96,7 +104,7 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None):
 
 def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_win,
          temp, bed, fan, fil_d, home, n_per, first_slow=0, first_speed_frac=1.0,
-         first_squish=0.85, vase=False, z_step=None):
+         first_squish=0.85, vase=False, z_step=None, wave_amp=0.0, wave_len=8.0):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
@@ -113,7 +121,35 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # roughly round and deposits MORE than commanded, so the part climbs into the nozzle.
     # z_step defaults to layer_h (the old behaviour) but can be set to the MEASURED deposit.
     z_rise = z_step if z_step else layer_h
+    # ARCH vs LAYER STEP — the collision rule. A lift deposits plastic `lift` mm ABOVE the surface
+    # it left. The next pass comes round at z_rise. If lift >= z_rise the nozzle arrives BELOW its
+    # own arch and knocks the part off the plate — which is exactly what happened at 28% on
+    # 2026-07-25 with a 2.5mm lift against a 1.57mm step.
+    # Sizing lift just UNDER z_rise is the useful case: the arch tip lands where the next pass runs,
+    # so it WELDS to the layer above instead of being run over. That turns stacked sheets into a
+    # 3D truss, and it is what lets the amplitude grow — raise z_rise and the arch may grow with it.
+    if lift and weld < 1.0 and lift >= z_rise:
+        raise SystemExit(
+            f"lift {lift}mm >= layer step {z_rise}mm: the nozzle would return BELOW its own arch "
+            f"and knock the part loose.\n"
+            f"  Either raise --z-step above {lift + 0.2:.2f}, or drop --lift below {z_rise - 0.2:.2f}.\n"
+            f"  Sizing lift just under the step (e.g. {z_rise - 0.2:.2f}) makes the arch tip weld to "
+            f"the layer above instead — a truss rather than stacked sheets.")
 
+    if wave_amp:
+        _vz = speed * 2 * math.pi * wave_amp / wave_len
+        _az = (2 * math.pi * speed / wave_len) ** 2 * wave_amp
+        if _vz > machine.MAX_Z_V or _az > machine.MAX_Z_A:
+            raise SystemExit(
+                f"Z wave exceeds the axis: v_peak {_vz:.1f} (limit {machine.MAX_Z_V}), "
+                f"a_peak {_az:.0f} (limit {machine.MAX_Z_A}).\n"
+                f"  At {speed:.0f} mm/s the largest amplitude for a {wave_len}mm wave is "
+                f"{min(machine.MAX_Z_V*wave_len/(2*math.pi*speed), machine.MAX_Z_A*wave_len**2/(4*math.pi**2*speed**2)):.2f} mm.")
+        if z_step and 2 * wave_amp >= z_step - 0.0:
+            raise SystemExit(
+                f"wave peak-to-peak {2*wave_amp:.2f}mm >= layer step {z_step}mm — adjacent layers "
+                f"would intersect and the nozzle would strike the one below.\n"
+                f"  Raise --z-step above {2*wave_amp + 0.3:.2f} or drop --wave-amp below {(z_step-0.3)/2:.2f}.")
     if strand_w < machine.NOZZLE:
         raise SystemExit(f"strand_w {strand_w} is below the {machine.NOZZLE}mm orifice — a nozzle "
                          f"cannot lay a bead narrower than its hole; the melt stretches thin and "
@@ -135,7 +171,17 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
     w(f"M190 S{bed}"); w(f"M109 S{temp}")
-    w("M204 S8000"); w("M107" if not fan else f"M106 S{fan}")
+    w("M204 S8000")
+    w("M107" if not fan else f"M106 S{fan}")
+    if fan >= 255:
+        # MAX COOLING means all THREE fans, not just the part fan. Oleg: "to push z to the limits
+        # you shall freeze stuff in the air so max air flow on all fans" — an arch that does not
+        # freeze mid-flight sags into a droop, so cooling is what makes the geometry possible at all.
+        # M106 drives fan0 only. fan1 (auxiliary side blower) and fan2 (chamber) are output_pins and
+        # need SET_PIN — and they are scaled 0-255, NOT 0-1: SET_PIN VALUE=1.0 sets 1/255, which
+        # reports "ok" and leaves the fan effectively off. Verified live on the machine.
+        w("SET_PIN PIN=fan1 VALUE=255      ; auxiliary side blower")
+        w("SET_PIN PIN=fan2 VALUE=255      ; chamber")
     w("M82"); w("G92 E0")
     # NO TRAVEL IS A RULE (Oleg, 2026-07-25: "always our prints are continuous extrusion").
     # The prime line therefore ENDS exactly where the object BEGINS, so there is no reposition
@@ -169,7 +215,8 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         full = []
         for layer in range(layers):
             ph = (math.pi / N) * (layer * 0.5)
-            seg = nucleon_path(N, a, b, cx, cy, n_per, ph, speed=speed)
+            seg = nucleon_path(N, a, b, cx, cy, n_per, ph, speed=speed,
+                               max_seg=(lift_win / 6.0) if weld < 1.0 else None)
             full.extend(seg if layer == 0 else seg[1:])
         cum = [0.0]
         for i in range(len(full) - 1):
@@ -195,6 +242,20 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             z = z_lo + (z_hi - z_lo) * frac
             lf = round(min(machine.FIRST_LAYER_SPEED, speed) * 60)   # never faster than the body if frac < 1.0 / layers else f_mm_min
             dz = 0.0
+            if wave_amp:
+                # CONTINUOUS Z WAVE, independent of crossings. Arches triggered at crossings can
+                # never give much total Z travel: crossings sit ~1.3mm apart, so any window wide
+                # enough to be printable overlaps its neighbours and the Z sits on a plateau
+                # instead of returning. Measured best 10mm of Z per 100mm of XY.
+                # A wave along the PATH has no such constraint. Its travel rate is 4A/L, and the
+                # Z-velocity limit caps A/L at MAX_Z_V/(2*pi*v) — which works out at ~83mm of Z per
+                # 100mm of XY whatever wavelength is chosen. Eight times better, and at the axis
+                # limit rather than at an accident of geometry.
+                # Biased so the wave never goes BELOW the ramp: sin() from a zero baseline dips
+                # negative, and on the first layer that puts the nozzle under the plate-level Z.
+                # Offsetting by +amp keeps dz in [0, 2*amp] with the SAME total travel (4*amp per
+                # wavelength) — the wave still rises and falls, it just does so above the surface.
+                dz = wave_amp * (1.0 + math.sin(2 * math.pi * cum[i] / wave_len))
             if second:
                 s_here = cum[i]
                 for sv in second:
@@ -204,7 +265,8 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             e += math.dist(full[i - 1], full[i]) * e_per_mm
             L.append(f"G1 {'F%d ' % lf if i == 1 or (frac >= 1.0/layers and cum[i-1]/total < 1.0/layers) else ''}"
                      f"X{full[i][0]:.3f} Y{full[i][1]:.3f} Z{z+dz:.4f} E{e:.5f}")
-        L += ["M107", "M104 S0", "M140 S0", f"G1 Z{z_hi+40:.1f} F900",   # Z-only lift, no XY
+        L += ["M107", "SET_PIN PIN=fan1 VALUE=0", "SET_PIN PIN=fan2 VALUE=0",
+              "M104 S0", "M140 S0", f"G1 Z{z_hi+40:.1f} F900",   # Z-only lift, no XY
               "G0 X10 Y340 F9000"]   # park, after the object is complete
         grams = e * area * 1.24 / 1000
         return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed),
@@ -227,7 +289,10 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # rotate each layer off the last so crossings distribute through the volume instead of
         # stacking into welded vertical columns
         phase = (math.pi / N) * (layer * 0.5)
-        pts = nucleon_path(N, a, b, cx, cy, n_per, phase, speed=speed)
+        _ms = [x for x in ((lift_win/6.0) if weld < 1.0 else None,
+                           (wave_len/8.0) if wave_amp else None) if x]
+        pts = nucleon_path(N, a, b, cx, cy, n_per, phase, speed=speed,
+                           max_seg=min(_ms) if _ms else None)
         cum = [0.0]
         for i in range(len(pts) - 1):
             cum.append(cum[-1] + math.dist(pts[i], pts[i + 1]))
@@ -288,7 +353,8 @@ if __name__ == "__main__":
     ap.add_argument("--lift-win", type=float, default=12.0)
     ap.add_argument("--temp", type=int, default=machine.TEMP)   # material-rated, not a guess
     ap.add_argument("--bed", type=int, default=60)
-    ap.add_argument("--fan", type=int, default=0)
+    ap.add_argument("--fan", type=int, default=0,
+                    help="0 = off (crossings weld). 255 = ALL THREE fans, for arches")
     ap.add_argument("--n-per", type=int, default=600, help="samples per ellipse")
     ap.add_argument("--first-slow", type=int, default=1,
                     help="layers slowed for adhesion — 0 by default: the whole print now runs\n                          at 50 mm/s, which IS a first-layer speed, so nothing needs slowing.\n                          Oleg: thick and irregular lines are good, always.")
@@ -296,6 +362,9 @@ if __name__ == "__main__":
     ap.add_argument("--first-squish", type=float, default=0.85, help="first-layer Z as a fraction")
     ap.add_argument("--z-step", type=float, default=None,
                     help="Z rise per layer — set to the MEASURED deposit, not the bead height")
+    ap.add_argument("--wave-amp", type=float, default=0.0,
+                    help="continuous Z wave amplitude mm — the high-Z-travel mode")
+    ap.add_argument("--wave-len", type=float, default=8.0, help="wave period, mm of path")
     ap.add_argument("--vase", action="store_true",
                     help="one continuous extrusion, Z rising with path — no travels at all")
     ap.add_argument("--no-home", action="store_true")
@@ -303,7 +372,8 @@ if __name__ == "__main__":
     a = ap.parse_args()
     g, st = emit(a.N, a.a, a.ratio, a.origin, a.layers, a.layer_h, a.strand_w, a.flow, a.weld,
                  a.lift, a.lift_win, a.temp, a.bed, a.fan, 1.75, not a.no_home, a.n_per,
-                 a.first_slow, a.first_frac, a.first_squish, a.vase, a.z_step)
+                 a.first_slow, a.first_frac, a.first_squish, a.vase, a.z_step,
+                 a.wave_amp, a.wave_len)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/nucleon_{'nohome_' if a.no_home else ''}{'vase_' if a.vase else ''}"
           f"N{a.N}_weld{a.weld:g}_T{a.temp}.gcode")

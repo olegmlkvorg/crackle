@@ -57,7 +57,30 @@ def start(ip, name):
         return False
 
 
-def upload(ip, path, force=False):
+def _validated(path):
+    """Refuse to upload a file that fails validate.py.
+
+    Every guard written today has been run BY HAND before pushing, which works until it does not:
+    on 2026-07-25 a file that failed validation (Z descending below the layer floor) was uploaded
+    and started anyway, because push.py never asked. A check that depends on remembering to run it
+    is not a check."""
+    import subprocess, sys as _s
+    r = subprocess.run([_s.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                    "validate.py"), path],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"BLOCKED: {os.path.basename(path)} fails validation —")
+        for ln in r.stdout.split("\n"):
+            if "FAIL" in ln:
+                print("  " + ln.strip())
+        print("  fix it, or pass --skip-validate if you know better than the validator.")
+        return False
+    return True
+
+
+def upload(ip, path, force=False, skip_validate=False):
+    if not skip_validate and not _validated(path):
+        return False
     st = status(ip)
     # HARD guard, not overridable: Klipper streams the running job progressively off disk.
     # Overwriting that file mid-print can corrupt the job. --force does NOT bypass this.
@@ -95,6 +118,7 @@ if __name__ == "__main__":
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--force", action="store_true", help="upload even if that printer is mid-print")
     ap.add_argument("--no-start", action="store_true", help="upload only, do not start")
+    ap.add_argument("--skip-validate", action="store_true", help="push a file that fails validate.py")
     a = ap.parse_args()
     if a.list or not a.files:
         for k, ip in PRINTERS.items():
@@ -102,7 +126,7 @@ if __name__ == "__main__":
             print(f"  {k:<7} {ip:<15} {info(ip):<14} {st['state']:<10} {st.get('pct',0):>3}%  {str(st.get('file'))[:44]}")
         sys.exit(0)
     ip = PRINTERS[a.printer]
-    ok = all(upload(ip, f, a.force) for f in a.files)
+    ok = all(upload(ip, f, a.force, a.skip_validate) for f in a.files)
     if ok and not a.no_start:
         if len(a.files) > 1:
             print("   multiple files uploaded — not auto-starting; name one file to start it")
