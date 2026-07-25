@@ -229,11 +229,14 @@ if __name__ == "__main__":
     ap.add_argument("--fillet", type=float, default=0)
     ap.add_argument("--layers", type=int, default=1)
     ap.add_argument("--open", action="store_true", help="open Hilbert instead of closed Moore")
-    ap.add_argument("--bed-size", default="229,225")
+    ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED),
+                    help="picks the PRINTABLE plate size from machine.BED")
+    ap.add_argument("--bed-size", default="", help="override WxY mm (rarely right)")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
-    bxy = tuple(float(v) for v in a.bed_size.split(","))
+    bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
+           else machine.BED[a.printer])
     span = a.span or (min(bxy) - 2 * a.margin)
     # Default the fillet to just under half the pitch: any larger and opposite corners of the same
     # cell would eat into each other and the grid stops reading as a grid.
@@ -242,7 +245,7 @@ if __name__ == "__main__":
     g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75, bxy,
                  not a.no_home, a.press, a.fan, fillet, a.layers, not a.open)
     os.makedirs(a.out, exist_ok=True)
-    tag = "k1c" if abs(bxy[0] - 229) < 5 else "k2"
+    tag = a.printer
     kind = "hilbert" if a.open else "moore"
     fn = f"{a.out}/{kind}_{tag}_o{a.order}_{span:.0f}mm_L{a.layers}_T{a.temp}.gcode"
     open(fn, "w").write(g)

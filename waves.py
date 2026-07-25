@@ -203,15 +203,18 @@ if __name__ == "__main__":
     ap.add_argument("--layers", type=int, default=1, help="stacked layers of comb")
     ap.add_argument("--fillet", type=float, default=3.0,
                     help="corner rounding radius mm — 0 gives sharp corners (banned)")
-    ap.add_argument("--bed-size", default="229,225")
+    ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED),
+                    help="picks the PRINTABLE plate size from machine.BED")
+    ap.add_argument("--bed-size", default="", help="override WxY mm (rarely right)")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
-    bxy = tuple(float(v) for v in a.bed_size.split(","))
+    bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
+           else machine.BED[a.printer])
     g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75,
                  bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers)
     os.makedirs(a.out, exist_ok=True)
-    tag = "k1c" if abs(bxy[0] - 229) < 5 else "k2"
+    tag = a.printer
     fn = f"{a.out}/waves_{tag}_{a.cols}x{a.rows}_c{a.cell:g}_T{a.temp}.gcode"
     open(fn, "w").write(g)
     print(f"{fn}\n  {a.rows} ribbons of {a.cols} waves at {a.cell}mm -> "

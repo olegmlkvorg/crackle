@@ -146,3 +146,17 @@ K1C_MEASURED = 59.6     # where it began skipping, 1.0 nozzle, 210C
 # rather than squashing, raise it rather than continue.
 PRESS_HARD = 0.10       # absolute Z for anything anchoring to the plate
 # ---------------------------------------------------------------------------------------------
+
+
+# PRINTABLE PLATE, not kinematic reach. Read from each machine's own printer.cfg and confirmed
+# against [bed_mesh] limits on 2026-07-25. These differ from toolhead.axis_maximum, which includes
+# off-plate overtravel -- the K1C homes X to 229 which is PAST the plate edge, and using 229x225 as
+# a bed size silently pushes parts off-centre (and would push them off the plate outright at larger
+# sizes). The K2's own PRINTER_PARAM clamps Y to 352 at runtime even though its config says 400.
+#   k1c  : "# Printer_size: 220x220x250", bed_mesh 10,10 -> 210,210
+#   k2   : product_param bed_size 350/350/350, bed_mesh 5,5 -> 345,345
+BED = {
+    "k1c":    (220.0, 220.0),
+    "k2plus": (350.0, 350.0),
+    "f022":   (220.0, 220.0),
+}
