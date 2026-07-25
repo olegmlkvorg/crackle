@@ -67,7 +67,12 @@ class Params:
     prime_f: int = 3000         # from filament_max_volumetric_speed/0.3*60 (PLA ~15mm3/s)
     tally: int = 1              # raised bars on the base = which coupon this is
     home: bool = True           # False = skip G28 (only when already homed; saves the whole calibration)
-    strand_ratio: float = 0.35  # strand flow as a fraction of a normal line (thin but real)
+    strand_w: float = 0.5       # STRAND width (mm) — ABSOLUTE, deliberately decoupled from line_w.
+                                # Pillars and strands want opposite things: pillars chunky (wide
+                                # line = sturdy anchor), strands THIN. The crackle is thin fused
+                                # crossings SNAPPING; a fat strand bends quietly instead. So a wide
+                                # pillar line must NOT drag the strand thickness up with it.
+    strand_ratio: float = 0.35  # (legacy; strand_w wins when set)
     fast: bool = False          # skip calibration/nozzle-clean ceremony (see notes)
     machine: str = "k2"         # k2 | generic — k2 uses Creality's START_PRINT/END_PRINT macros
     start_gcode: str = ""       # if set, used VERBATIM instead of the generic start (see README)
@@ -158,7 +163,9 @@ class G:
         not: pressure drops over a long fast travel, so the pillars got almost nothing and the top
         of the coupon failed to extrude (observed 2026-07-25 on coupon A — base fine, web empty).
         A small deliberate E gives a thin strand AND keeps nozzle pressure up so pillars build."""
-        self.e += dist * self.mm_per_mm * self.p.strand_ratio
+        # strand flow uses its OWN width, not the pillar line width
+        per_mm = (self.p.strand_w * self.p.layer_h) / (math.pi * (self.p.filament_d/2)**2)
+        self.e += dist * per_mm
         self.w(f"G1 F{f or self.p.travel_f} X{x:.3f} Y{y:.3f} E{self.e:.5f}")
     def extrude_to(self, x, y, dist, f=None):
         self.e += dist * self.mm_per_mm
@@ -368,7 +375,7 @@ if __name__ == "__main__":
         #   strand_area = line_w*layer_h*strand_ratio  ->  v = working_flow / strand_area
         wf = a.max_flow * 0.85
         for k, P in PRESETS.items():
-            sa = P.line_w * P.layer_h * P.strand_ratio
+            sa = P.strand_w * P.layer_h
             v = wf / sa                     # mm/s
             PRESETS[k] = replace(P, travel_f=int(min(max(v*60, 1800), 12000)),
                                  print_f=int(min(wf/(P.line_w*P.layer_h)*60, 9000)))
