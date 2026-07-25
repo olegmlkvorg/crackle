@@ -525,15 +525,25 @@ def layer_report(P, m, i=0, label=""):
                 grams=pl['L'] * P['strand_w'] * P['layer_h'] * 1.24 / 1000)
 
 
-def match_mass(P, m, L_target, lo=3.0, hi=13.0):
-    """Hold path length (=mass) constant across the ladder by trimming r0. Judge correction to
-    SPIRA-1: its m-ladder was NOT constant mass (+24.9% from m=4.5 to 10.5) and said it was."""
-    for _ in range(22):
+def match_mass(P, m, L_target, lo=7.0, hi=13.0):
+    """Hold path length (= mass) constant across the ladder by trimming r0. Judge correction to
+    SPIRA-1, which claimed a constant-mass m-ladder and actually moved 24.9%.
+
+    With `turns` held at a fixed integer, L grows with r0 (the mean radius rises while the turn
+    count does not), so the bisection direction is the OPPOSITE of the r0 sweep in SPIRA-1 where
+    turns floated. Direction is detected, not assumed — getting it backwards silently pins every
+    rung to a bound, which is exactly what it did on the first run."""
+    def L_of(r):
+        xs, ys = layer_polyline(0, m, dict(P, r0=r))
+        return float(arc(xs, ys)[-1])
+    Llo, Lhi = L_of(lo), L_of(hi)
+    if not (min(Llo, Lhi) <= L_target <= max(Llo, Lhi)):
+        return lo if abs(Llo - L_target) < abs(Lhi - L_target) else hi   # out of reach: say so
+    up = Lhi > Llo
+    for _ in range(18):
         mid = 0.5 * (lo + hi)
-        Q = dict(P, r0=mid)
-        xs, ys = layer_polyline(0, m, Q)
-        if arc(xs, ys)[-1] > L_target:
-            lo = mid                       # too long -> bigger hole
+        if (L_of(mid) < L_target) == up:
+            lo = mid
         else:
             hi = mid
     return 0.5 * (lo + hi)
@@ -586,11 +596,18 @@ def main():
     ap.add_argument("--layers", type=int, default=DEF['layers'])
     ap.add_argument("--weld", type=float, default=1.0)
     ap.add_argument("--tally", type=int, default=0)
+    ap.add_argument("--match-mass", action="store_true",
+                    help="trim r0 so this rung has the same path length (= mass) as the m=4.57 "
+                         "reference. Use for every coupon in a dose-response ladder.")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     P = dict(DEF, m=a.m, accel=a.accel, flow=a.flow, strand_w=a.strand_w, layers=a.layers,
              weld=a.weld, tally=a.tally, home=not a.no_home)
+    if a.match_mass:
+        ref = layer_report(dict(P, r0=10.0), 4.57)
+        P['r0'] = match_mass(P, P['m'], ref['L'])
+        print(f"mass-matched: r0 = {P['r0']:.2f} mm for path length {ref['L']:.0f} mm/layer")
     v = speed_of(P)
 
     if a.analyse:
@@ -672,7 +689,7 @@ def main():
                   f"   mean depth {st['meancol']:.2f}")
 
     if a.ladder:
-        base = layer_report(P, 6.57)
+        base = layer_report(dict(P, r0=10.0), 4.57)
         print(f"CONSTANT-MASS LADDER — path length held at {base['L']:.0f} mm/layer by trimming r0")
         print(f"{'m':>8}{'r0':>7}{'X':>6}{'L mm':>8}{'g/layer':>9}{'vcap':>7}{'slow':>8}"
               f"{'mem':>7}{'core':>6}")
@@ -681,7 +698,8 @@ def main():
             Q = dict(P, r0=r0)
             r = layer_report(Q, m)
             print(f"{m:>8.2f}{r0:>7.2f}{r['X']:>6}{r['L']:>8.0f}{r['grams']:>9.3f}"
-                  f"{r['vcap']:>7.0f}{r['slow']*100:>7.2f}%{r['mem_mean']:>7.2f}{r['core']:>6.1f}")
+                  f"{r['vcap']:>7.0f}{r['slow']*100:>7.2f}%{r['mem_mean']:>7.2f}{r['core']:>6.1f}"
+                  f"{'' if r['vcap'] >= speed_of(P) else '   << below max-flow speed'}")
         print("  m=5.00 is the integer rung: same mass, same speed profile, ZERO crossings.")
 
     if a.emit:

@@ -86,7 +86,7 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None):
 
 def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_win,
          temp, bed, fan, fil_d, home, n_per, first_slow=0, first_speed_frac=1.0,
-         first_squish=0.85):
+         first_squish=0.85, vase=False):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
@@ -128,6 +128,50 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w("; BODY_START")
 
     e = 0.0; total_x = 0; total_lift = 0
+
+    if vase:
+        # VASE MODE — one unbroken extrusion for the whole object. Oleg: "why not continuous
+        # nucleon? vasemode style". The layered version travels once per layer to reposition at the
+        # path start; twelve layers is twelve visible travel lines. Here Z rises continuously with
+        # distance travelled, so there is no layer change, no reposition, and no travel at all after
+        # the initial approach.
+        #
+        # The crossings still weld, and that is not obvious — it needs checking rather than
+        # assuming. Within one turn the N ellipses now sit at DIFFERENT heights, spread over
+        # layer_h*(N-1)/N. For N=6 that is 0.50mm against a 0.60mm-tall bead, so strands still
+        # overlap and fuse. It only fails if the spread exceeds the bead height, i.e. never, since
+        # the spread is always < layer_h by construction.
+        full = []
+        for layer in range(layers):
+            ph = (math.pi / N) * (layer * 0.5)
+            seg = nucleon_path(N, a, b, cx, cy, n_per, ph, speed=speed)
+            full.extend(seg if layer == 0 else seg[1:])
+        cum = [0.0]
+        for i in range(len(full) - 1):
+            cum.append(cum[-1] + math.dist(full[i], full[i + 1]))
+        total = cum[-1] or 1.0
+        hits, _ = find_crossings(full)
+        total_x = len(hits)
+        L.append(f"; VASE — one continuous extrusion, {len(full)} points, "
+                 f"Z {layer_h*first_squish:.2f} -> {layer_h*layers:.2f}, {total_x} junctions")
+        L.append(f"G0 F9000 X{full[0][0]:.3f} Y{full[0][1]:.3f}")
+        L.append(f"G1 F1800 Z{layer_h*first_squish:.3f}")
+        z_lo = layer_h * first_squish
+        z_hi = layer_h * layers
+        for i in range(1, len(full)):
+            frac = cum[i] / total
+            z = z_lo + (z_hi - z_lo) * frac
+            lf = round(machine.FIRST_LAYER_SPEED * 60) if frac < 1.0 / layers else f_mm_min
+            e += math.dist(full[i - 1], full[i]) * e_per_mm
+            L.append(f"G1 {'F%d ' % lf if i == 1 or (frac >= 1.0/layers and cum[i-1]/total < 1.0/layers) else ''}"
+                     f"X{full[i][0]:.3f} Y{full[i][1]:.3f} Z{z:.4f} E{e:.5f}")
+        L += ["M107", "M104 S0", "M140 S0", f"G1 Z{z_hi+40:.1f} F900", "G0 X10 Y340 F9000"]
+        grams = e * area * 1.24 / 1000
+        return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed),
+                                          flow=round(actual_flow, 1), lines=len(L),
+                                          junctions=total_x, lifts=0,
+                                          mins=round(total / speed / 60, 1))
+
     for layer in range(layers):
         z0 = layer_h * (layer + 1)
         # FIRST LAYER. The balls failure (2026-07-25) came from 235 mm/s giving the bead no dwell to
@@ -155,7 +199,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                 second.append(cum[max(i, j)]); total_lift += 1
         L.append(f"; layer {layer+1}  z{z0:.2f}  junctions {len(hits)}  lifts {len(second)}")
         L.append(f"G0 F9000 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}")
-        L.append(f"G1 F600 Z{z0:.3f}")
+        L.append(f"G1 F1800 Z{z0:.3f}")   # layer-change Z move: 10 -> 30 mm/s
         for i in range(1, len(pts)):
             dz = 0.0
             if second:
@@ -201,14 +245,17 @@ if __name__ == "__main__":
                     help="layers slowed for adhesion — 0 by default: the whole print now runs\n                          at 50 mm/s, which IS a first-layer speed, so nothing needs slowing.\n                          Oleg: thick and irregular lines are good, always.")
     ap.add_argument("--first-frac", type=float, default=1.0, help="first-layer speed fraction")
     ap.add_argument("--first-squish", type=float, default=0.85, help="first-layer Z as a fraction")
+    ap.add_argument("--vase", action="store_true",
+                    help="one continuous extrusion, Z rising with path — no travels at all")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     g, st = emit(a.N, a.a, a.ratio, a.origin, a.layers, a.layer_h, a.strand_w, a.flow, a.weld,
                  a.lift, a.lift_win, a.temp, a.bed, a.fan, 1.75, not a.no_home, a.n_per,
-                 a.first_slow, a.first_frac, a.first_squish)
+                 a.first_slow, a.first_frac, a.first_squish, a.vase)
     os.makedirs(a.out, exist_ok=True)
-    fn = f"{a.out}/nucleon_{'nohome_' if a.no_home else ''}N{a.N}_weld{a.weld:g}_T{a.temp}.gcode"
+    fn = (f"{a.out}/nucleon_{'nohome_' if a.no_home else ''}{'vase_' if a.vase else ''}"
+          f"N{a.N}_weld{a.weld:g}_T{a.temp}.gcode")
     open(fn, "w").write(g)
     print(f"{fn}\n  N={a.N} ({2*a.N*(a.N-1)} junctions/layer predicted, {st['junctions']} measured "
           f"over {a.layers} layers), {st['lifts']} lifts")
