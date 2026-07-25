@@ -56,6 +56,24 @@ def contours(region, bead_w, max_rings=200):
     return rings
 
 
+def decimate(loop, min_seg):
+    """Drop points closer together than `min_seg`.
+
+    Shapely renders a circle at 96 segments regardless of its radius, so a small inner contour
+    arrives with segments of 0.009mm. At 30 mm/s that is 3354 moves per SECOND against a host that
+    stalls around 300 -- Klipper simply freezes, which is what happened when a coupler was started.
+    Curvature is unaffected: a 0.3mm chord on the smallest bore here is under 3 degrees of arc.
+    """
+    out = [loop[0]]
+    for p in loop[1:-1]:
+        if math.dist(p, out[-1]) >= min_seg:
+            out.append(p)
+    if math.dist(loop[-1], out[-1]) < min_seg and len(out) > 2:
+        out.pop()
+    out.append(loop[-1])
+    return out
+
+
 def densify(loop, step):
     """Split long straight edges into `step`-sized pieces.
 
@@ -108,7 +126,7 @@ def order_rings(rings, here):
 
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         first_w, aux, printer, name, link_max=2.0, link_flow=0.3):
+         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
@@ -170,7 +188,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
             L.append(f"G1 F{f}")
         ordered = order_rings(rings, (px - ox, py - oy) if px is not None else rings[0][0])
         for li, loop in enumerate(ordered):
-            loop = densify(loop, 0.8)
+            loop = decimate(densify(loop, 0.8), min_seg)
             for pi, (x, y) in enumerate(loop):
                 X, Y = x + ox, y + oy
                 if px is None:
@@ -269,7 +287,7 @@ def bracket(axle_d, stick_d, centres, wall, shrink=0.25):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", default="bracket",
-                    choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4"])
+                    choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4", "gauge"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=12.7, help="1/2 inch bamboo")
     ap.add_argument("--centres", type=float, default=32.0)
@@ -292,6 +310,11 @@ if __name__ == "__main__":
         region = bracket(a.axle, a.stick, a.centres, a.wall)
     elif a.part == "foot":
         region = plate([(0, 0, a.stick)], a.wall * 3)
+    elif a.part == "gauge":
+        # FIT GAUGE — three bores, one print. The shrink figure (printed = model - 0.25) was
+        # calibrated on a 4mm hole and is unverified at 12.7mm, and a coupler bored for ZERO
+        # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
+        region = plate([(i * 26.0, 0, a.stick + 0.2 + 0.3 * i) for i in range(3)], 3.5)
     elif a.part == "coupler":
         region = plate([(0, 0, a.stick)], a.wall)
     else:

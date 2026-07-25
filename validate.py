@@ -270,6 +270,41 @@ def check(path):
     else:
         print(f"  peak extruding speed {_worst[0]:.1f} mm/s (cap {machine.MAX_SPEED:.0f})")
 
+    # MOVE RATE. Klipper stalls when the host cannot feed segments fast enough; the machine simply
+    # FREEZES mid-print, with no error to read. A coupler shipped at 3354 moves/s because shapely
+    # renders every circle at 96 segments regardless of radius, so small contours came out with
+    # 0.009mm segments. machine.MAX_MOVES_PER_SEC is the measured threshold.
+    _f = 0.0
+    _pp = None
+    _worst_rate = (0.0, 0)
+    _body = False
+    for _i, _ln in enumerate(open(path)):
+        if 'BODY_START' in _ln:
+            _body = True
+            continue
+        if not _body:
+            continue
+        _mf = re.search(r'\bF(\d+(?:\.\d+)?)', _ln)
+        if _mf and _ln.startswith(('G1', 'G0')):
+            _f = float(_mf.group(1)) / 60.0
+        _m = re.match(r'G1 (?:F[\d.]+ )?X([-\d.]+) Y([-\d.]+)', _ln)
+        if not _m:
+            continue
+        _p = (float(_m.group(1)), float(_m.group(2)))
+        if _pp and _f > 0:
+            _d = math.dist(_p, _pp)
+            if _d > 1e-9:
+                _r = _f / _d
+                if _r > _worst_rate[0]:
+                    _worst_rate = (_r, _i + 1)
+        _pp = _p
+    if _worst_rate[0] > machine.MAX_MOVES_PER_SEC:
+        problems.append(f"line {_worst_rate[1]} needs {_worst_rate[0]:.0f} moves/s — the host stalls "
+                        f"above ~{machine.MAX_MOVES_PER_SEC:.0f} and Klipper FREEZES with no error. "
+                        f"Decimate points below ~0.3mm, or slow down.")
+    elif _worst_rate[0]:
+        print(f"  peak move rate {_worst_rate[0]:.0f}/s (stall ~{machine.MAX_MOVES_PER_SEC:.0f})")
+
     mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
     print(f"  lines={n}  maxZ={maxz:.2f}mm  travel={travel_mm/1000:.1f}m  extrude={extrude_mm/1000:.1f}m"
