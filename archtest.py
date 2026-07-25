@@ -44,7 +44,7 @@ def win_for(amp, speed, aspect):
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
          bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean, reach,
-         petal_w, petal_h, touches):
+         petal_w, petal_h, touches, prelift):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -195,16 +195,35 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             # read as straight lines. |sin((touches+1)*phi)| puts `touches` zeros inside the throw,
             # so the strand scallops down and up repeatedly — visibly arched, and no span is longer
             # than reach/(touches+1) unsupported.
+            # RISE FIRST, THEN THROW. Oleg: "add more of vertical movement so there is actually a
+            # petal to be thrown before you move sidewise".
+            #
+            # The arc moved outward WHILE it rose, so at no point was there a length of strand
+            # standing in the air — it was being laid along a curve, not thrown. A pure vertical
+            # climb at each foot draws real material upward first; only then does the head move
+            # sideways, and what moves is a strand that already exists. That is the difference
+            # between drawing an arc and throwing a petal.
             pts_p = []
             touches_at = set()
             lobes = touches + 1
+            prev_phi_lobe = 0
             for k in range(1, n_p + 1):
                 phi = math.pi * k / n_p
+                lobe_i = int(phi * lobes / math.pi + 1e-9)
+                if lobe_i != prev_phi_lobe:
+                    # a new lobe begins here: climb straight up before any sideways motion
+                    u0 = Lr * math.sin(math.pi * lobe_i / lobes)
+                    w0 = lean * Lr * math.sin(math.pi * lobe_i / lobes) ** 2
+                    bx, by = px + ux * u0 + tx * w0, py + uy * u0 + ty * w0
+                    steps = max(2, int(prelift / 3))
+                    for q in range(1, steps + 1):
+                        pts_p.append((bx, by, anchor + prelift * q / steps))
+                    prev_phi_lobe = lobe_i
                 u = Lr * math.sin(phi)
                 w = lean * Lr * math.sin(phi) * math.sin(phi)
-                zc = anchor + amp * abs(math.sin(lobes * phi))
+                zc = anchor + prelift + (amp - prelift) * abs(math.sin(lobes * phi))
                 pts_p.append((px + ux * u + tx * w, py + uy * u + ty * w, zc))
-                if zc < anchor + amp * 0.02 and 1 < k < n_p:
+                if abs(math.sin(lobes * phi)) < 0.03 and 1 < k < n_p:
                     touches_at.add(len(pts_p) - 1)
             # ONE cross-section for the whole petal, sized from the MEAN segment.
             # Per-segment sizing was wrong in a way that only showed up in the audit: where the lean
@@ -265,6 +284,8 @@ if __name__ == "__main__":
     ap.add_argument("--petal-v", type=float, default=400.0,
                     help="throw speed mm/s — at a fixed flow cap this sets how THIN the\n                          flying strand is, which is what lets its own arc carry it")
     ap.add_argument("--lean", type=float, default=0.35, help="sideways lean: petal, not disc")
+    ap.add_argument("--prelift", type=float, default=12.0,
+                    help="pure vertical climb at each foot BEFORE any sideways move —\n                          this is what makes a petal to throw instead of an arc to lay")
     ap.add_argument("--touches", type=int, default=3,
                     help="glue-downs inside the throw — more feet, shorter arcs, visibly curved")
     ap.add_argument("--petal-w", type=float, default=0.8,
@@ -299,7 +320,7 @@ if __name__ == "__main__":
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
                  a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean, a.reach,
-                 a.petal_w, a.petal_h, a.touches)
+                 a.petal_w, a.petal_h, a.touches, a.prelift)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
