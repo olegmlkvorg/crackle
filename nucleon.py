@@ -286,7 +286,7 @@ if __name__ == "__main__":
     ap.add_argument("--weld", type=float, default=1.0, help="1=fuse all (Phase 1 winner), 0=weave")
     ap.add_argument("--lift", type=float, default=0.5)
     ap.add_argument("--lift-win", type=float, default=12.0)
-    ap.add_argument("--temp", type=int, default=230)
+    ap.add_argument("--temp", type=int, default=machine.TEMP)   # material-rated, not a guess
     ap.add_argument("--bed", type=int, default=60)
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--n-per", type=int, default=600, help="samples per ellipse")

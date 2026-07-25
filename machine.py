@@ -4,7 +4,8 @@ Oleg, 2026-07-25: "you should be extruding at max speed we know nozzle can flow.
 negotiable. 100% of the time."
 """
 MAX_FLOW = 81.2        # mm3/s, MEASURED (spiral ramp, first skips at 81.2 @ r137, 0.8 nozzle, PLA 230C)
-FLOW = 70.0            # CORRECTED 2026-07-25 from audible feedback: Oleg heard the extruder
+FLOW = 60.0            # CORRECTED TWICE on 2026-07-25 from audible feedback: cracking at 80,
+                       # then still cracking at 70. Oleg heard the extruder
                        # CRACKING (skipping) at 80 during sustained printing. The spiral ramp put
                        # first visual skips at 81.2, but a ramp only holds each flow for a few
                        # seconds of a single layer — it measures the INSTANTANEOUS ceiling. Sustained
@@ -75,4 +76,21 @@ NO_TRAVEL_RULE = True
 DEPOSIT_PER_LAYER = 1.573   # for the 2.0 x 1.2 commanded bead
 LANDED_WIDTH = 1.53         # what a 2.0mm command actually lays down at a 1.2mm gap
 SPREAD_RATIO = 1.91         # landed width / nozzle, unaided by squish
+# ---------------------------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------------------------
+# MATERIAL: translucent PLA, manufacturer-rated 210 C (Oleg, 2026-07-25). We had been running 230.
+#
+# RESPECT THE RATING, and lower flow rather than raise heat if they conflict:
+#   · Overheated PLA DEGRADES in the melt zone — the polymer breaks down, leaves carbonised residue
+#     on the nozzle wall, and that residue is how a partial clog forms. It also outgasses, and gas
+#     snapping through the melt sounds exactly like the "cracking" that had us walking flow down
+#     from 80 to 70 to 60 chasing a ceiling that may never have been the problem.
+#   · Overheating CLOUDS translucent PLA. Translucency is what makes the object look like alien
+#     tech; losing it costs the product's whole visual argument to buy print speed we do not need.
+#
+# Caveat, stated honestly: a 210 rating assumes ordinary flow (~10-15 mm3/s). At 60+ the melt zone
+# needs more heat, so 210 will lower the achievable ceiling. That is the correct trade here.
+TEMP = 210
+TEMP_RATED = 210        # manufacturer spec for the translucent PLA
 # ---------------------------------------------------------------------------------------------

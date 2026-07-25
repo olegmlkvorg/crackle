@@ -59,7 +59,7 @@ import machine
 
 MATERIALS = {
     # floor rises as each run passes — no point reprinting known-good flow
-    "pla":  dict(temp=230, bed=60, flows=[50, 90]),
+    "pla":  dict(temp=210, bed=60, flows=[20, 90]),   # translucent PLA is rated 210
     "petg": dict(temp=245, bed=80,  flows=[10, 38]),
     "tpu":  dict(temp=230, bed=50,  flows=[2, 12]),
     "abs":  dict(temp=255, bed=100, flows=[8, 36]),
