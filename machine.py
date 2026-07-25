@@ -199,3 +199,16 @@ def aux_fans(printer, frac):
 # stick, it FUSES -- and then has to be torn off, taking the PEI with it. TPU needs 40-50: enough
 # to bond, cold enough to release when the plate cools.
 BED_TEMP = {"pla": 60, "petg": 80, "tpu": 45, "abs": 100}
+
+
+# TPU WORKING FLOW — measured 2026-07-25 on the K2 Plus, 0.8 nozzle, 230C, bed 45, all fans max.
+# Oleg watched a constant-speed ramp (8->20 mm3/s at a fixed 25 mm/s, width carrying the flow):
+# "we go 33 successful layers. settle on 27 layer as our flow". Turn 33 = 16.8 mm3/s was still
+# clean; turn 27 = 15.2 is the working number, with the margin deliberate.
+#
+# Every EARLIER TPU figure today is void: those ramps ran at a flat 120 mm/s because --fixed-speed
+# defaulted to the wrong constant, which draws a bead thinner than the nozzle for the whole test.
+# The 13.3 "ceiling" measured before this was a partial clog, cleared by Oleg — a limit that moves
+# when you push it is the symptom, not the limit.
+TPU_FLOW = 15.2
+TPU_TEMP = 230
