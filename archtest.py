@@ -129,7 +129,14 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             amp = a_lo + (a_hi - a_lo) * (r - r0) / (r_max - r0)
             span = aspect * amp                      # how far it carries at height
             z_top = z_base + amp
-            f_z = round(min(machine.MAX_Z_V, math.sqrt(2 * machine.MAX_Z_A * amp)) * 60)
+            # FLOW LIMITS THE VERTICAL MOVE TOO. The post is extruded at the same cross-section
+            # as the base bead, so its volumetric rate is bead_area x Z_SPEED. At the Z axis's
+            # 30 mm/s that is 2.4 x 30 = 72 mm3/s — above the 55 cap and into the ~74 where this
+            # extruder audibly cracks. The flow ceiling is a property of the hotend and does not
+            # care which axis is moving; I had applied it only to XY.
+            f_z = round(min(machine.MAX_Z_V,
+                            math.sqrt(2 * machine.MAX_Z_A * amp),
+                            flow / (line_w * layer_h)) * 60)
             # 1. STALL, rise — pure Z, XY frozen
             e += amp * e_per_mm
             L.append(f"G1 F{f_z} Z{z_top:.4f} E{e:.5f}          ; stall + rise {amp:.1f}mm")
