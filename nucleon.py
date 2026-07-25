@@ -120,6 +120,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             raise SystemExit(f"Z cannot follow the lift at {speed:.0f} mm/s: a_peak {az:.0f} "
                              f"(limit {machine.MAX_Z_A}). Need --lift-win {math.ceil(need)}.")
 
+    start_xy = nucleon_path(N, a, b, cx, cy, n_per, 0.0, speed=speed)[0]
     L = []; w = L.append
     w(f"; NUCLEON — {N} ellipses a={a} b={b:.1f}, weld={weld}, {layers} layers")
     w(f"; flow={actual_flow:.1f} mm3/s at {speed:.0f} mm/s (capped), bead {strand_w}x{layer_h} = {strand_w*layer_h:.2f}mm2")
@@ -130,9 +131,17 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w(f"M190 S{bed}"); w(f"M109 S{temp}")
     w("M204 S8000"); w("M107" if not fan else f"M106 S{fan}")
     w("M82"); w("G92 E0")
+    # NO TRAVEL IS A RULE (Oleg, 2026-07-25: "always our prints are continuous extrusion").
+    # The prime line therefore ENDS exactly where the object BEGINS, so there is no reposition
+    # between priming and printing. From the first millimetre of plastic to the last, the nozzle
+    # never lifts and never moves without extruding.
+    # One G0 remains BEFORE any plastic exists (the head has to reach the prime start from wherever
+    # homing left it) and one after the object is finished (park). Neither is a travel within the
+    # object, and there is no way to remove them that does not drag a stray line across the plate.
+    _sx, _sy = start_xy
     w(f"G1 Z{layer_h*0.85:.3f} F600")
-    w(f"G0 F9000 X{origin:.1f} Y{origin-8:.1f}")
-    w(f"G1 F1200 X{origin+2*a:.1f} Y{origin-8:.1f} E10"); w("G92 E0")
+    w(f"G0 F9000 X{_sx - 55:.3f} Y{_sy - 12:.3f}")
+    w(f"G1 F1200 X{_sx:.3f} Y{_sy:.3f} E10"); w("G92 E0")
     if weld < 1.0:
         w("; Z_MODULATED")
     w("; BODY_START")
@@ -162,24 +171,39 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         total = cum[-1] or 1.0
         hits, _ = find_crossings(full)
         total_x = len(hits)
+        # WELD CONTROL IN VASE MODE. It used to exist only in the layered path, so asking for
+        # --weld silently opted out of vase and reintroduced one G0 reposition per layer — Oleg
+        # spotted the travels on the printed ladder. The two features were never in conflict; the
+        # lift is just a Z bump on top of the continuous Z ramp, so they compose.
+        second = []
+        for k, (i, j, x, y) in enumerate(sorted(hits, key=lambda h: max(h[0], h[1]))):
+            if ((k * 0.6180339887498949) % 1.0) >= weld:
+                second.append(cum[max(i, j)]); total_lift += 1
         L.append(f"; VASE — one continuous extrusion, {len(full)} points, "
                  f"Z {layer_h*first_squish:.2f} -> {layer_h*layers:.2f}, {total_x} junctions")
-        L.append(f"G0 F9000 X{full[0][0]:.3f} Y{full[0][1]:.3f}")
-        L.append(f"G1 F1800 Z{layer_h*first_squish:.3f}")
+        L.append(f"; continuous from the prime — no reposition")
         z_lo = layer_h * first_squish
         z_hi = layer_h * layers
         for i in range(1, len(full)):
             frac = cum[i] / total
             z = z_lo + (z_hi - z_lo) * frac
             lf = round(machine.FIRST_LAYER_SPEED * 60) if frac < 1.0 / layers else f_mm_min
+            dz = 0.0
+            if second:
+                s_here = cum[i]
+                for sv in second:
+                    d = s_here - sv
+                    if abs(d) < lift_win:
+                        dz = max(dz, lift * math.cos(math.pi * d / (2 * lift_win)) ** 2)
             e += math.dist(full[i - 1], full[i]) * e_per_mm
             L.append(f"G1 {'F%d ' % lf if i == 1 or (frac >= 1.0/layers and cum[i-1]/total < 1.0/layers) else ''}"
-                     f"X{full[i][0]:.3f} Y{full[i][1]:.3f} Z{z:.4f} E{e:.5f}")
-        L += ["M107", "M104 S0", "M140 S0", f"G1 Z{z_hi+40:.1f} F900", "G0 X10 Y340 F9000"]
+                     f"X{full[i][0]:.3f} Y{full[i][1]:.3f} Z{z+dz:.4f} E{e:.5f}")
+        L += ["M107", "M104 S0", "M140 S0", f"G1 Z{z_hi+40:.1f} F900",   # Z-only lift, no XY
+              "G0 X10 Y340 F9000"]   # park, after the object is complete
         grams = e * area * 1.24 / 1000
         return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed),
                                           flow=round(actual_flow, 1), lines=len(L),
-                                          junctions=total_x, lifts=0,
+                                          junctions=total_x, lifts=total_lift,
                                           mins=round(total / speed / 60, 1))
 
     for layer in range(layers):
@@ -218,8 +242,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             if ((k * 0.6180339887498949) % 1.0) >= weld:
                 second.append(cum[max(i, j)]); total_lift += 1
         L.append(f"; layer {layer+1}  z{z0:.2f}  junctions {len(hits)}  lifts {len(second)}")
-        L.append(f"G0 F9000 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}")
-        L.append(f"G1 F1800 Z{z0:.3f}")   # layer-change Z move: 10 -> 30 mm/s
+        L.append(f"G1 F1800 Z{z0:.3f}")   # Z only — no XY reposition   # layer-change Z move: 10 -> 30 mm/s
         for i in range(1, len(pts)):
             dz = 0.0
             if second:

@@ -35,3 +35,23 @@ MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the hea
 MAX_Z_V = 30.0
 MAX_Z_A = 1000.0
 BED_MAX = 120.0        # config claims 135; the machine silently clamps to 120
+
+# ---------------------------------------------------------------------------------------------
+# NO TRAVEL IS A RULE. Oleg, 2026-07-25: "always our prints are continuous extrusion. no travel
+# is a rule."
+#
+# Every generator must emit ZERO non-extruding moves between the first extrusion and the last.
+# Two G0 moves are permitted and only two: one to reach the prime start BEFORE any plastic exists,
+# and one to park AFTER the object is complete. Removing either would drag a stray line across the
+# plate, which is worse than the thing the rule prevents.
+#
+# How to satisfy it:
+#   · the prime line must END exactly where the object BEGINS — no reposition between them
+#   · layer changes are Z-only moves; never reposition in XY at a layer change (use vase mode,
+#     where Z rises continuously and there is no layer change at all)
+#   · the end-of-print lift is Z-only, and the park comes after it
+#
+# Audit any file with:
+#   G0 lines between the first and last "G1 ... E" must be zero.
+# ---------------------------------------------------------------------------------------------
+NO_TRAVEL_RULE = True

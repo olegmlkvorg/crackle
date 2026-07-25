@@ -88,6 +88,17 @@ def check(path):
         problems.append("BODY NEVER STARTED — no recognised layer marker, so the Z-plough, "
                         "backwards-extrusion and off-bed checks NEVER RAN. This file is unchecked, "
                         "not clean. Add its marker to validate.py.")
+    # NO TRAVEL IS A RULE (machine.py). Zero non-extruding moves between the first extrusion and
+    # the last. Two G0 are permitted and only two: reaching the prime start before any plastic
+    # exists, and parking after the object is complete.
+    _lines = open(path).read().split('\n')
+    _ext = [i for i, l in enumerate(_lines) if re.match(r'G1 .*E[\d.]', l)]
+    if _ext:
+        _inside = [i for i, l in enumerate(_lines)
+                   if l.startswith('G0 ') and _ext[0] < i < _ext[-1]]
+        if _inside:
+            problems.append(f"{len(_inside)} TRAVEL move(s) inside the object (first at line "
+                            f"{_inside[0]+1}) — prints must be one continuous extrusion")
     if not any(t >= 150 for t in temps): problems.append("no hotend temp >=150 commanded")
     src = open(path).read()
     if 'G28' not in src and 'START_PRINT' not in src:
