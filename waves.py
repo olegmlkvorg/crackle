@@ -212,9 +212,9 @@ if __name__ == "__main__":
                  bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers)
     os.makedirs(a.out, exist_ok=True)
     tag = "k1c" if abs(bxy[0] - 229) < 5 else "k2"
-    fn = f"{a.out}/honeycomb_{tag}_{a.cols}x{a.rows}_c{a.cell:g}_T{a.temp}.gcode"
+    fn = f"{a.out}/waves_{tag}_{a.cols}x{a.rows}_c{a.cell:g}_T{a.temp}.gcode"
     open(fn, "w").write(g)
-    print(f"{fn}\n  {a.cols}x{a.rows} cells of {a.cell}mm -> {st['size'][0]} x {st['size'][1]}mm, "
-          f"{st['pts']} points, one continuous path")
+    print(f"{fn}\n  {a.rows} ribbons of {a.cols} waves at {a.cell}mm -> "
+          f"{st['size'][0]} x {st['size'][1]}mm, {st['pts']} points, one continuous path")
     print(f"  {st['speed']} mm/s at flow {a.flow} mm3/s, ~{st['mins']} min, {st['grams']} g, "
           f"pressed to {a.press}mm")
