@@ -49,7 +49,25 @@ crackle, and it is computed for you — it's in every filename.
 | **F** | star, **fan 255** | 77 | Does welding matter? Fan should stop crossings fusing → should go quiet. | 5.3 m |
 | **G** | star, 6×6 finer | **524** | Fine web — the high end of the dial. | 7.0 m |
 
-**Run order: B → A first.** Those two alone answer the Phase 1 question. If B is silent and A
+### ⚠️ B vs A is CONFOUNDED — use Bpas2 as the real control (found 2026-07-25)
+B is 2.60 g and A is 4.63 g: **A has 78% more plastic.** Star order produces longer strands AND more
+crossings at the same time, so "A crackles, B doesn't" is equally explained by *more material*. The
+thesis is about crossings, so material has to be held constant or the verdict means nothing.
+
+**`crackle_iter_Bpas2_…` = perimeter order, 2 passes, 4.35 g, 0 crossings** — within 6% of A's mass.
+That is the negative control the thesis needs: same plastic, no crossings.
+
+| coupon | crossings | mass | role |
+|---|---|---|---|
+| B (1 pass) | 0 | 2.60 g | low-material end; keep, but not the control |
+| **Bpas2** | **0** | **4.35 g** | **mass-matched negative control — run this against A** |
+| A | 77 | 4.63 g | the working coupon |
+
+If A crackles and **Bpas2** is silent, crossings are the mechanism and material is ruled out.
+If Bpas2 crackles like A, it was never crossings — it is strand length/thinness, and the dial to
+build is `strand_w` and pass count, not visit order.
+
+**Run order: Bpas2 → A first.** Those two alone answer the Phase 1 question. If B is silent and A
 crackles, the effect is controllable and everything after is calibration. If they feel the same, the
 thesis is dead and you've spent nine minutes learning it.
 
