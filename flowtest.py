@@ -58,7 +58,7 @@ import argparse, math, os
 
 MATERIALS = {
     # floor rises as each run passes — no point reprinting known-good flow
-    "pla":  dict(temp=230, bed=120, flows=[50, 90]),
+    "pla":  dict(temp=230, bed=135, flows=[50, 90]),
     "petg": dict(temp=245, bed=80,  flows=[10, 38]),
     "tpu":  dict(temp=230, bed=50,  flows=[2, 12]),
     "abs":  dict(temp=255, bed=100, flows=[8, 36]),
@@ -67,7 +67,7 @@ BED = (350.0, 350.0)   # K2 Plus
 
 
 def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
-         bump_h, bump_arc):
+         bump_h, bump_arc, bump_every):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     cx, cy = BED[0] / 2, BED[1] / 2
@@ -82,18 +82,18 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     # Radius at which each multiple of 5 mm3/s is crossed. Each bump is placed on the NEXT pass
     # through angle 0, so all bumps stack into one readable radial spoke.
     marks = []
-    m = math.floor(q_lo / 5) * 5 + 5
+    m = math.floor(q_lo / bump_every) * bump_every + bump_every
     while m < q_hi:
         r_m = r0 + (m - q_lo) / (q_hi - q_lo) * (r_max - r0)
         marks.append((m, math.ceil(((r_m - r0) / b) / (2 * math.pi)) * 2 * math.pi))
-        m += 5
+        m += bump_every
 
     L = []; w = L.append
     w(f"; MAX VOLUMETRIC FLOW — single layer, Archimedean spiral, {turns:.0f} turns")
     w(f"; line_w={line_w} layer_h={layer_h} temp={temp} bed={bed} fan={fan} spacing={line_w}")
     w(f"; RAMP {q_lo:g} -> {q_hi:g} mm3/s outward, r {r0:g}..{r_max:g}mm about ({cx:g},{cy:g})")
     w("; READ IT: centre = lowest flow. Find where the bead stops being continuous plastic.")
-    w("; BUMPS: 1mm outward pimples every 5 mm3/s, all at one angle -> a radial spoke. Count them.")
+    w(f"; BUMPS: {bump_h}mm outward pimples every {bump_every:g} mm3/s, all at one angle -> a spoke.")
     for mq, mth in marks:
         w(f";   bump {mq:g} mm3/s at r{r0 + b*mth:.0f}mm")
     w("; HEADER_BLOCK_START"); w("; total layer number: 1"); w("; HEADER_BLOCK_END")
@@ -157,6 +157,7 @@ if __name__ == "__main__":
     ap.add_argument("--seg", type=float, default=2.0, help="segment length mm")
     ap.add_argument("--bump", type=float, default=1.0, help="marker bump height mm")
     ap.add_argument("--bump-arc", type=float, default=0.12, help="marker half-width in radians")
+    ap.add_argument("--bump-every", type=float, default=5.0, help="mm3/s between markers")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
@@ -166,7 +167,7 @@ if __name__ == "__main__":
     temp = a.temp or m["temp"]
     bed = a.bed if a.bed is not None else m["bed"]
     g, st = emit(q_lo, q_hi, a.layer_h, a.line_w, temp, bed, a.fan, 1.75,
-                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc)
+                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/flowspiral_{'nohome_' if a.no_home else ''}{a.material}"
           f"_T{temp}_{int(q_lo)}-{int(q_hi)}.gcode")

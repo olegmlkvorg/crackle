@@ -73,11 +73,32 @@ safe, which is what makes the filament visible at low speed.
 | notch every 5 mm³/s | the plate labels itself; count teeth on the right edge, no ruler |
 | floor raised 34 → 42 | Oleg: still perfectly fine at 24% of the prior run |
 
-**Result:** _(record the flow where the surface stops being continuous plastic, and the landed bead
-width measured from the row gaps)_
+### RESULT 2026-07-25 — **max flow ≈ 83 mm³/s**
+Oleg, watching live: *"72% we get first skips."* 72% of path on the 50→90 spiral = **83.1 mm³/s**,
+radius 137 mm, 69 mm/s commanded. The bump spoke corroborates it independently: the 80 pimple sits
+at r127 and the 85 pimple at r145, so the skips begin between the 6th and 7th pimple, nearer the 7th.
 
-max stable flow = ______ mm³/s → working = 0.85 × ____ = ______
-landed bead width = 3.0 − (gap) = ______ mm
+    max stable flow = 83.1 mm³/s  →  working = 0.85 × 83 = 70.5
+
+Speeds now derived rather than invented: **strand travel 200 mm/s, pillar 150 mm/s**. Both are
+within the machine (max_velocity 800, max_accel 30000) and both sit under the ceiling in their own
+geometry — strand 0.5×0.4mm at 200 mm/s = 40 mm³/s, pillar 0.9×0.4 at 150 = 54 mm³/s. Note that
+strand E is computed per mm of PATH, independent of speed, so if Klipper ever clamps a feedrate the
+deposited geometry is unchanged — only the time is. That makes the coupon robust to speed clamping.
+
+**Caveats worth holding, because 83 is very high for a 0.8 nozzle** (typical high-flow 0.8 is
+40–60):
+1. **Bed at 135 °C** keeps PLA far above its glass transition for the whole print, so beads stay
+   soft and can slump together. Mild under-extrusion may have been masked, meaning the true onset
+   could be below 83 — what we detected is where it became *undeniable*.
+2. **Single layer on a hot plate is the most forgiving condition possible.** In a stacked print with
+   cooling on, the usable ceiling will be lower.
+   If coupons come out under-extruded, drop to 0.75 × 83 ≈ 62 rather than re-measuring.
+
+**Zoom run staged:** `flowspiral_nohome_pla_T230_76-90.gcode` — 76→90 over the whole plate,
+0.31 mm³/s per turn, **a pimple every 1 mm³/s** (77…89) so the onset can be read to the unit.
+
+landed bead width = 3.0 − (gap) = ______ mm   _(measure between spiral turns once cool)_
 
 ## Next, gated on that number
 1. `crackle.py --sweep all --fast --no-home --max-flow <n>` → regenerate B and A, run Phase 1.
