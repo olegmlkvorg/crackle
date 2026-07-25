@@ -20,6 +20,10 @@ ACCEL = 5000.0          # what the toolhead ACTUALLY reports while printing — 
 # past the nozzle and gets ploughed off the plate — that failure cost a print on 2026-07-25.
 BEAD_W = 1.2            # 1.5 x nozzle — stacking ceiling
 BEAD_H = 0.6            # 0.75 x nozzle — stacking ceiling
+FIRST_LAYER_SPEED = 50.0  # mm/s. Layer 1 only. At 111 the bead has no dwell to wet the plate and
+                          # adhesion failed twice (Oleg, 2026-07-25). Deposit per mm of PATH is
+                          # unchanged by slowing — E is per mm, not per second — so the first layer
+                          # is just as thick, it simply has time to bond. Layer 2+ runs at 111.
 MAX_SPEED = 120.0       # headroom above the 111 the bead+flow imply; not itself a target
 MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the head stalls; measured
                            # 2026-07-25 as a ~3s stutter at 990 moves/s

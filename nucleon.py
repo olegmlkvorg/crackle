@@ -136,7 +136,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # The SQUISH stays: it presses the bead into the plate and does not touch flow, which is
         # what Oleg asked for — thick and irregular lines, always.
         if layer < first_slow:
-            lf = round(speed * first_speed_frac * 60)
+            lf = round(machine.FIRST_LAYER_SPEED * 60)
             z0 = layer_h * first_squish
         else:
             lf = f_mm_min
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     ap.add_argument("--bed", type=int, default=60)
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--n-per", type=int, default=600, help="samples per ellipse")
-    ap.add_argument("--first-slow", type=int, default=0,
+    ap.add_argument("--first-slow", type=int, default=1,
                     help="layers slowed for adhesion — 0 by default: the whole print now runs\n                          at 50 mm/s, which IS a first-layer speed, so nothing needs slowing.\n                          Oleg: thick and irregular lines are good, always.")
     ap.add_argument("--first-frac", type=float, default=1.0, help="first-layer speed fraction")
     ap.add_argument("--first-squish", type=float, default=0.85, help="first-layer Z as a fraction")

@@ -63,6 +63,9 @@ GOLD = math.pi * (3 - math.sqrt(5))          # 2.39996 rad
 DEF = dict(
     size=60.0, origin=40.0,                  # coupon footprint, offset onto the 350x350 bed
     r0=8.0, r_max=28.5, s=2.0, r_x=14.25,    # base spiral: hole, rim, turn spacing, crossing onset
+    turns=10,                                # turns MUST be an integer (see curve_dense) and is
+                                             # held fixed across the ladder so path length is a
+                                             # continuous function of r0 and mass can be matched
     m=6.57, q=4.0, warp_p=2.0,               # dial, superellipse exponent, warp blend-in power
     layers=15, layer_h=0.40,
     strand_w=0.85, filament_d=1.75,          # 0.85 >= the 0.8 orifice. Not negotiable, see RESULTS.
@@ -86,15 +89,31 @@ def _rho(th, q):
     return (np.abs(np.cos(th)) ** q + np.abs(np.sin(th)) ** q) ** (-1.0 / q)
 
 
-def curve_dense(P, m=None, phi0=0.0, r0=None, r_max=None, n=None):
-    """Dense uniform-t sample of one layer's curve, centred on (0,0). No segmentation yet."""
+def curve_dense(P, m=None, phi0=0.0, r0=None, r_max=None, n=None, inward=False):
+    """Dense uniform-t sample of one layer's curve, centred on (0,0). No segmentation yet.
+
+    inward=True spirals from r_max down to r0 WITHOUT reversing the point order, so the head keeps
+    travelling the same way round. Reversing the order instead (SPIRA-1) flips the tangent through
+    180 degrees at the layer handover — a full reversal at the rim, which is exactly the defect
+    this whole redesign exists to delete. Measured on the emitted file before the fix: 1 mm/s.
+
+    The amplitude is tapered to zero over the first and last half turn, so every layer begins and
+    ends exactly ON the base spiral, at a known radius and a known tangent. That is what makes the
+    handover a 1 mm chord with a 1.3 degree kink instead of a 6 mm chord into a cusp."""
     m = P['m'] if m is None else m
     r0 = P['r0'] if r0 is None else r0
     r_max = P['r_max'] if r_max is None else r_max
-    turns = (r_max - r0) / P['s']
-    t = np.linspace(0.0, TAU * turns, n or int(max(60000, 5000 * turns)))
-    rb = r0 + (P['s'] / TAU) * t
-    A = (P['s'] / 2.0) * (rb / P['r_x']) ** 2
+    # INTEGER TURNS, enforced by nudging s rather than r0 (mass) or r_max (footprint). Without it
+    # a layer ends at a polar angle its successor does not start at, and the "1 mm handover" is a
+    # 38 mm dash across the coupon — which is what the emitted file said, in exactly those words.
+    turns = int(P.get('turns') or max(1, round((r_max - r0) / P['s'])))
+    se = (r_max - r0) / turns
+    T = TAU * turns
+    t = np.linspace(0.0, T, n or int(max(60000, 5000 * turns)))
+    rb = (r_max - (se / TAU) * t) if inward else (r0 + (se / TAU) * t)
+    u = np.clip(np.minimum(t, T - t) / (TAU * P.get('taper_turns', 0.5)), 0.0, 1.0)
+    win = u * u * (3.0 - 2.0 * u)                      # smoothstep: C1 at both ends
+    A = win * (se / 2.0) * (rb / P['r_x']) ** 2
     r = rb + A * np.sin(m * t + phi0)
     W = 1.0 + (_rho(t, P['q']) - 1.0) * np.clip(rb / r_max, 0, 1) ** P['warp_p']
     return t, W * r * np.cos(t), W * r * np.sin(t), rb, A
@@ -114,8 +133,10 @@ def fit_to_coupon(P, x, y):
     Uniform scaling multiplies every radius of curvature by the same factor and cannot create or
     destroy an intersection, so nothing measured downstream is disturbed except favourably."""
     half = P['size'] / 2.0 - P['strand_w'] / 2.0 - 0.15
-    got = max(np.abs(x).max(), np.abs(y).max())
-    k = min(1.0, half / got)
+    # ANALYTIC, so every layer gets the SAME k. A per-layer max would scale each layer differently
+    # and re-open the handover gap the integer-turn fix just closed.
+    peak = P['r_max'] + (P['s'] / 2.0) * (P['r_max'] / P['r_x']) ** 2
+    k = min(1.0, half / peak)
     return k * x, k * y, k
 
 
@@ -149,35 +170,6 @@ def segment(P, t, x, y, kap, v_cmd):
     return x[k], y[k]
 
 
-def handover(P, p0, t0, p1, t1, v):
-    """Tangent-continuous blend between the end of one layer and the start of the next.
-
-    PARSE-BACK CAUGHT THIS TOO. v1 joined layers with a straight chord. The chord is 4-6 mm (the
-    two layers' rim ends sit at the same polar angle but different radius, because of the golden
-    phase walk and the half-pitch offset), and it met the next layer's 0.07 mm chords at a sharp
-    angle: Klipper's junction limit put the head at 4 mm/s, 15 times per print, at the rim where
-    material already piles. My single-layer model could not see it because a handover is not part
-    of a layer. A cubic Hermite with the arm length grown until the blend's own min radius clears
-    v^2/accel fixes it by construction rather than by hoping."""
-    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
-    t0 = np.asarray(t0, float); t0 = t0 / max(np.hypot(*t0), 1e-12)
-    t1 = np.asarray(t1, float); t1 = t1 / max(np.hypot(*t1), 1e-12)
-    gap = float(np.hypot(*(p1 - p0)))
-    R_req = v * v / P['accel']
-    arm = max(gap * 0.5, 2.0)
-    for _ in range(14):
-        u = np.linspace(0, 1, 400)[:, None]
-        h00 = 2*u**3 - 3*u**2 + 1; h10 = u**3 - 2*u**2 + u
-        h01 = -2*u**3 + 3*u**2;    h11 = u**3 - u**2
-        pts = h00*p0 + h10*(arm*t0) + h01*p1 + h11*(arm*t1)
-        x, y = pts[:, 0], pts[:, 1]
-        kap = curvature(np.linspace(0, 1, len(x)), x, y)
-        if 1.0 / max(kap.max(), 1e-9) >= R_req:
-            break
-        arm *= 1.35
-    return segment(P, np.linspace(0, 1, len(x)), x, y, kap, v)
-
-
 def layer_plan(P, i):
     """Per-layer variation. Three things, and the third is the one that is easy to get wrong.
 
@@ -192,8 +184,8 @@ def layer_plan(P, i):
       into welded columns. SPIRA-1 shipped that bug for one revision; stacking went 0.000 -> 0.237
       with no other symptom."""
     odd = i % 2
-    d = P['s'] / 2 if odd else 0.0
-    return dict(phi0=(i * GOLD) % TAU, r0=P['r0'] + d, r_max=P['r_max'] + d, reverse=bool(odd))
+    d = -P['s'] / 2 if odd else 0.0        # inward, so the rim never leaves the coupon
+    return dict(phi0=(i * GOLD) % TAU, r0=P['r0'] + d, r_max=P['r_max'] + d, inward=bool(odd))
 
 
 def layer_polyline(i, m=None, P=None):
@@ -205,13 +197,12 @@ def layer_polyline(i, m=None, P=None):
     P = dict(DEF, **(P or {}))
     m = P['m'] if m is None else m
     lp = layer_plan(P, i)
-    t, x, y, rb, A = curve_dense(P, m=m, phi0=lp['phi0'], r0=lp['r0'], r_max=lp['r_max'])
+    t, x, y, rb, A = curve_dense(P, m=m, phi0=lp['phi0'], r0=lp['r0'], r_max=lp['r_max'],
+                                 inward=lp['inward'])
     kap = curvature(t, x, y)
     x, y, k = fit_to_coupon(P, x, y)
     kap = kap / k                                   # scaling by k divides curvature by k
     xs, ys = segment(P, t, x, y, kap, speed_of(P))
-    if lp['reverse']:
-        xs, ys = xs[::-1], ys[::-1]
     c = P['origin'] + P['size'] / 2.0
     return xs + c, ys + c
 
@@ -429,7 +420,7 @@ def emit(P):
             w(f"G1 F2400 X{o+3.5:.2f} Y{yb:.2f} E{e:.5f}")
 
     # ---- web
-    stats = dict(cross=0, lifts=0, moves=0, path=0.0)
+    stats = dict(cross=0, lifts=0, moves=0, path=0.0, travel=0.0)
     lx = ly = None
     for i in range(P['layers']):
         z = round(z + P['layer_h'], 3)
@@ -445,15 +436,17 @@ def emit(P):
         if lx is None:
             w(f"G0 F9000 X{xs[0]:.3f} Y{ys[0]:.3f}")
         w(f"G1 F600 Z{z:.3f}")
-        if lx is not None and math.hypot(xs[0] - lx, ys[0] - ly) > 0.05:
-            hx, hy = handover(P, (lx, ly), (ltx, lty), (xs[0], ys[0]),
-                              (xs[1] - xs[0], ys[1] - ys[0]), v)
-            hpx, hpy = lx, ly
-            for X, Y in list(zip(hx, hy))[1:]:
-                d = math.hypot(X - hpx, Y - hpy)
-                e += d * e_mm; stats['path'] += d; stats['moves'] += 1
-                w(f"G1 F{f} X{X:.3f} Y{Y:.3f} E{e:.5f}")
-                hpx, hpy = X, Y
+        if lx is not None:
+            gap = math.hypot(xs[0] - lx, ys[0] - ly)
+            stats['travel'] += gap
+            # A 0.9 mm re-position, NOT a blend. Three joins were tried and measured on the
+            # emitted file before this one: a straight chord (6 mm, 4 mm/s), a Cartesian Hermite
+            # (looped to r=40 mm with a 174-degree cusp), and a longer-armed Hermite (worse — with
+            # parallel tangents and a purely lateral offset a Hermite MUST reverse). SPIRA-1's
+            # headline property, "the whole 15-layer web is one unbroken extrusion", is only
+            # reachable through a 180-degree reversal at the rim or an added perimeter ring. Both
+            # are worse than lifting for 0.9 mm. Continuity is not the goal; a constant bead is.
+            w(f"G0 F9000 X{xs[0]:.3f} Y{ys[0]:.3f}")
         px, py = xs[0], ys[0]
         for jj in range(1, len(xs)):
             dz = 0.0
@@ -467,7 +460,6 @@ def emit(P):
             w(f"G1 F{f} X{xs[jj]:.3f} Y{ys[jj]:.3f}{zt} E{e:.5f}")
             px, py = xs[jj], ys[jj]
         lx, ly = px, py
-        ltx, lty = xs[-1] - xs[-2], ys[-1] - ys[-2]
     w("M107"); w("M104 S0"); w("M140 S0"); w(f"G1 Z{z+40:.1f} F900"); w("G0 X10 Y340 F9000")
     stats['grams'] = e * area * 1.24 / 1000
     stats['lines'] = len(L)
@@ -533,7 +525,7 @@ def layer_report(P, m, i=0, label=""):
                 grams=pl['L'] * P['strand_w'] * P['layer_h'] * 1.24 / 1000)
 
 
-def match_mass(P, m, L_target, lo=3.0, hi=22.0):
+def match_mass(P, m, L_target, lo=3.0, hi=13.0):
     """Hold path length (=mass) constant across the ladder by trimming r0. Judge correction to
     SPIRA-1: its m-ladder was NOT constant mass (+24.9% from m=4.5 to 10.5) and said it was."""
     for _ in range(22):
@@ -547,14 +539,14 @@ def match_mass(P, m, L_target, lo=3.0, hi=22.0):
     return 0.5 * (lo + hi)
 
 
-def stack_report(P, m, cell=0.6, near=0.5):
+def stack_report(P, m, cell=0.6, near=0.5, vary=True):
     """Do crossings pile into welded vertical columns? That is re-inventing the pillar."""
     from scipy.spatial import cKDTree
     per, cells = [], {}
     prev = None
     adj = 0; tot = 0
     for i in range(P['layers']):
-        xs, ys = layer_polyline(i, m, P)
+        xs, ys = layer_polyline(i if vary else 0, m, P)
         h = crossings(xs, ys)
         pts = np.array([[a, b] for _, _, a, b in h])
         per.append(pts)
@@ -673,18 +665,11 @@ def main():
               f"layer {r['secs']:.1f} s   dt/layer {r['dt50']/max(r['secs'],1e-9):.3f} "
               f"(uniform-random floor 0.293)")
         print("\nPER-LAYER VARIATION — do crossings weld into columns?")
-        for lbl, Q in (("none", dict(P, _flat=True)), ("full schedule", P)):
-            if lbl == "none":
-                import types
-                g = globals(); old = g['layer_plan']
-                g['layer_plan'] = lambda PP, i: dict(phi0=0.0, r0=PP['r0'], r_max=PP['r_max'],
-                                                     reverse=False)
-                st = stack_report(P, P['m']); g['layer_plan'] = old
-            else:
-                st = stack_report(P, P['m'])
+        for lbl, vv in (("15 identical", False), ("full schedule", True)):
+            st = stack_report(P, P['m'], vary=vv)
             print(f"  {lbl:>14}: adjacent-layer stacking {st['adjacent']*100:5.1f}%   "
                   f"occupied cells {st['occupied']:>5}   max column {st['maxcol']:>2}/{P['layers']}"
-                  f"   mean {st['meancol']:.2f}")
+                  f"   mean depth {st['meancol']:.2f}")
 
     if a.ladder:
         base = layer_report(P, 6.57)
@@ -710,6 +695,9 @@ def main():
               f"({st['cross']//P['layers']}/layer), {st['lifts']} lifts, {st['moves']} web moves")
         print(f"  {st['path']/1000:.1f} m web path, {st['grams']:.2f} g, {st['lines']} lines, "
               f"F{st['speed']:.0f} mm/s")
+        print(f"  inter-layer re-positions: {P['layers']-1} x "
+              f"{st['travel']/max(P['layers']-1,1):.2f} mm = {st['travel']:.1f} mm total "
+              f"(travel:extrude {st['travel']/st['path']:.4f}:1)")
         runs = parse_gcode(fn)
         print("  PARSE-BACK — the emitted file re-planned, not the model:")
         print(f"    {'part':>6}{'runs':>6}{'pts':>8}{'m':>7}{'F':>6}{'slow':>8}{'v_min_body':>12}"
