@@ -55,3 +55,24 @@ BED_MAX = 120.0        # config claims 135; the machine silently clamps to 120
 #   G0 lines between the first and last "G1 ... E" must be zero.
 # ---------------------------------------------------------------------------------------------
 NO_TRAVEL_RULE = True
+
+# ---------------------------------------------------------------------------------------------
+# MEASURED BEAD GEOMETRY — 2026-07-25, from a 3-layer probe calipered by Oleg at 4.72 mm.
+#
+# Commanded 2.0 x 1.2 mm (2.40 mm2). Three layers at a commanded 1.2 would be 3.60 mm; it measured
+# 4.72, so the real DEPOSIT is 1.573 mm/layer — the part climbs 0.373 mm every layer.
+#
+#     LANDED_WIDTH = cross_section / deposit = 2.40 / 1.573 = 1.53 mm
+#
+# The nozzle only squashes a bead when the gap is UNDER the orifice. At a 1.2 mm gap it sits above
+# the plastic, so the bead spreads unaided to ~1.9x the orifice and no further — commanding 2.0 mm
+# does not make it 2.0 mm wide, it makes it TALLER.
+#
+# Two consequences, both previously guessed at:
+#   · Z rise must equal the DEPOSIT, not the commanded height  -> nucleon.py --z-step 1.57
+#   · a solid surface needs turn spacing <= LANDED_WIDTH       -> this is the number the spiral
+#     gap tests were circling all afternoon ("still not a solid surface at points")
+DEPOSIT_PER_LAYER = 1.573   # for the 2.0 x 1.2 commanded bead
+LANDED_WIDTH = 1.53         # what a 2.0mm command actually lays down at a 1.2mm gap
+SPREAD_RATIO = 1.91         # landed width / nozzle, unaided by squish
+# ---------------------------------------------------------------------------------------------
