@@ -1,0 +1,14 @@
+BAND HEIGHT CARD — flowtest_nohome_pla_T230_5-26
+measure from the TOP of the 2 adhesion layers (0.4mm) with calipers
+
+  band 1: Z 0.4-1.6 mm    5 mm3/s   (56 mm/s)
+  band 2: Z 1.6-2.8 mm    8 mm3/s   (89 mm/s)
+  band 3: Z 2.8-4.0 mm   11 mm3/s   (122 mm/s)
+  band 4: Z 4.0-5.2 mm   14 mm3/s   (156 mm/s)
+  band 5: Z 5.2-6.4 mm   17 mm3/s   (189 mm/s)
+  band 6: Z 6.4-7.6 mm   20 mm3/s   (222 mm/s)
+  band 7: Z 7.6-8.8 mm   23 mm3/s   (256 mm/s)
+  band 8: Z 8.8-10.0 mm   26 mm3/s   (289 mm/s)
+
+first band that goes thin/gappy/matte = past the ceiling.
+working max flow = last GOOD band x 0.85
