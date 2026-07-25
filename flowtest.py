@@ -198,6 +198,8 @@ if __name__ == "__main__":
         if a.line_w in (3.0,):
             a.line_w = round(a.spacing * a.overlap, 3)
     m = MATERIALS[a.material]
+    bed_xy_for_name = (tuple(float(v) for v in a.bed_size.split(','))
+                       if a.bed_size else None)
     fl = [float(x) for x in a.flows.split(",")] if a.flows else m["flows"]
     q_lo, q_hi = min(fl), max(fl)
     temp = a.temp or m["temp"]
@@ -207,7 +209,13 @@ if __name__ == "__main__":
                  a.spacing, a.fixed_speed or None,
                  tuple(float(v) for v in a.bed_size.split(',')) if a.bed_size else None)
     os.makedirs(a.out, exist_ok=True)
-    fn = (f"{a.out}/flowspiral_{'nohome_' if a.no_home else ''}{a.material}"
+    # Machine tag in the filename. Two files that differ ONLY by bed size are a real hazard: the
+    # K2's spiral is centred at 175,175 and the K1C's at 114,112, so starting the wrong one by hand
+    # on the touchscreen drives the head off the plate. Same-name-different-machine is exactly the
+    # kind of thing that reads as harmless right up until it is not.
+    _bx, _by = (bed_xy_for_name or BED)
+    _tag = {(350.0, 350.0): 'k2', (229.0, 225.0): 'k1c'}.get((_bx, _by), f'{int(_bx)}x{int(_by)}')
+    fn = (f"{a.out}/flowspiral_{_tag}_{'nohome_' if a.no_home else ''}{a.material}"
           f"_T{temp}_{int(q_lo)}-{int(q_hi)}.gcode")
     open(fn, "w").write(g)
     xs = a.line_w * a.layer_h
