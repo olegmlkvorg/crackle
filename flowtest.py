@@ -55,6 +55,7 @@ Usage:
   python3 flowtest.py --no-home --flows 60,100
 """
 import argparse, math, os
+import machine
 
 MATERIALS = {
     # floor rises as each run passes — no point reprinting known-good flow

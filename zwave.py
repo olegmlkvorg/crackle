@@ -38,6 +38,7 @@ Usage:
   python3 zwave.py --no-home --flow 70.5 --wavelength 4 --amp-max 0.24
 """
 import argparse, math, os
+import machine
 
 BED = (350.0, 350.0)
 
@@ -128,7 +129,8 @@ def emit(flow, layer_h, line_w, wavelength, amp_max, temp, bed, fan, fil_d, home
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--flow", type=float, required=True, help="working flow mm3/s (0.85 x measured max)")
+    ap.add_argument("--flow", type=float, default=machine.FLOW,
+                    help="mm3/s — defaults to the measured max-known-good")
     ap.add_argument("--wavelength", type=float, default=10.0, help="mm of path per cycle")
     ap.add_argument("--amp-max", type=float, default=1.0, help="target rim amplitude (capped)")
     ap.add_argument("--layer_h", type=float, default=0.4)

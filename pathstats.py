@@ -123,7 +123,18 @@ def analyse(pts, feed_mms=200.0, accel=8000.0, label="", quiet=False):
     cpos = sorted(cum[i] for i in cross_segs)
     members = [b - a for a, b in zip(cpos, cpos[1:])] if len(cpos) > 1 else []
 
-    # speed uniformity: discrete curvature -> max cornering speed v = sqrt(accel * R)
+    # SPEED UNIFORMITY — Klipper's own junction model, not a circle fitted through three points.
+    # The fitted-circle version was wrong in the way that matters: for a square with 60mm sides it
+    # returned a 42mm radius (geometrically true, physically meaningless) and declared a 90-degree
+    # corner fast. A polyline vertex is a DIRECTION DISCONTINUITY — its speed limit does not depend
+    # on how long the neighbouring segments are.
+    #
+    # Klipper: junction_deviation = scv^2 * (sqrt(2)-1) / accel
+    #          sin_half = sin(turn/2);  R = jd * sin_half / (1 - sin_half);  v = sqrt(R * accel)
+    # which yields exactly square_corner_velocity at a 90-degree corner, as it should.
+    # Arcs are additionally limited by centripetal accel, v = sqrt(accel * R_arc); take the lower.
+    SCV = 5.0
+    jd = SCV ** 2 * (math.sqrt(2.0) - 1.0) / accel
     slow = 0.0
     for i in range(1, len(pts) - 1):
         a, b, c = pts[i - 1], pts[i], pts[i + 1]
@@ -132,14 +143,22 @@ def analyse(pts, feed_mms=200.0, accel=8000.0, label="", quiet=False):
             continue
         cosang = ((b[0]-a[0])*(c[0]-b[0]) + (b[1]-a[1])*(c[1]-b[1])) / (d1*d2)
         cosang = max(-1.0, min(1.0, cosang))
-        turn = math.acos(cosang)      # 0 = straight ahead. (Was pi - acos, i.e. inverted: a
-                                      # straight path reported a full reversal and every curve came
-                                      # back as 100% speed-limited, which is why the metric was
-                                      # useless rather than merely imprecise.)
-        if turn < 1e-6:
-            continue
-        R = ((d1 + d2) / 2.0) / (2 * math.sin(min(turn, math.pi - 1e-6) / 2.0))
-        if math.sqrt(accel * max(R, 1e-9)) < 0.9 * feed_mms:
+        turn = math.acos(cosang)                     # 0 = straight ahead
+        # Klipper's term is cos(turn/2), NOT sin(turn/2): straight ahead must give an INFINITE
+        # junction radius and a 180-degree reversal must give zero. Getting this backwards made
+        # filleting look worse than sharp corners, which is how the error surfaced.
+        sin_half = math.cos(turn / 2.0)
+        if sin_half >= 1.0 - 1e-9:
+            v_corner = float('inf')          # straight
+        elif sin_half < 1e-9:
+            v_corner = 0.0                   # full reversal
+        else:
+            v_corner = math.sqrt(jd * sin_half / (1.0 - sin_half) * accel)
+        # centripetal limit of the local arc (only meaningful once sampling is fine)
+        if turn > 1e-9 and max(d1, d2) < 5.0:
+            R_arc = ((d1 + d2) / 2.0) / (2.0 * math.sin(turn / 2.0))
+            v_corner = min(v_corner, math.sqrt(accel * R_arc))
+        if v_corner < 0.9 * feed_mms:
             slow += d2
     frac_slow = slow / total if total else 0.0
 

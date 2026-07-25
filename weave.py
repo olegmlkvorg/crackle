@@ -37,7 +37,8 @@ Usage:
   python3 weave.py --no-home --flow 40 --weld 0.0     # fully woven
   python3 weave.py --no-home --flow 40 --weld 1.0     # fully fused (today's behaviour)
 """
-import argparse, math, os, sys
+import argparse, math, os
+import machine, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pathstats import crossings as find_crossings
 
@@ -51,7 +52,7 @@ def lissajous(a, b, size, cx, cy, n, phase):
 
 
 def emit(a_f, b_f, size, origin, layers, layer_h, line_w, strand_w, flow, weld, lift, lift_win,
-         temp, bed, fan, fil_d, home, samples):
+         temp, bed, fan, fil_d, home, samples, ladder=None):
     # STRAND WIDTH BELOW THE ORIFICE — the mirror of the wide-line failure, and just as silent.
     # A nozzle cannot deposit a bead NARROWER than its own hole. Command it and the melt is drawn
     # thin, breaks into discontinuous beads, and reads as retraction stringing. v1 made this exact
@@ -66,7 +67,9 @@ def emit(a_f, b_f, size, origin, layers, layer_h, line_w, strand_w, flow, weld, 
     # Z demand of one raised-cosine lift, as a function of path speed
     vz = math.pi * lift * speed / (2 * lift_win)
     az = (math.pi ** 2) * lift * speed ** 2 / (2 * lift_win ** 2)
-    if vz > MAX_Z_V or az > MAX_Z_A:
+    # Only binding if lifts actually happen. At --weld 1.0 nothing moves Z, so refusing that file
+    # would be the guard mistaking its own applicability for a fault.
+    if weld < 1.0 and (vz > MAX_Z_V or az > MAX_Z_A):
         need = speed * math.pi * math.sqrt(lift / (2 * MAX_Z_A))
         raise SystemExit(
             f"Z cannot follow the lift: v_peak {vz:.1f} mm/s (limit {MAX_Z_V}), "
@@ -75,7 +78,18 @@ def emit(a_f, b_f, size, origin, layers, layer_h, line_w, strand_w, flow, weld, 
             f"(--lift-win {math.ceil(need)}), or drop --flow.\n"
             f"  Klipper would not error; it would slow the move and change the bead width.")
 
+    # At max flow the head covers ground fast, so a lift window can be a large share of the path
+    # between consecutive crossings. If windows overlap, adjacent lifts merge into one long hop and
+    # the coupon stops being a weave — it becomes a wavy sheet floating above the plate.
+    if weld < 1.0:
+        est_path = 2.2 * size * max(a_f, b_f)          # rough Lissajous arc length
+        est_cross = max(a_f * b_f * 2, 1)
+        gap = est_path / est_cross
+        if 2 * lift_win > 0.8 * gap:
+            print(f"  NOTE: lift window {2*lift_win:.0f}mm vs ~{gap:.0f}mm between crossings — "
+                  f"lifts will merge. Lower --flow or --lift-win for a true weave.")
     cx = cy = origin + size / 2.0
+    coupons = ladder if ladder else [(weld, cx, cy)]
     L = []; w = L.append
     w(f"; WEAVE — lift over printed lines. lissajous {a_f}:{b_f}, weld fraction {weld}")
     w(f"; flow={flow} -> {speed:.0f} mm/s, strand_w={strand_w} layer_h={layer_h} lift={lift}")
@@ -93,41 +107,43 @@ def emit(a_f, b_f, size, origin, layers, layer_h, line_w, strand_w, flow, weld, 
     L.append("; BODY_START")
     e = 0.0
     stats = dict(cross=0, lifts=0)
-    for layer in range(layers):
-        z0 = layer_h * (layer + 1)
-        phase = (math.pi / 3.0) * layer          # rotate the figure so crossings do not stack
-        pts = lissajous(a_f, b_f, size, cx, cy, samples, phase)
+    for weld, cx, cy in coupons:
+      L.append(f"; ===== coupon weld={weld:g} at ({cx:.0f},{cy:.0f}) =====")
+      for layer in range(layers):
+          z0 = layer_h * (layer + 1)
+          phase = (math.pi / 3.0) * layer          # rotate the figure so crossings do not stack
+          pts = lissajous(a_f, b_f, size, cx, cy, samples, phase)
 
-        hits, _ = find_crossings(pts)
-        # path distance to each sample
-        cum = [0.0]
-        for i in range(len(pts) - 1):
-            cum.append(cum[-1] + math.dist(pts[i], pts[i + 1]))
+          hits, _ = find_crossings(pts)
+          # path distance to each sample
+          cum = [0.0]
+          for i in range(len(pts) - 1):
+              cum.append(cum[-1] + math.dist(pts[i], pts[i + 1]))
 
-        # Each crossing is visited TWICE. The first visit lies on the plate; the SECOND must lift,
-        # because there is no "under" once plastic is down. weld<1 means we let some second visits
-        # stay down and fuse instead — that is the dial.
-        second_visits = []
-        for k, (i, j, x, y) in enumerate(sorted(hits, key=lambda h: max(h[0], h[1]))):
-            stats['cross'] += 1
-            if (k % 100) >= weld * 100:          # deterministic: no RNG, reproducible coupons
-                second_visits.append(cum[max(i, j)])
-                stats['lifts'] += 1
+          # Each crossing is visited TWICE. The first visit lies on the plate; the SECOND must lift,
+          # because there is no "under" once plastic is down. weld<1 means we let some second visits
+          # stay down and fuse instead — that is the dial.
+          second_visits = []
+          for k, (i, j, x, y) in enumerate(sorted(hits, key=lambda h: max(h[0], h[1]))):
+              stats['cross'] += 1
+              if (k % 100) >= weld * 100:          # deterministic: no RNG, reproducible coupons
+                  second_visits.append(cum[max(i, j)])
+                  stats['lifts'] += 1
 
-        L.append(f"; layer {layer+1}  z{z0:.2f}  crossings {len(hits)}  lifts {len(second_visits)}")
-        L.append(f"G0 F9000 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}")
-        L.append(f"G1 F600 Z{z0:.3f}")
-        for i in range(1, len(pts)):
-            s = cum[i]
-            dz = 0.0
-            for sv in second_visits:
-                d = s - sv
-                if abs(d) < lift_win:
-                    dz = max(dz, lift * math.cos(math.pi * d / (2 * lift_win)) ** 2)
-            seg = math.dist(pts[i - 1], pts[i])
-            e += seg * e_per_mm
-            L.append(f"G1 {'F%d ' % f_mm_min if i == 1 else ''}X{pts[i][0]:.3f} "
-                     f"Y{pts[i][1]:.3f} Z{z0+dz:.4f} E{e:.5f}")
+          L.append(f"; layer {layer+1}  z{z0:.2f}  crossings {len(hits)}  lifts {len(second_visits)}")
+          L.append(f"G0 F9000 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}")
+          L.append(f"G1 F600 Z{z0:.3f}")
+          for i in range(1, len(pts)):
+              s = cum[i]
+              dz = 0.0
+              for sv in second_visits:
+                  d = s - sv
+                  if abs(d) < lift_win:
+                      dz = max(dz, lift * math.cos(math.pi * d / (2 * lift_win)) ** 2)
+              seg = math.dist(pts[i - 1], pts[i])
+              e += seg * e_per_mm
+              L.append(f"G1 {'F%d ' % f_mm_min if i == 1 else ''}X{pts[i][0]:.3f} "
+                       f"Y{pts[i][1]:.3f} Z{z0+dz:.4f} E{e:.5f}")
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h*layers+40:.1f} F900", "G0 X10 Y340 F9000"]
     grams = e * area * 1.24 / 1000
@@ -137,7 +153,8 @@ def emit(a_f, b_f, size, origin, layers, layer_h, line_w, strand_w, flow, weld, 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--flow", type=float, default=40.0, help="mm3/s (keep well under the 81 ceiling)")
+    ap.add_argument("--flow", type=float, default=machine.FLOW,
+                    help="mm3/s — defaults to the measured max-known-good, not a slow guess")
     ap.add_argument("--weld", type=float, default=0.0, help="0=all woven, 1=all fused")
     ap.add_argument("--a", type=int, default=5)
     ap.add_argument("--b", type=int, default=7)
