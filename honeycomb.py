@@ -191,7 +191,11 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies and homes if not")
-    w(f"M190 S{bed}"); w(f"M109 S{temp}")
+    # M190 only waits for HEATING; a bed already hotter than target returns instantly, so a part
+    # meant for a 45C plate can print on a 98C one left over from the previous job. TEMPERATURE_WAIT
+    # blocks in BOTH directions.
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
+    w(f"M109 S{temp}")
     w("M204 S8000"); w("M107" if not fan else f"M106 S{fan}")
     w("M82"); w("G92 E0")
     x0, y0 = pts[0]

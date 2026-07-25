@@ -111,9 +111,15 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
         w(f";   bump {mq:g} mm3/s at r{r0 + b*mth:.0f}mm")
     w("; HEADER_BLOCK_START"); w("; total layer number: 1"); w("; HEADER_BLOCK_END")
 
-    w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
+    w(f"M104 S{temp}"); w("G90")
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
-    w(f"M190 S{bed}"); w(f"M109 S{temp}")
+    # M190 ONLY WAITS FOR HEATING. If the bed is already ABOVE target it returns instantly, so a
+    # file that says "bed 45" can start printing on a 98C plate left over from the previous job --
+    # which is how a TPU test meant for 45C got laid onto a hot bed and welded itself down.
+    # TEMPERATURE_WAIT blocks in BOTH directions.
+    w(f"M140 S{bed}")
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
+    w(f"M109 S{temp}")
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
     for _ln in machine.aux_fans(printer, aux):
