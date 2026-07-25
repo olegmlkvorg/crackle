@@ -127,3 +127,22 @@ TEMP_RATED = 210        # manufacturer spec for the translucent PLA
 K1C_FLOW = 55.0         # same cap; K1C cracks at 59.6 so 55 sits just under it
 K1C_MEASURED = 59.6     # where it began skipping, 1.0 nozzle, 210C
 # ---------------------------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------------------------
+# PRESS HARD — the general method for this work. Oleg, 2026-07-25: "pressing to the bed is a key,
+# go as low as 0.1mm" ... "in general thats how we should be laying this work".
+#
+# Everything that touches the plate is CRUSHED into it, not laid on it: feet, hearts, anchors, the
+# base. 0.10mm against a 0.8mm orifice is an eighth of the nozzle — the bead is squashed flat and
+# wide, which is exactly what grips.
+#
+# WHY it matters more here than in ordinary printing: this work hangs things in the air. Every
+# thrown arc pulls UPWARD on the foot that anchors it, and a foot that was merely laid has nothing
+# but its own surface contact to resist. Adhesion is not a first-layer concern in this process, it
+# is the structural element. Most of today's detachments trace back to it.
+#
+# THE RISK, stated: at 0.10mm the nozzle is close enough that bed-levelling error alone can scrape
+# the plate. It wants a well-trammed bed and a clean sheet; if the first pass sounds like scratching
+# rather than squashing, raise it rather than continue.
+PRESS_HARD = 0.10       # absolute Z for anything anchoring to the plate
+# ---------------------------------------------------------------------------------------------

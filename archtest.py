@@ -297,7 +297,7 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                     # anchor height — the flatter and wider it is crushed, the more plate it grips.
                     # Oleg: "hearts need to be much larger diameter and pressed to bed as much as
                     # possible".
-                    hz = max(heart_z, 0.12)
+                    hz = max(heart_z, 0.08)
                     e += (anchor - hz) * e_per_mm
                     L.append(f"G1 F600 Z{hz:.4f} E{e:.5f}            ; press the heart into the plate")
                     hprev = (hx, hy, hz)
@@ -339,7 +339,7 @@ if __name__ == "__main__":
     ap.add_argument("--petal-v", type=float, default=400.0,
                     help="throw speed mm/s — at a fixed flow cap this sets how THIN the\n                          flying strand is, which is what lets its own arc carry it")
     ap.add_argument("--lean", type=float, default=0.35, help="sideways lean: petal, not disc")
-    ap.add_argument("--heart-z", type=float, default=0.18,
+    ap.add_argument("--heart-z", type=float, default=0.10,
                     help="absolute Z the heart is crushed to — lower grips more plate")
     ap.add_argument("--heart", type=float, default=18.0,
                     help="size of the little heart drawn at each landing foot, mm")
@@ -354,8 +354,8 @@ if __name__ == "__main__":
     ap.add_argument("--petal-h", type=float, default=0.4, help="flying strand height mm")
     ap.add_argument("--reach", type=float, default=0.0,
                     help="how far the petal throws, mm. 0 = tie it to height (a circle)")
-    ap.add_argument("--anchor", type=float, default=0.35,
-                    help="absolute Z (mm) to press to before rising — well under the bead")
+    ap.add_argument("--anchor", type=float, default=0.10,
+                    help="absolute Z (mm) to press to before rising. 0.10 = crushed. See\n                          machine.PRESS_HARD — this is the project's general method.")
     ap.add_argument("--weld-dab", type=float, default=1.2,
                     help="mm of filament dabbed stationary to build a foot")
     ap.add_argument("--squish", type=float, default=0.72,

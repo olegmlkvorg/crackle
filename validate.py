@@ -21,7 +21,12 @@ def check(path):
     # height is the intended 'press' half of the cycle, not ploughing — so the relative check is
     # replaced by an ABSOLUTE plate floor, which is the thing that actually breaks hardware.
     z_modulated = '; Z_MODULATED' in open(path).read()
-    Z_PLATE_FLOOR = 0.12
+    # Plate floor lowered to match machine.PRESS_HARD (0.10), which is now the project's deliberate
+    # method rather than an accident — everything anchoring to the plate is crushed into it, because
+    # this work hangs things in the air and every thrown arc pulls UPWARD on its foot.
+    # 0.06 remains a real floor: below that a 0.8 nozzle is not squashing plastic, it is dragging on
+    # the sheet. The check still catches genuine mistakes; it no longer refuses the technique.
+    Z_PLATE_FLOOR = 0.06
     z = 0.0; e = 0.0; x = y = 0.0; layer_floor = 0.0
     abs_e = True
     problems, warns = [], []
