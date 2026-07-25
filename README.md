@@ -24,6 +24,16 @@ Z descending into the part, coordinates off the bed, missing home/heat, and the 
 
 Run protocol + scoring rubric: `notes/PROTOCOL.md`. Results table: `notes/RESULTS.md`.
 
+## Use your printer's own start gcode (recommended)
+Rather than trusting a generic start block, take the one your machine already uses:
+1. Slice anything in Creality Print for the K2 Plus, save the `.gcode`.
+2. Copy everything from the top down to just before the first real layer into `k2-start.txt`
+   (and the tail after the last layer into `k2-end.txt`).
+3. `python3 crackle.py --sweep all --start-gcode k2-start.txt --end-gcode k2-end.txt`
+
+It's inserted verbatim, then **our** temperature and fan are re-asserted right after — because the
+experiment depends on those two and a machine block will happily set its own.
+
 **Read the protocol's first section before printing** — the K2's AI failure-detection is designed to
 abort exactly this kind of print.
 

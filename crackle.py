@@ -62,6 +62,8 @@ class Params:
     flow: float = 1.0
     wipe_every: int = 0         # layers between a nozzle-wipe pass (0 = off)
     inset: float = 8.0          # keep pillars off the coupon edge
+    start_gcode: str = ""       # if set, used VERBATIM instead of the generic start (see README)
+    end_gcode: str = ""         # ditto
     base_f: int = 3000          # base is structural, not pretty — run it fast
 
 
@@ -161,17 +163,28 @@ def emit(p: Params) -> tuple[str, dict]:
     g.w("; RETRACTION / COMBING / Z-HOP / WIPE ARE DELIBERATELY ABSENT — the travels are the product.")
     for k, v in asdict(p).items(): g.w(f"; param {k}={v}")
     # --- start ---
-    g.w("M190 S%d" % p.bed); g.w("M104 S%d" % p.temp)
-    g.w("G28"); g.w("G90"); g.w("M83")                  # absolute XYZ, RELATIVE E is safer to append
-    g.w("M109 S%d" % p.temp)
-    g.w(f"M106 S{p.fan}" if p.fan else "M107")
-    g.w("; prime line")
-    g.w(f"G0 Z{p.layer_h:.2f} F3000"); g.w("G0 X5 Y5 F6000")
-    g.w("G1 X55 Y5 E14 F1200"); g.w("G1 X55 Y5.6 E0.6 F1200"); g.w("G1 X5 Y5.6 E14 F1200")
+    # PREFER THE MACHINE'S OWN START BLOCK. Rather than me guessing a K2 Plus start sequence,
+    # slice anything in Creality Print, open the .gcode, and copy everything before the first layer
+    # into a file -> pass it with --start-gcode. It already has the right homing, probing, chamber
+    # and prime for this machine. The generic block below is only a fallback.
+    if p.start_gcode.strip():
+        g.w("; ---- machine start block (supplied verbatim) ----")
+        for line in p.start_gcode.splitlines(): g.w(line)
+        g.w("; ---- end machine start block ----")
+        g.w(f"M104 S{p.temp}"); g.w(f"M109 S{p.temp}")     # enforce OUR temp, whatever the block set
+        g.w(f"M106 S{p.fan}" if p.fan else "M107")         # and OUR fan — the experiment depends on it
+    else:
+        g.w("; GENERIC start — replace with your machine's own block via --start-gcode (see README)")
+        g.w("M190 S%d" % p.bed); g.w("M104 S%d" % p.temp)
+        g.w("G28"); g.w("G90"); g.w("M83")
+        g.w("M109 S%d" % p.temp)
+        g.w(f"M106 S{p.fan}" if p.fan else "M107")
+        g.w("; prime line")
+        g.w(f"G0 Z{p.layer_h:.2f} F3000"); g.w("G0 X5 Y5 F6000")
+        g.w("G1 X55 Y5 E14 F1200"); g.w("G1 X55 Y5.6 E0.6 F1200"); g.w("G1 X5 Y5.6 E14 F1200")
     g.w("G92 E0")
     g.e = 0.0
-    # M83 relative-E: our absolute accumulator would be wrong, so switch to absolute for the body
-    g.w("M82"); g.w("G92 E0")
+    g.w("M82"); g.w("G92 E0")                              # body is absolute-E
 
     z = 0.0
     # --- anchor base: solid-ish slab so pillars survive drag AND the coupon peels off intact ---
@@ -217,9 +230,13 @@ def emit(p: Params) -> tuple[str, dict]:
             g.w("; wipe pass — shed accumulated ooze on the base edge")
             g.move(p.origin + 3.0, p.origin + 3.0, f=9000); g.extrude_to(p.origin + p.size - 3.0, p.origin + 3.0, p.size - 6.0, f=3000)
     # --- end ---
-    g.w("M107"); g.w("M104 S0"); g.w("M140 S0")
-    g.w(f"G0 Z{z + 20:.2f} F1200"); g.w("G0 X5 Y{:.0f} F6000".format(p.origin + p.size + 20))
-    g.w("M84")
+    if p.end_gcode.strip():
+        g.w("; ---- machine end block (supplied verbatim) ----")
+        for line in p.end_gcode.splitlines(): g.w(line)
+    else:
+        g.w("M107"); g.w("M104 S0"); g.w("M140 S0")
+        g.w(f"G0 Z{z + 20:.2f} F1200"); g.w("G0 X5 Y{:.0f} F6000".format(p.origin + p.size + 20))
+        g.w("M84")
     grams = g.e * math.pi * (p.filament_d/2)**2 * 1.24 / 1000
     stats = {"crossings_per_layer": xr, "crossings_total": xr * p.passes * p.layers,
              "filament_mm": round(g.e, 1), "grams": round(grams, 2),
@@ -242,7 +259,13 @@ if __name__ == "__main__":
     ap.add_argument("--sweep", default=None, choices=["order", "all"])
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--out", default="out")
+    ap.add_argument("--start-gcode", default=None, help="file with your machine's start block, used verbatim")
+    ap.add_argument("--end-gcode", default=None, help="file with your machine's end block")
     a = ap.parse_args()
+    _sg = open(a.start_gcode).read() if a.start_gcode else ""
+    _eg = open(a.end_gcode).read() if a.end_gcode else ""
+    if _sg or _eg:
+        for k in PRESETS: PRESETS[k] = replace(PRESETS[k], start_gcode=_sg, end_gcode=_eg)
     if a.list:
         for k, v in PRESETS.items(): print(f"{k}: order={v.order} passes={v.passes} fan={v.fan} n={v.n}")
         sys.exit(0)
