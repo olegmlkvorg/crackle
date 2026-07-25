@@ -43,7 +43,7 @@ BED = (350.0, 350.0)
 
 
 def emit(flow, layer_h, line_w, wavelength, amp_max, temp, bed, fan, fil_d, home, margin,
-         r0, seg_len, bump_h, bump_arc, bump_every):
+         r0, seg_len, bump_h, bump_arc, bump_every, spacing_mm):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -52,7 +52,7 @@ def emit(flow, layer_h, line_w, wavelength, amp_max, temp, bed, fan, fil_d, home
     amp_hi = min(amp_max, cap)
     cx, cy = BED[0] / 2, BED[1] / 2
     r_max = min(cx, cy) - margin
-    b = line_w / (2 * math.pi)
+    b = (spacing_mm or line_w) / (2 * math.pi)
     th_max = (r_max - r0) / b
 
     def amp_at_r(r):
@@ -131,15 +131,26 @@ if __name__ == "__main__":
     ap.add_argument("--bump", type=float, default=1.0)
     ap.add_argument("--bump-arc", type=float, default=0.12)
     ap.add_argument("--bump-every", type=float, default=0.02, help="mm of amplitude between pimples")
+    ap.add_argument("--spacing", type=float, default=None,
+                    help="turn spacing mm; lines OVERLAP when < the landed bead width")
+    ap.add_argument("--overlap", type=float, default=1.10,
+                    help="material multiple vs spacing (1.10 = 10%% squeeze)")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    if a.spacing:
+        # Conservation, not preference: material per unit AREA is line_w*layer_h/spacing. Move the
+        # turns closer without narrowing the line and you deposit more height than the Z step,
+        # the nozzle ploughs, and you repeat the 2026-07-25 tower failure. So --spacing DERIVES
+        # line_w unless one was passed explicitly.
+        if a.line_w in (3.0,):
+            a.line_w = round(a.spacing * a.overlap, 3)
     if a.seg > a.wavelength / 6:
         raise SystemExit(f"--seg {a.seg} is too coarse for wavelength {a.wavelength}: the sine would "
                          f"be sampled under 6x per cycle and come out as a jagged triangle, not a "
                          f"wave. Use --seg <= {a.wavelength/6:.2f}.")
     g, st = emit(a.flow, a.layer_h, a.line_w, a.wavelength, a.amp_max, a.temp, a.bed, a.fan, 1.75,
-                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every)
+                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every, a.spacing)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/zspiral_{'nohome_' if a.no_home else ''}Q{a.flow:g}_w{a.wavelength:g}_T{a.temp}.gcode"
     open(fn, "w").write(g)

@@ -135,19 +135,48 @@ def visit_order(pts, mode, seed=0):
         return o
     raise SystemExit(f"unknown order: {mode}")
 
+def _orient(a, b, c):
+    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+
 def _seg_cross(a, b, c, d):
-    def o(p, q, r): return (q[1]-p[1])*(r[0]-q[0]) - (q[0]-p[0])*(r[1]-q[1])
-    def sgn(v): return (v > 1e-9) - (v < -1e-9)
-    return sgn(o(a,b,c)) != sgn(o(a,b,d)) and sgn(o(c,d,a)) != sgn(o(c,d,b))
+    """PROPER crossing only. The previous version used sign-inequality, which treats a TOUCH as a
+    crossing: on a square grid, chords routinely pass exactly through another pillar's centre, and
+    every one of those was counted. That inflated coupon A from 60 real crossings to 77."""
+    d1, d2 = _orient(c, d, a), _orient(c, d, b)
+    d3, d4 = _orient(a, b, c), _orient(a, b, d)
+    if not (((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))):
+        return None
+    if min(abs(d1), abs(d2), abs(d3), abs(d4)) <= 1e-9:
+        return None
+    den = (b[0]-a[0])*(d[1]-c[1]) - (b[1]-a[1])*(d[0]-c[0])
+    if abs(den) < 1e-12:
+        return None
+    t = ((c[0]-a[0])*(d[1]-c[1]) - (c[1]-a[1])*(d[0]-c[0])) / den
+    return (a[0] + t*(b[0]-a[0]), a[1] + t*(b[1]-a[1]))
 
 def count_crossings(pts, order):
-    """THE control number: how many times do this layer's travel chords cross each other."""
+    """THE control number — and it is DISTINCT JUNCTION POINTS, not crossing pairs.
+
+    Measured 2026-07-25 against the emitted gcode: on a symmetric grid the star order makes many
+    chords concurrent through the SAME point (12 hubs on coupon A, the busiest carrying 5 pairs at
+    the grid centre). Half of all crossing pairs collapse onto shared locations. Physically that is
+    one fused weld, not five independent ones, and the thesis is about junctions SNAPPING — so
+    distinct points is the quantity that matches the mechanism.
+
+    Consequence worth keeping in view: 'star = maximal crossings' is false in this sense. Star
+    maximises pairs while concentrating them; maxcross distributes better and yields MORE distinct
+    junctions despite a lower pair count.
+
+    Returns (distinct_points, pairs) — pairs kept because a 5-way hub is a stronger weld than a
+    2-way one, so it is a real secondary variable, just not the control.
+    """
     segs = [(pts[order[i]], pts[order[i+1]]) for i in range(len(order)-1)]
-    n = 0
+    locs = []
     for i in range(len(segs)):
         for j in range(i+2, len(segs)):        # skip adjacent (they share an endpoint)
-            if _seg_cross(*segs[i], *segs[j]): n += 1
-    return n
+            r = _seg_cross(*segs[i], *segs[j])
+            if r: locs.append((round(r[0], 2), round(r[1], 2)))
+    return len(set(locs)), len(locs)
 
 # ---------------------------------------------------------------- gcode
 class G:
@@ -196,10 +225,10 @@ def g_last(g):
 def emit(p: Params) -> tuple[str, dict]:
     pts = pillar_xy(p)
     base_order = visit_order(pts, p.order)
-    xr = count_crossings(pts, base_order)
+    xr, xpairs = count_crossings(pts, base_order)   # junctions, pairs
 
     g = G(p)
-    g.w(f"; crackle coupon {p.name} — order={p.order} crossings/layer={xr} passes={p.passes}")
+    g.w(f"; crackle coupon {p.name} — order={p.order} junctions/layer={xr} (pairs={xpairs}) passes={p.passes}")
     g.w(f"; {p.size}mm, {p.n}x{p.n} pillars, {p.layers}x{p.layer_h}mm, T{p.temp} fan{p.fan}")
     g.w("; RETRACTION / COMBING / Z-HOP / WIPE ARE DELIBERATELY ABSENT — the travels are the product.")
     for k, v in asdict(p).items(): g.w(f"; param {k}={v}")

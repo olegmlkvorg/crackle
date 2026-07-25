@@ -67,12 +67,12 @@ BED = (350.0, 350.0)   # K2 Plus
 
 
 def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
-         bump_h, bump_arc, bump_every):
+         bump_h, bump_arc, bump_every, spacing_mm):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     cx, cy = BED[0] / 2, BED[1] / 2
     r_max = min(cx, cy) - margin
-    b = line_w / (2 * math.pi)              # radius gained per radian
+    b = (spacing_mm or line_w) / (2 * math.pi)              # radius gained per radian
     th_max = (r_max - r0) / b
     turns = th_max / (2 * math.pi)
 
@@ -158,16 +158,27 @@ if __name__ == "__main__":
     ap.add_argument("--bump", type=float, default=1.0, help="marker bump height mm")
     ap.add_argument("--bump-arc", type=float, default=0.12, help="marker half-width in radians")
     ap.add_argument("--bump-every", type=float, default=5.0, help="mm3/s between markers")
+    ap.add_argument("--spacing", type=float, default=None,
+                    help="turn spacing mm; lines OVERLAP when < the landed bead width")
+    ap.add_argument("--overlap", type=float, default=1.10,
+                    help="material multiple vs spacing (1.10 = 10%% squeeze)")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    if a.spacing:
+        # Conservation, not preference: material per unit AREA is line_w*layer_h/spacing. Move the
+        # turns closer without narrowing the line and you deposit more height than the Z step,
+        # the nozzle ploughs, and you repeat the 2026-07-25 tower failure. So --spacing DERIVES
+        # line_w unless one was passed explicitly.
+        if a.line_w in (3.0,):
+            a.line_w = round(a.spacing * a.overlap, 3)
     m = MATERIALS[a.material]
     fl = [float(x) for x in a.flows.split(",")] if a.flows else m["flows"]
     q_lo, q_hi = min(fl), max(fl)
     temp = a.temp or m["temp"]
     bed = a.bed if a.bed is not None else m["bed"]
     g, st = emit(q_lo, q_hi, a.layer_h, a.line_w, temp, bed, a.fan, 1.75,
-                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every)
+                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every, a.spacing)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/flowspiral_{'nohome_' if a.no_home else ''}{a.material}"
           f"_T{temp}_{int(q_lo)}-{int(q_hi)}.gcode")
