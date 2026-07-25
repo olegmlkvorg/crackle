@@ -183,13 +183,24 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             # points in hand every distance is exact and the flow cap holds by construction.
             ux, uy = math.cos(th), math.sin(th)     # radial: the direction the petal throws
             tx, ty = -uy, ux                        # tangential: the sideways lean
+            # TWO LOBES WITH A FOOT IN THE MIDDLE. Oleg: "throw petal in the air, then go down in
+            # longest point to glue it and then get back to the air again".
+            #
+            # phi runs 0..pi, so the head goes OUT and comes BACK: u = Lr*sin(phi) peaks at pi/2.
+            # Height is |sin(2*phi)|, which is zero at 0, pi/2 and pi and peaks between — so the
+            # strand rises, arcs, TOUCHES DOWN at maximum reach where it is welded, rises again, and
+            # lands home. The long span stops being a cantilever hanging off one foot and becomes
+            # two arches sharing a middle anchor. That is what lets the throw be long.
             pts_p = []
+            touch_at = None
             for k in range(1, n_p + 1):
-                phi = 2 * math.pi * k / n_p
+                phi = math.pi * k / n_p
                 u = Lr * math.sin(phi)
-                w = lean * Lr * math.sin(phi) * math.sin(phi / 2)
-                zc = anchor + (amp / 2.0) * (1 - math.cos(phi))
+                w = lean * Lr * math.sin(phi) * math.sin(phi)
+                zc = anchor + amp * abs(math.sin(2 * phi))
                 pts_p.append((px + ux * u + tx * w, py + uy * u + ty * w, zc))
+                if touch_at is None and phi >= math.pi / 2:
+                    touch_at = len(pts_p) - 1        # the far foot, where it glues down
             # ONE cross-section for the whole petal, sized from the MEAN segment.
             # Per-segment sizing was wrong in a way that only showed up in the audit: where the lean
             # makes points cluster, the segment shrinks, the "achievable speed" collapses, and
@@ -213,6 +224,10 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                 L.append(f"G1 F{round(petal_v*60)} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
                          + (f"   ; petal reach {Lr:.0f}mm apex {amp:.0f}mm" if k == 0 else ""))
                 prev = (hx, hy, zc)
+                if k == touch_at:
+                    # glue the far foot: press and dab, exactly as at the near feet
+                    e += weld_dab
+                    L.append(f"G1 F180 E{e:.5f}                     ; GLUE the far foot at full reach")
             e += weld_dab
             L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
             e += (z_base - anchor) * e_per_mm
