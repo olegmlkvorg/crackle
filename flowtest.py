@@ -108,6 +108,7 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     w(f"G0 F9000 X{margin:.1f} Y{margin:.1f}")
     w(f"G1 F1200 X{margin:.1f} Y{margin+80:.1f} E12"); w("G92 E0")
 
+    L.append("; BODY_START")
     e = 0.0
     th = 0.0
     px, py = cx + r0, cy

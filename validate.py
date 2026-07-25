@@ -17,6 +17,11 @@ def check(path):
     # comes back down to Z0.2, and homes inside a macro rather than a literal G28. Checking the
     # body only — a validator that cries wolf on correct machine gcode trains you to ignore it.
     body = False
+    # Generators that move Z DURING extrusion declare it. For them, dipping below the nominal layer
+    # height is the intended 'press' half of the cycle, not ploughing — so the relative check is
+    # replaced by an ABSOLUTE plate floor, which is the thing that actually breaks hardware.
+    z_modulated = '; Z_MODULATED' in open(path).read()
+    Z_PLATE_FLOOR = 0.12
     z = 0.0; e = 0.0; x = y = 0.0; layer_floor = 0.0
     abs_e = True
     problems, warns = [], []
@@ -27,9 +32,13 @@ def check(path):
     for ln, raw in enumerate(open(path), 1):
         # Body-mode markers. MUST cover every generator, because a file whose marker is missing
         # gets ZERO body checks and still prints a green tick — silence is not success.
-        if ('base layer 1' in raw or 'web layer 1 ' in raw
+        # Every generator emits '; BODY_START' immediately before its geometry. Keying on one
+        # standard marker means a NEW generator cannot silently escape checking — the older
+        # per-tool markers are kept only so existing files still validate.
+        if ('; BODY_START' in raw
+                or 'base layer 1' in raw or 'web layer 1 ' in raw
                 or raw.startswith('; layer 1 ') or '; ramp starts' in raw
-                or '---- band 1' in raw or '; ramp ' in raw): body = True
+                or '---- band 1' in raw): body = True
         s = raw.split(';')[0].strip()
         if not s: continue
         n += 1
@@ -62,7 +71,11 @@ def check(path):
                 # A WEAVE lifts over an existing bead and comes back down to the same layer Z.
                 # That descent is the whole point, so it is only ploughing if it goes BELOW the
                 # layer height it started from.
-                if nz < layer_floor - 1e-6:
+                if z_modulated:
+                    if nz < Z_PLATE_FLOOR:
+                        problems.append(f"L{ln}: Z {nz} is below the {Z_PLATE_FLOOR}mm plate floor "
+                                        f"— nozzle would scrape the bed")
+                elif nz < layer_floor - 1e-6:
                     problems.append(f"L{ln}: Z descends to {nz} below layer floor {layer_floor} "
                                     f"— nozzle would plough the part")
             if not (0 <= nx <= BED[0] and 0 <= ny <= BED[1]):

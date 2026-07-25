@@ -84,6 +84,7 @@ def emit(a_f, b_f, size, origin, layers, layer_h, line_w, strand_w, flow, weld, 
     w(f"G0 F9000 X{origin:.1f} Y{origin-8:.1f}")
     w(f"G1 F1200 X{origin+60:.1f} Y{origin-8:.1f} E10"); w("G92 E0")
 
+    L.append("; BODY_START")
     e = 0.0
     stats = dict(cross=0, lifts=0)
     for layer in range(layers):

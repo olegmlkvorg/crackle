@@ -48,7 +48,16 @@ def emit(flow, layer_h, line_w, wavelength, amp_max, temp, bed, fan, fil_d, home
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
     f_mm_min = round(speed * 60)
-    cap = 0.6 * layer_h
+    # Amplitude cap has TWO jobs and the old 0.6*layer_h only did one of them.
+    #   UP-stroke:   above ~0.6*layer_h the nozzle leaves the bead and drags a string.
+    #   DOWN-stroke: layer_h - amp is how close the nozzle gets to the PLATE. At layer_h 0.3 the
+    #                old cap gave 0.12mm, and bed levelling alone varies +-0.05 — that scrapes.
+    # So keep a hard 0.15mm floor under the down-stroke as well. Caught by validate.py once it
+    # was actually checking these files (2026-07-25).
+    Z_FLOOR = 0.15
+    cap = min(0.6 * layer_h, layer_h - Z_FLOOR)
+    if cap <= 0:
+        raise SystemExit(f"layer_h {layer_h} leaves no room above the {Z_FLOOR}mm plate floor")
     amp_hi = min(amp_max, cap)
     cx, cy = BED[0] / 2, BED[1] / 2
     r_max = min(cx, cy) - margin
@@ -82,6 +91,8 @@ def emit(flow, layer_h, line_w, wavelength, amp_max, temp, bed, fan, fil_d, home
     w(f"G0 F9000 X{margin:.1f} Y{margin:.1f}")
     w(f"G1 F1200 X{margin:.1f} Y{margin+80:.1f} E12"); w("G92 E0")
 
+    L.append("; Z_MODULATED")
+    L.append("; BODY_START")
     e = 0.0; th = 0.0; s = 0.0
     px, py = cx + r0, cy
     L.append(f"G0 F9000 X{px:.3f} Y{py:.3f}")
@@ -151,7 +162,7 @@ if __name__ == "__main__":
     # width, which silently confounds the very thing being measured. K2 Plus: max_z_velocity 30,
     # max_z_accel 1000. Held to 40% of the accel limit so the planner never has to intervene.
     _speed = a.flow / (a.line_w * a.layer_h)
-    _amp = min(a.amp_max, 0.6 * a.layer_h)
+    _amp = min(a.amp_max, 0.6 * a.layer_h, a.layer_h - 0.15)
     _f = _speed / a.wavelength
     _vz = 2 * math.pi * _f * _amp
     _az = (2 * math.pi * _f) ** 2 * _amp

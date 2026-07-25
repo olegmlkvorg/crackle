@@ -81,19 +81,25 @@ class Q:
     fil_d: float = 1.75
     temp: int = 230
     bed: int = 60
-    # --- TUNED (600-candidate frequency search + local phase/amplitude refinement).
-    # All four frequencies sit within 1.09-1.17: that is what keeps curvature low. If one axis
-    # turns much faster than the other you get a raster, and a raster U-turns (the serpentine
-    # defect the flow test already hit). sqrt(5), sqrt(22), sqrt(19), sqrt(21): distinct squarefree
-    # radicands, so no integer relation exists -> the orbit is dense on a 4-torus and never closes.
-    # ay is scaled by 0.90048 so the realised x and y extents match and one ISOTROPIC scale fits
-    # the square (an anisotropic fit would re-introduce a curvature maximum on the squashed axis).
-    fx: tuple = (1.118034, 1.172604)      # sqrt5/2, sqrt22/4
-    ax: tuple = (1.0, 0.4193)
-    px: tuple = (0.0, 5.8216)
-    fy: tuple = (1.089725, 1.145644)      # sqrt19/4, sqrt21/4
-    ay: tuple = (0.90048, 0.51858)
-    py: tuple = (2.7006, 1.5657)
+    # --- TUNED. 5 x (500 random frequency quadruples + 550 local refinement steps), scored on a
+    # validated integral-geometry junction estimator (within 5% of the exact segment count),
+    # arc-length-weighted curvature percentiles, cumulative coverage AND per-layer coverage.
+    # Radicands 1, 5, 38, 31: distinct and squarefree, so {1,sqrt5,sqrt38,sqrt31} is Q-linearly
+    # independent -> no integer relation -> orbit dense on a 4-torus, the curve never closes.
+    # All four frequencies sit within 1.00-1.23. That is not cosmetic: if one axis turns much
+    # faster than the other you get a raster, and a raster U-turns at every row end -- the exact
+    # serpentine defect the flow test already had to fix.
+    # The second amplitude landed on 0.32 in EVERY seed. Independently derived: x is distributed as
+    # U1 + a*U2 with Ui arcsine, and a ~ 0.30-0.35 is where that convolution is flattest
+    # (measured marginal CV 0.215 at a=0.30 vs 0.376 at a=1.0).
+    # ay carries a 1.00021 balance factor so the realised x and y extents match, which lets ONE
+    # isotropic scale fit the square (an anisotropic fit re-introduces a curvature maximum).
+    fx: tuple = (1.000000, 1.118034)      # 1, sqrt5/2
+    ax: tuple = (1.0, 0.3200)
+    px: tuple = (0.0, 4.3788)
+    fy: tuple = (1.232883, 1.113553)      # sqrt38/5, sqrt31/5
+    ay: tuple = (1.00021, 0.32007)        # 1.00021 = the x/y extent-balance factor
+    py: tuple = (3.2133, 0.1534)
     T: float = 80.0              # THE DIAL: t-span per layer -> path length -> crossings
     v_cmd: float = 130.0         # mm/s commanded
     ds: float = 0.20             # analysis resampling (mm)
@@ -419,6 +425,7 @@ def emit(q: Q, chord_err=0.015, out="out"):
     L.append(f"M140 S{q.bed}"); L.append(f"M104 S{q.temp}"); L.append("G28")
     L.append(f"M190 S{q.bed}"); L.append(f"M109 S{q.temp}"); L.append("M106 S0")
     L.append("M204 S8000")
+    L.append("; BODY_START")
     e = 0.0
     px = py = None
     total = 0.0
@@ -545,8 +552,10 @@ def report(q: Q):
     print("\n5. LAYER-TO-LAYER VARIATION")
     print(f"   t CONTINUES: layer k runs t in [{q.T:.0f}k, {q.T:.0f}(k+1)]. The curve is quasi-periodic,")
     print(f"   so no layer ever repeats another. No phase table, no random seed, no rotation angle.")
-    print(f"   Plus a D4 op per layer (cycle of 8 square symmetries) to average out the residual")
-    print(f"   coverage anisotropy WITHOUT rotating the square off its own corners.")
+    print(f"   D4 per-layer op is OFF ({q.d4}). Measured: cumulative coverage CV 0.330 without it,")
+    print(f"   0.325 with -- it buys nothing, and it would put a jump at every layer boundary and")
+    print(f"   so break the one-extrusion property. A free rotation is worse still: it rounds the")
+    print(f"   corners off the square and piles material at the centre of rotation.")
     exp = 100 * (1 - math.exp(-R["N"] * math.pi * 0.36 / q.size ** 2))
     print(f"   junctions within 0.6mm of a junction in the layer below: {100*R['column_frac']:.2f}%")
     print(f"   uncorrelated-layer (Poisson) expectation                : {exp:.2f}%")
@@ -618,18 +627,31 @@ def sweep(q: Q):
     order, cur = [], 0
     for _ in range(k):
         order.append(ang[cur]); cur = (cur + 7) % k
-    lat = np.array([pts[i] for i in order])
-    fine = [lat[0]]
-    for a, b in zip(lat[:-1], lat[1:]):
-        n = max(int(np.hypot(*(b - a)) / 0.2), 1)
-        fine += [a + (b - a) * (t + 1) / n for t in range(n)]
-    fine = np.array(fine)
-    for v in (60, 100, 130):
-        _, d, below, ts = plan(fine, float(v))
-        print(f"   v_cmd={v:5.0f}: below 90% on {100*below.sum()/d.sum():6.2f}% of path | "
-              f"achieved mean {d.sum()/ts:6.1f} mm/s = {100*d.sum()/ts/v:.0f}% of commanded")
-    print(f"   lattice: {len(lat)-1} strands, {d.sum():.0f} mm of path/layer, 15 hard corners per layer.")
-    print(f"   Every one of those corners is a place the strand thickens. That is the defect.")
+    lat = [pts[i] for i in order]
+    # crackle.py also lays a 4-point loop AT each pillar (r = line_w*0.6) so the pillar has a body.
+    # Those loops are part of the path and the planner has to crawl round them; leaving them out
+    # would flatter the lattice.
+    rr = 0.90 * 0.6
+    seq = []
+    for (x, y) in lat:
+        seq.append((x, y))
+        for a in range(4):
+            th = (a + 1) * math.pi / 2
+            seq.append((x + rr * math.cos(th), y + rr * math.sin(th)))
+        seq.append((x, y))
+    for tag, path in (("chords only          ", lat), ("chords + pillar loops", seq)):
+        arr = np.array(path)
+        fine = [arr[0]]
+        for a, b in zip(arr[:-1], arr[1:]):
+            n = max(int(np.hypot(*(b - a)) / 0.2), 1)
+            fine += [a + (b - a) * (t + 1) / n for t in range(n)]
+        fine = np.array(fine)
+        for v in (100, 130):
+            _, d, below, ts = plan(fine, float(v))
+            print(f"   {tag} v_cmd={v:5.0f}: below 90% on {100*below.sum()/d.sum():6.2f}% of path | "
+                  f"achieved mean {d.sum()/ts:6.1f} = {100*d.sum()/ts/v:3.0f}% of commanded")
+    print(f"   lattice: {len(lat)-1} chords, 16 pillar loops, {d.sum():.0f} mm of path/layer.")
+    print(f"   Every full stop is a place the strand thickens. That is the defect.")
 
 
 if __name__ == "__main__":
