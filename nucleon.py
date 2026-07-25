@@ -193,7 +193,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         for i in range(1, len(full)):
             frac = cum[i] / total
             z = z_lo + (z_hi - z_lo) * frac
-            lf = round(machine.FIRST_LAYER_SPEED * 60) if frac < 1.0 / layers else f_mm_min
+            lf = round(min(machine.FIRST_LAYER_SPEED, speed) * 60)   # never faster than the body if frac < 1.0 / layers else f_mm_min
             dz = 0.0
             if second:
                 s_here = cum[i]
@@ -220,7 +220,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # The SQUISH stays: it presses the bead into the plate and does not touch flow, which is
         # what Oleg asked for — thick and irregular lines, always.
         if layer < first_slow:
-            lf = round(machine.FIRST_LAYER_SPEED * 60)
+            lf = round(min(machine.FIRST_LAYER_SPEED, speed) * 60)   # never faster than the body
             z0 = layer_h * first_squish
         else:
             lf = f_mm_min

@@ -4,7 +4,7 @@ Oleg, 2026-07-25: "you should be extruding at max speed we know nozzle can flow.
 negotiable. 100% of the time."
 """
 MAX_FLOW = 81.2        # mm3/s, MEASURED (spiral ramp, first skips at 81.2 @ r137, 0.8 nozzle, PLA 230C)
-FLOW = 66.6            # 90% of the ~74 where the K2 audibly cracks (2026-07-25)
+FLOW = 55.0            # CAPPED for BOTH machines (Oleg, 2026-07-25). K2 cracks ~74 and
                        # then still cracking at 70. Oleg heard the extruder
                        # CRACKING (skipping) at 80 during sustained printing. The spiral ramp put
                        # first visual skips at 81.2, but a ramp only holds each flow for a few
@@ -34,7 +34,13 @@ ACCEL = 5000.0          # what the toolhead ACTUALLY reports while printing — 
 # past the nozzle and gets ploughed off the plate — that failure cost a print on 2026-07-25.
 BEAD_W = 1.2            # 1.5 x nozzle — stacking ceiling
 BEAD_H = 0.6            # 0.75 x nozzle — stacking ceiling
-FIRST_LAYER_SPEED = 50.0  # mm/s. Layer 1 only. At 111 the bead has no dwell to wet the plate and
+FIRST_LAYER_SPEED = 50.0  # mm/s CEILING for layer 1 — never a target. It must be applied as
+                          # min(FIRST_LAYER_SPEED, body_speed), because when the body runs SLOWER
+                          # than 50 this becomes a speed-UP: on 2026-07-25 a 2.40mm2 bead with a
+                          # 28 mm/s body ran layer 1 at 50 = 120 mm3/s against a 74 ceiling, so the
+                          # extruder skipped from the first millimetre and the part never adhered.
+                          # A "slowdown" written for a fast body silently inverts on a slow one.
+                          # Layer 1 only. At 111 the bead has no dwell to wet the plate and
                           # adhesion failed twice (Oleg, 2026-07-25). Deposit per mm of PATH is
                           # unchanged by slowing — E is per mm, not per second — so the first layer
                           # is just as thick, it simply has time to bond. Layer 2+ runs at 111.
@@ -118,6 +124,6 @@ TEMP_RATED = 210        # manufacturer spec for the translucent PLA
 # the top of a test range as a measured limit — a 45-60 ramp that printed clean proves AT LEAST 60,
 # never 60. Widening the range until each machine actually failed gave the real numbers. Do not
 # quote a ceiling that equals the top of the range that produced it.
-K1C_FLOW = 53.0         # 90% of the measured 59.6
+K1C_FLOW = 55.0         # same cap; K1C cracks at 59.6 so 55 sits just under it
 K1C_MEASURED = 59.6     # where it began skipping, 1.0 nozzle, 210C
 # ---------------------------------------------------------------------------------------------
