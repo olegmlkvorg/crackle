@@ -347,6 +347,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default=None)
     ap.add_argument("--sweep", default=None, choices=["order", "all"])
+    ap.add_argument("--max-flow", type=float, default=None,
+                    help="measured max volumetric flow (mm3/s) from flowtest — derives speeds")
     ap.add_argument("--layers", type=int, default=None, help="override layer count (ladders: keep constant)")
     ap.add_argument("--vary", default=None,
                     help="one-factor-at-a-time sweep of ANY parameter, e.g. --vary n=4,5,6,7 "
@@ -359,6 +361,19 @@ if __name__ == "__main__":
     ap.add_argument("--start-gcode", default=None, help="file with your machine's start block, used verbatim")
     ap.add_argument("--end-gcode", default=None, help="file with your machine's end block")
     a = ap.parse_args()
+    if a.max_flow:
+        # Derive strand + travel settings from the MEASURED melt ceiling instead of guessing.
+        # Working flow = 0.85 x measured. Pillars extrude at that; strands get strand_ratio of it.
+        # Travel speed is then set so the strand is thin but continuous:
+        #   strand_area = line_w*layer_h*strand_ratio  ->  v = working_flow / strand_area
+        wf = a.max_flow * 0.85
+        for k, P in PRESETS.items():
+            sa = P.line_w * P.layer_h * P.strand_ratio
+            v = wf / sa                     # mm/s
+            PRESETS[k] = replace(P, travel_f=int(min(max(v*60, 1800), 12000)),
+                                 print_f=int(min(wf/(P.line_w*P.layer_h)*60, 9000)))
+        print(f"tuned from measured max flow {a.max_flow} mm3/s -> working {wf:.1f}; "
+              f"strand travel {PRESETS['A'].travel_f/60:.0f} mm/s, pillar {PRESETS['A'].print_f/60:.0f} mm/s")
     _sg = open(a.start_gcode).read() if a.start_gcode else ""
     _eg = open(a.end_gcode).read() if a.end_gcode else ""
     for k in PRESETS: PRESETS[k] = replace(PRESETS[k], fast=a.fast, home=not a.no_home, machine=a.machine, start_gcode=_sg, end_gcode=_eg)
