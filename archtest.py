@@ -43,7 +43,7 @@ def win_for(amp, speed, aspect):
 
 
 def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0, margin,
-         bed_xy, home, spacing, fan, squish, anchor, weld_dab, helix_r, helix_pitch):
+         bed_xy, home, spacing, fan, squish, anchor, weld_dab, petal_v, lean):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
     speed = flow / (line_w * layer_h)
@@ -137,57 +137,45 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             f_z = round(min(machine.MAX_Z_V,
                             math.sqrt(2 * machine.MAX_Z_A * amp),
                             flow / (line_w * layer_h)) * 60)
-            # 0. ANCHOR — press HARD into the plate and weld a foot before flying.
-            # Oleg: "make head put it reall hard on the plate before going up. it is detaching all
-            # the time". A post rising from a lightly-laid bead has almost nothing holding it: the
-            # nozzle pulls upward on a strand whose only bond is the squish it happened to get in
-            # passing. Dropping to `anchor` mm — well under the bead height — presses the plastic
-            # into the plate, and a stationary dab builds an actual foot for the post to grow from.
+            # PETAL — thrown outward and back, not pulled upward.
+            # Oleg: "throwing filament in the air does not seem to work well yet. try maxing the
+            # speed away from the point in a petal shape and back. 40mm height only".
+            #
+            # A vertical post hangs from a single foot with nothing to hold it. A petal is a closed
+            # loop in a vertical plane: the strand leaves the surface, arcs out and up, comes over
+            # the top and lands back near where it started, so it is carried by its own arc.
+            #
+            # SPEED IS THE MECHANISM, not just a preference. At a fixed flow cap, going fast makes
+            # the flying strand THIN: 2.4mm2 at 23 mm/s is a rope with nothing supporting it;
+            # 0.14mm2 at 400 mm/s is a thread light enough for its own curve to carry, and with so
+            # little mass in it that it freezes almost on contact with air.
             e += (z_base - anchor) * e_per_mm
-            L.append(f"G1 F600 Z{anchor:.4f} E{e:.5f}            ; PRESS into the plate")
+            L.append(f"G1 F600 Z{anchor:.4f} E{e:.5f}            ; PRESS in — anchor the petal foot")
             e += weld_dab
-            L.append(f"G1 F180 E{e:.5f}                     ; dab a foot, XY and Z both still")
-            z_top = anchor + amp
-            # 1. RISE AS A HELIX — XY traces a small circle while Z climbs.
-            # Oleg: "slighlu do a spiral movement xy around the area of vertical movements".
-            # A perfectly vertical draw pulls the strand straight along its own axis, which is the
-            # one direction a molten filament has no strength in — it necks and snaps. Winding it
-            # into a helix converts that pull into a curve the strand can take, and the post becomes
-            # a coil rather than a thread: far stiffer once frozen, and it can absorb the tug of the
-            # next move instead of transmitting it straight to the foot.
-            n_h = max(3, int(amp / (helix_pitch / 8)))
-            for k in range(1, n_h + 1):
-                fz = k / n_h
-                ang = 2 * math.pi * (amp * fz / helix_pitch)
-                hx = px + helix_r * math.cos(ang) - helix_r
-                hy = py + helix_r * math.sin(ang)
-                zc = z_base + amp * fz
-                dlen = math.hypot(amp / n_h, 2 * math.pi * helix_r / (helix_pitch / (amp / n_h)))
-                e += max(dlen, amp / n_h) * e_per_mm
-                L.append(f"G1 F{f_z} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
-                         + (f"   ; helix up {amp:.0f}mm" if k == 1 else ""))
-            z_top = z_base + amp
-            # 2. carry across at height
-            th2 = th + span / max(r, 1.0)
-            x2, y2 = cx + r * math.cos(th2), cy + r * math.sin(th2)
-            px2, py2 = x2, y2
-            dd = math.dist((px, py), (x2, y2)); s += dd
-            e += dd * e_per_mm
-            L.append(f"G1 F{f_mm_min} X{x2:.3f} Y{y2:.3f} E{e:.5f}   ; carry {dd:.1f}mm at height")
-            # 3. DESCEND, also helical
-            for k in range(1, n_h + 1):
-                fz = k / n_h
-                ang = 2 * math.pi * (amp * (1 - fz) / helix_pitch)
-                hx = px2 + helix_r * math.cos(ang) - helix_r
-                hy = py2 + helix_r * math.sin(ang)
-                zc = z_top - (z_top - anchor) * fz
-                e += (amp / n_h) * e_per_mm
-                L.append(f"G1 F{f_z} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
-                         + ("   ; helix down" if k == 1 else ""))
+            L.append(f"G1 F180 E{e:.5f}                     ; dab a foot")
+            R = amp / 2.0                       # vertical loop radius: apex sits at 2R = amp
+            e_petal = (flow / petal_v) / area   # thin, and it respects the flow cap by construction
+            f_p = round(petal_v * 60)
+            ux, uy = math.cos(th), math.sin(th)          # radial direction, the way the petal throws
+            tx, ty = -uy, ux                             # tangential, for the sideways lean
+            n_p = 48
+            for k in range(1, n_p + 1):
+                phi = 2 * math.pi * k / n_p
+                u = R * math.sin(phi)                    # out and back
+                w = lean * R * math.sin(phi) * math.sin(phi / 2)   # a lean, so it is a petal not a disc
+                zc = anchor + R * (1 - math.cos(phi))    # up and over
+                hx = px + ux * u + tx * w
+                hy = py + uy * u + ty * w
+                seglen = math.hypot(R * 2 * math.pi / n_p, 0) or 0.5
+                e += seglen * e_petal
+                L.append(f"G1 F{f_p} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
+                         + (f"   ; petal {amp:.0f}mm, thrown at {petal_v:.0f} mm/s" if k == 1 else ""))
             e += weld_dab
             L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
             e += (z_base - anchor) * e_per_mm
             L.append(f"G1 F600 Z{z_base:.4f} E{e:.5f}            ; back to the squished baseline")
+            th2 = th + (span / max(r, 1.0))
+            x2, y2 = cx + r * math.cos(th2), cy + r * math.sin(th2)
             th = th2; px, py = x2, y2
             arcs.append((round(amp, 2), round(r)))
             next_arc = s + pitch
@@ -205,9 +193,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--a-lo", type=float, default=10.0)
     ap.add_argument("--a-hi", type=float, default=4.0)
-    ap.add_argument("--helix-r", type=float, default=2.5,
-                    help="XY circle radius during the vertical move — a coil, not a thread")
-    ap.add_argument("--helix-pitch", type=float, default=25.0, help="mm of rise per turn")
+    ap.add_argument("--petal-v", type=float, default=400.0,
+                    help="throw speed mm/s — at a fixed flow cap this sets how THIN the\n                          flying strand is, which is what lets its own arc carry it")
+    ap.add_argument("--lean", type=float, default=0.35, help="sideways lean: petal, not disc")
     ap.add_argument("--anchor", type=float, default=0.35,
                     help="absolute Z (mm) to press to before rising — well under the bead")
     ap.add_argument("--weld-dab", type=float, default=1.2,
@@ -234,7 +222,7 @@ if __name__ == "__main__":
     bed_xy = tuple(float(v) for v in a.bed_size.split(","))
     g, st = emit(a.a_lo, a.a_hi, a.aspect, a.pitch, a.flow, a.line_w, a.layer_h, a.temp,
                  a.bed, 1.75, a.r0, a.margin, bed_xy, not a.no_home, a.spacing, a.fan,
-                 a.squish, a.anchor, a.weld_dab, a.helix_r, a.helix_pitch)
+                 a.squish, a.anchor, a.weld_dab, a.petal_v, a.lean)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
     open(fn, "w").write(g)
