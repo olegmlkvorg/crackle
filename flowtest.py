@@ -56,6 +56,7 @@ Usage:
 """
 import argparse, math, os
 import machine
+import pathstats
 
 MATERIALS = {
     # floor rises as each run passes — no point reprinting known-good flow
@@ -250,6 +251,19 @@ if __name__ == "__main__":
     xs = a.line_w * a.layer_h
     print(f"{fn}\n  ONE layer, spiral {st['turns']} turns to r{st['r_max']:.0f}mm, "
           f"{st['path']} m path, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
-    print(f"  ramp {q_lo:g}->{q_hi:g} mm3/s outward ({q_lo/xs:.0f}->{q_hi/xs:.0f} mm/s), "
-          f"{(q_hi-q_lo)/max(st['turns'],1):.2f} per turn, bed {bed}C")
+    # MEASURED FROM THE EMITTED FILE, never recomputed from the inputs. This line used to print
+    # "(2->21 mm/s)" while the file it had just written commanded F7200 = 120 mm/s on every move,
+    # because --fixed-speed defaulted to a constant that was later redefined under it. The summary
+    # was not wrong about its arithmetic -- it was describing a different file from the one on disk,
+    # and it hid the bug for hours. See pathstats.measure_text.
+    _mt = pathstats.measure_text(g)
+    if _mt:
+        print(f"  ramp {q_lo:g}->{q_hi:g} mm3/s requested | MEASURED IN FILE: flow "
+              f"{_mt['flow'][0]:.1f}->{_mt['flow'][1]:.1f} mm3/s, head "
+              f"{_mt['speed'][0]:.0f}->{_mt['speed'][1]:.0f} mm/s, bed {bed}C")
+        if _mt['speed'][1] > machine.MAX_SPEED + 0.5:
+            raise SystemExit(f"  ABORT: file commands {_mt['speed'][1]:.0f} mm/s, cap is "
+                             f"{machine.MAX_SPEED:.0f} (machine.MAX_SPEED)")
+    else:
+        print(f"  ramp {q_lo:g}->{q_hi:g} mm3/s, bed {bed}C  (COULD NOT MEASURE THE EMITTED FILE)")
     print(f"  bump spoke: {', '.join(f'{x:g}' for x in st['marks'])} mm3/s")

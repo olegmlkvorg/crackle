@@ -202,3 +202,48 @@ if __name__ == "__main__":
         s = analyse(liss(a,b), quiet=True)
         print(f"  lissajous {a}:{b}   crossings={s['crossings']:>4}  members mean "
               f"{s['member_mean']:>5}mm  slow {s['frac_below_90pct']*100:>4.1f}%")
+
+
+def measure_text(gcode, fil_d=1.75):
+    """Measure an emitted gcode STRING: speed range, flow range, path length.
+
+    Exists because a generator's summary line is computed from its INPUTS and can disagree with the
+    file it just wrote. flowtest.py printed "(2->21 mm/s)" for hours while emitting F7200 = 120 mm/s
+    on every move, because --fixed-speed silently defaulted to a constant that had been redefined
+    under it. The summary was not lying about its arithmetic; it was describing a different file
+    from the one on disk. Report THIS instead.
+    """
+    import math as _m
+    import re as _re
+    area = _m.pi * (fil_d / 2) ** 2
+    f = 0.0
+    prev = None
+    pe = 0.0
+    body = False
+    speeds, flows, path = [], [], 0.0
+    for ln in gcode.splitlines():
+        if 'BODY_START' in ln:
+            body = True
+            continue
+        if not body:
+            continue
+        mf = _re.search(r'\bF(\d+(?:\.\d+)?)', ln)
+        if mf and ln.startswith(('G1', 'G0')):
+            f = float(mf.group(1)) / 60.0
+        m = _re.match(r'G1 (?:F[\d.]+ )?X([-\d.]+) Y([-\d.]+)(?: Z([\d.]+))? E([-\d.]+)', ln)
+        if not m:
+            continue
+        p = (float(m.group(1)), float(m.group(2)), float(m.group(3) or 0))
+        e = float(m.group(4))
+        de, pe = e - pe, e
+        d = _m.dist(p, prev) if prev else 0.0
+        prev = p
+        if d > 1e-9 and f > 0:
+            path += d
+            speeds.append(f)
+            if de > 0:
+                flows.append(de * area * f / d)
+    if not speeds:
+        return None
+    return dict(speed=(min(speeds), max(speeds)), flow=(min(flows), max(flows)) if flows else (0, 0),
+                path_m=path / 1000.0, moves=len(speeds))
