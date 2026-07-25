@@ -21,6 +21,7 @@ def check(path):
     abs_e = True
     problems, warns = [], []
     travel_mm = extrude_mm = 0.0
+    feed = 1200.0; secs = 0.0
     zs, temps, maxz = [], [], 0.0
     n = 0
     for ln, raw in enumerate(open(path), 1):
@@ -40,7 +41,10 @@ def check(path):
             ny = float(re.search(r'Y([-\d.]+)', s).group(1)) if 'Y' in s else y
             nz = float(re.search(r'Z([-\d.]+)', s).group(1)) if 'Z' in s else z
             me = re.search(r'E([-\d.]+)', s)
+            mf = re.search(r'F([\d.]+)', s)
+            if mf: feed = float(mf.group(1))
             d = math.dist((x, y), (nx, ny))
+            secs += d / max(feed/60.0, 1e-6)          # use the ACTUAL commanded feedrate
             if me:
                 ev = float(me.group(1))
                 de = ev - e if abs_e else ev
@@ -60,13 +64,13 @@ def check(path):
     if 'G28' not in src and 'START_PRINT' not in src:
         problems.append("never homes (no G28 and no START_PRINT macro)")
     ratio = travel_mm / max(extrude_mm, 1e-9)
-    if ratio < 1.0: warns.append(f"travel:extrude = {ratio:.2f} — LOW; this may not build much web")
-    # crude time estimate: travels at F6000, extrudes at F1200
-    mins = travel_mm / 6000 + extrude_mm / 1200
+    if ratio < 1.0 and 'crackle' in path:
+        warns.append(f"travel:extrude = {ratio:.2f} — LOW; this may not build much web")
+    mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
     print(f"  lines={n}  maxZ={maxz:.2f}mm  travel={travel_mm/1000:.1f}m  extrude={extrude_mm/1000:.1f}m"
           f"  travel:extrude={ratio:.1f}:1")
-    print(f"  est. time ~{mins:.1f} min   (PRD budget: <6 min)")
+    print(f"  est. time ~{mins:.1f} min (motion only, no accel/heat)")
     for w in warns: print("  WARN ", w)
     for p in problems: print("  FAIL ", p)
     if not problems: print("  ✅ passes")
