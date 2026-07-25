@@ -59,16 +59,16 @@ import machine
 
 MATERIALS = {
     # floor rises as each run passes — no point reprinting known-good flow
-    "pla":  dict(temp=230, bed=135, flows=[50, 90]),
+    "pla":  dict(temp=230, bed=60, flows=[50, 90]),
     "petg": dict(temp=245, bed=80,  flows=[10, 38]),
     "tpu":  dict(temp=230, bed=50,  flows=[2, 12]),
     "abs":  dict(temp=255, bed=100, flows=[8, 36]),
 }
-BED = (350.0, 350.0)   # K2 Plus
+BED = (350.0, 350.0)   # K2 Plus — overridden by --bed
 
 
 def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
-         bump_h, bump_arc, bump_every, spacing_mm, fixed_speed=None):
+         bump_h, bump_arc, bump_every, spacing_mm, fixed_speed=None, bed_xy=None):
     """With --fixed-speed the ramp varies LINE WIDTH instead of speed.
 
     Q = width x height x speed, so a flow ramp can be driven by either factor. Driving it with
@@ -80,7 +80,8 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     tall and plough. (Oleg, 2026-07-25: cap head movement at 50 mm/s, thick walls always.)"""
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (line_w * layer_h) / area
-    cx, cy = BED[0] / 2, BED[1] / 2
+    _B = bed_xy or BED
+    cx, cy = _B[0] / 2, _B[1] / 2
     r_max = min(cx, cy) - margin
     b = (spacing_mm or line_w) / (2 * math.pi)              # radius gained per radian
     th_max = (r_max - r0) / b
@@ -114,15 +115,17 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
     w("M82"); w("G92 E0")
+    # NO TRAVEL IS A RULE (machine.py): the prime ENDS where the spiral BEGINS, so there is no
+    # reposition between priming and printing.
+    _sx, _sy = cx + r0, cy
     w(f"G1 Z{layer_h:.2f} F600")
-    w(f"G0 F9000 X{margin:.1f} Y{margin:.1f}")
-    w(f"G1 F1200 X{margin:.1f} Y{margin+80:.1f} E12"); w("G92 E0")
+    w(f"G0 F9000 X{_sx - 60:.3f} Y{_sy:.3f}")
+    w(f"G1 F1200 X{_sx:.3f} Y{_sy:.3f} E12"); w("G92 E0")
 
     L.append("; BODY_START")
     e = 0.0
     th = 0.0
     px, py = cx + r0, cy
-    L.append(f"G0 F9000 X{px:.3f} Y{py:.3f}")
     while th < th_max:
         r_base = r0 + b * th
         th += min(seg_len / max(r_base, 1.0), 0.25)
@@ -135,12 +138,20 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
                 break
         r = r_base + dr
         x, y = cx + r * math.cos(th), cy + r * math.sin(th)
+        if fixed_speed:
+            # ramp WIDTH at constant speed: removes speed as a confound in a flow test
+            _w = q_at_r(r_base) / (fixed_speed * layer_h)
+            e_local = (_w * layer_h) / area
+            f_now = round(fixed_speed * 60)
+        else:
+            e_local = e_per_mm
+            f_now = round(q_at_r(r_base) / (line_w * layer_h) * 60)
         e += math.dist((px, py), (x, y)) * e_local
-        L.append(f"G1 F{f_mm_min} "
-                 f"X{x:.3f} Y{y:.3f} E{e:.5f}")
+        L.append(f"G1 F{f_now} X{x:.3f} Y{y:.3f} E{e:.5f}")
         px, py = x, y
 
-    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h+40:.1f} F900", "G0 X10 Y340 F9000"]
+    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h+40:.1f} F900",
+          f"G0 X10 Y{_B[1]-10:.0f} F9000"]   # park inside THIS bed, not the K2's
     grams = e * area * 1.24 / 1000
     secs = 0.0
     th = 0.0
@@ -175,6 +186,7 @@ if __name__ == "__main__":
                     help="material multiple vs spacing (1.10 = 10%% squeeze)")
     ap.add_argument("--fixed-speed", type=float, default=machine.MAX_SPEED,
                     help="hold this speed and ramp WIDTH instead (0 = ramp speed)")
+    ap.add_argument("--bed-size", default=None, help="X,Y bed size, e.g. 229,225 for the K1C")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
@@ -192,7 +204,8 @@ if __name__ == "__main__":
     bed = a.bed if a.bed is not None else m["bed"]
     g, st = emit(q_lo, q_hi, a.layer_h, a.line_w, temp, bed, a.fan, 1.75,
                  not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every,
-                 a.spacing, a.fixed_speed or None)
+                 a.spacing, a.fixed_speed or None,
+                 tuple(float(v) for v in a.bed_size.split(',')) if a.bed_size else None)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/flowspiral_{'nohome_' if a.no_home else ''}{a.material}"
           f"_T{temp}_{int(q_lo)}-{int(q_hi)}.gcode")
