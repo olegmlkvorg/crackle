@@ -275,7 +275,14 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                 L.append(f"G1 F{round(petal_v*60)} X{hx:.3f} Y{hy:.3f} Z{zc:.4f} E{e:.5f}"
                          + (f"   ; petal reach {Lr:.0f}mm apex {amp:.0f}mm" if k == 0 else ""))
                 prev = (hx, hy, zc)
-                if k in touches_at:
+                if k in touches_at and heart_mm <= 0:
+                    # plain foot: press hard, dab, carry on. No decoration.
+                    e += (zc - max(heart_z, 0.08)) * e_per_mm
+                    L.append(f"G1 F600 Z{max(heart_z,0.08):.4f} E{e:.5f}            ; press the foot")
+                    e += weld_dab
+                    L.append(f"G1 F180 E{e:.5f}                     ; weld the foot")
+                    prev = (hx, hy, max(heart_z, 0.08))
+                elif k in touches_at and heart_mm > 0:
                     # A LITTLE HEART AT EVERY FOOT. Oleg: "when you land to glue it, make a little
                     # pretty heart in there". The foot has to dwell on the plate anyway to weld —
                     # so instead of a blind dab of filament, spend that same material drawing
@@ -341,8 +348,8 @@ if __name__ == "__main__":
     ap.add_argument("--lean", type=float, default=0.35, help="sideways lean: petal, not disc")
     ap.add_argument("--heart-z", type=float, default=0.10,
                     help="absolute Z the heart is crushed to — lower grips more plate")
-    ap.add_argument("--heart", type=float, default=18.0,
-                    help="size of the little heart drawn at each landing foot, mm")
+    ap.add_argument("--heart", type=float, default=0.0,
+                    help="heart drawn at each landing foot, mm. 0 = OFF (default).\n                          Tried at 18mm 2026-07-25: it makes a mess — the foot is a\n                          structural anchor being crushed at 0.10mm, and 18mm of extra\n                          crushed line around it smears into the throws leaving and\n                          arriving. A press and a dab is what a foot wants.")
     ap.add_argument("--swing", type=float, default=1.2,
                     help="swing-circle radius as a MULTIPLE of the reach. Bigger = gentler\n                          sweep. This is the arc that throws the strand.")
     ap.add_argument("--prelift", type=float, default=12.0,
