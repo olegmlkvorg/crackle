@@ -4,9 +4,14 @@ Oleg, 2026-07-25: "you should be extruding at max speed we know nozzle can flow.
 negotiable. 100% of the time."
 """
 MAX_FLOW = 81.2        # mm3/s, MEASURED (spiral ramp, first skips at 81.2 @ r137, 0.8 nozzle, PLA 230C)
-FLOW = 80.0            # what to actually run: the highest flow observed still laying solid.
-                       # 81.2 is where skipping STARTS, so commanding exactly 81.2 guarantees a
-                       # marginal extruder. 80 is max-known-good, not a safety discount.
+FLOW = 70.0            # CORRECTED 2026-07-25 from audible feedback: Oleg heard the extruder
+                       # CRACKING (skipping) at 80 during sustained printing. The spiral ramp put
+                       # first visual skips at 81.2, but a ramp only holds each flow for a few
+                       # seconds of a single layer — it measures the INSTANTANEOUS ceiling. Sustained
+                       # multi-layer printing loads the extruder continuously and reveals a lower
+                       # practical ceiling. Trust the ear over the ramp: audible skipping is the
+                       # extruder losing grip, and it is upstream of anything visible on the plate.
+MEASURED_INSTANT = 81.2  # what the ramp showed; kept for the record, not for use
 NOZZLE = 0.8
 MAX_VELOCITY = 800.0
 MAX_ACCEL = 30000.0     # config ceiling
