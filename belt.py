@@ -135,12 +135,17 @@ def add_cleats(pts, per, n_cleats, height, width, ease=0.35):
 
 
 def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flow, temp, bed,
-         fil_d, bed_xy, home, press, fan, walls, fold=0, span=0.0):
+         fil_d, bed_xy, home, press, fan, walls, fold=0, span=0.0, first_w=3.0, aux=0.2):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = flow / (bead_w * layer_h)
     f = round(speed * 60)
     layers = max(1, int(round(belt_w / layer_h)))
+    # BASE LAYER PRESSED TO THE PLATE — a 2.5m single-wall loop has enormous peel length and very
+    # little weight holding it down. Metered as the thin wide ribbon it physically is at a 0.1mm
+    # gap, NOT as a full bead: a full bead through 0.1mm packs and skips.
+    e_first = (first_w * press) / area
+    f_first = round(min(flow / (first_w * press), 25.0) * 60)
 
     if fold:
         # FOLD THE BELT INTO THE PLATE. Oleg: "use hilpert trick to print really long belt".
@@ -193,6 +198,8 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     w(f"M109 S{temp}")
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
+    w(f"SET_FAN_SPEED FAN=side_fan SPEED={aux:.2f}")
+    w(f"SET_FAN_SPEED FAN=chassis_fan SPEED={aux:.2f}")
     w("M82")
     w("G92 E0")
     x0, y0 = ring[0]
@@ -218,8 +225,8 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
             d = math.dist((px, py), (x, y))
             if d < 1e-9:
                 continue
-            e += d * e_per_mm
-            L.append(f"G1 {'F%d ' % f if (px, py) == ring[0] and k == 0 else ''}"
+            e += d * (e_first if k == 0 else e_per_mm)
+            L.append(f"G1 {'F%d ' % (f_first if k == 0 else f) if (px, py) == ring[0] else ''}"
                      f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = x, y
 
@@ -244,8 +251,10 @@ if __name__ == "__main__":
     ap.add_argument("--layer-h", type=float, default=0.6)
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
-    ap.add_argument("--bed", type=int, default=80)
-    ap.add_argument("--press", type=float, default=0.30)
+    ap.add_argument("--bed", type=int, default=120)
+    ap.add_argument("--press", type=float, default=0.10, help="base-layer gap — pressed")
+    ap.add_argument("--first-w", type=float, default=3.0)
+    ap.add_argument("--aux", type=float, default=0.2)
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--walls", type=int, default=1)
     ap.add_argument("--fold", type=int, default=0,
@@ -278,7 +287,7 @@ if __name__ == "__main__":
                 f"run. Lower --fold or --cleat-h.")
     g, st = emit(length, a.ring_w, a.belt_w, a.cleats, a.cleat_h, a.cleat_w, a.bead_w, a.layer_h,
                  a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.walls,
-                 a.fold, span)
+                 a.fold, span, a.first_w, a.aux)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/belt_{a.printer}_c{a.centres:.0f}_p{a.pulley_d:.0f}_"
           f"w{a.belt_w:.0f}_{a.cleats}cleat_T{a.temp}.gcode")

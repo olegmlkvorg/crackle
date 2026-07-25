@@ -76,15 +76,34 @@ def spiral_between(r0, r1, a0, turns_frac, n=60):
 
 
 def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, flow, temp, bed,
-         fil_d, bed_xy, home, press, fan, spoke_adv):
+         fil_d, bed_xy, home, press, fan, spoke_adv, sleeve=0, first_w=3.0, aux=0.2):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = flow / (bead_w * layer_h)
     f = round(speed * 60)
     layers = max(2, int(round(width / layer_h)))
+    # BASE LAYER PRESSED TO THE PLATE. Oleg, after a pulley turned into spaghetti: "make sure you
+    # are at 0.1 close to bed when you extrude base layer". A 0.25mm first layer is not pressed, it
+    # is merely near — and a part that lets go becomes a ball of filament.
+    #
+    # But the base layer CANNOT carry a full 0.9mm bead's worth of material through a 0.1mm gap:
+    # that is 9x too much, it packs against the plate and the extruder skips (measured earlier today
+    # when the honeycomb ran a 0.72mm2 bead at Z0.1 and skipped). So the base layer is metered as
+    # what it physically is — a thin WIDE ribbon: 0.1mm tall, spread to first_w.
+    first_h = press
+    e_first = (first_w * first_h) / area
+    speed_first = min(flow / (first_w * first_h), 30.0)   # slow: adhesion, not throughput
+    f_first = round(speed_first * 60)
 
     r_bore = bore_d / 2 + SHRINK / 2
-    if r_bore + 2.5 * bead_w >= od / 2 - 2 * bead_w:
+    if sleeve:
+        # SLEEVE MODE: a plain tube of `sleeve` concentric walls -- a bamboo stick coupler, not a
+        # pulley. No web, because there is no annulus to fill: the wall IS the part. The pulley's
+        # guard below reserves room for spokes and would reject a perfectly good 3mm-walled sleeve.
+        if od / 2 <= r_bore + sleeve * bead_w:
+            raise SystemExit(f"OD {od} is too small for a {bore_d}mm bore with {sleeve} walls of "
+                             f"{bead_w}mm — need at least {2*(r_bore + sleeve*bead_w):.1f}mm.")
+    elif r_bore + 2.5 * bead_w >= od / 2 - 2 * bead_w:
         raise SystemExit(f"a {bore_d}mm bore leaves no material inside a {od}mm pulley.")
 
     cx, cy = bed_xy[0] / 2.0, bed_xy[1] / 2.0
@@ -104,6 +123,10 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     w(f"M109 S{temp}")
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
+    # Oleg: "other fans to 20%". side/chassis fans move air through the chamber without blasting
+    # the bead the way the part fan does.
+    w(f"SET_FAN_SPEED FAN=side_fan SPEED={aux:.2f}")
+    w(f"SET_FAN_SPEED FAN=chassis_fan SPEED={aux:.2f}")
     w("M82")
     w("G92 E0")
 
@@ -122,6 +145,20 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         # START THE RIM WHERE THE LAST SPOKE LEFT OFF. Restarting it at a fixed angle left a chord
         # across the pulley face -- a 31mm straight extruded move, the same class of artifact as the
         # honeycomb's closing chord. The rim is a circle, so it can start anywhere.
+        if sleeve:
+            # concentric walls, joined by a short spiral so the layer stays one path
+            pts = []
+            for wi in range(sleeve):
+                r_w = r_bore + bead_w / 2 + wi * bead_w
+                pts += [(r_w * math.cos(cur_ang + 2 * math.pi * t / 240),
+                         r_w * math.sin(cur_ang + 2 * math.pi * t / 240)) for t in range(241)]
+                if wi < sleeve - 1:
+                    pts += spiral_between(r_w, r_bore + bead_w / 2 + (wi + 1) * bead_w,
+                                          cur_ang, 0.06, n=20)
+                    cur_ang += 0.06 * 2 * math.pi
+            cur_ang += spoke_adv
+            path_layers.append(pts)
+            continue
         # ONE UNBROKEN CIRCUIT PER LAYER, with every join at the same point/radius:
         #   full rim circle (ends where it began)
         #   -> spiral inward
@@ -165,8 +202,9 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
             d = math.dist((px, py), (X, Y))
             if d < 1e-9:
                 continue
-            e += d * e_per_mm
-            L.append(f"G1 {'F%d ' % f if k == 0 and e < 1 else ''}X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
+            e += d * (e_first if k == 0 else e_per_mm)
+            L.append(f"G1 {'F%d ' % (f_first if k == 0 else f) if e < 1 or k == 1 else ''}"
+                     f"X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = X, Y
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + width + 40:.1f} F900",
@@ -185,13 +223,17 @@ if __name__ == "__main__":
     ap.add_argument("--crown", type=float, default=0.6)
     ap.add_argument("--flange", type=float, default=2.5)
     ap.add_argument("--spokes", type=int, default=3)
+    ap.add_argument("--sleeve", type=int, default=0,
+                    help="plain tube of N concentric walls (a stick coupler), no web")
     ap.add_argument("--spoke-adv", type=float, default=0.09, help="radians the web advances/layer")
     ap.add_argument("--bead-w", type=float, default=1.2)
     ap.add_argument("--layer-h", type=float, default=0.4)
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
-    ap.add_argument("--bed", type=int, default=60)
-    ap.add_argument("--press", type=float, default=0.25)
+    ap.add_argument("--bed", type=int, default=120)
+    ap.add_argument("--press", type=float, default=0.10, help="base-layer gap — pressed")
+    ap.add_argument("--first-w", type=float, default=3.0, help="base-layer ribbon width")
+    ap.add_argument("--aux", type=float, default=0.2, help="side/chassis fan speed 0-1")
     ap.add_argument("--fan", type=int, default=80)
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")
@@ -199,7 +241,8 @@ if __name__ == "__main__":
     a = ap.parse_args()
     bxy = machine.BED[a.printer]
     g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,
-                 a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv)
+                 a.flow, a.temp, a.bed, 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
+                 a.sleeve, a.first_w, a.aux)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/pulley_{a.printer}_od{a.od:.0f}_w{a.width:.0f}_b{a.bore:.0f}D_T{a.temp}.gcode"
     open(fn, "w").write(g)
