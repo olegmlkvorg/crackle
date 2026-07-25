@@ -35,24 +35,65 @@ import machine
 from pathstats import crossings as find_crossings
 
 
-def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0):
+def _ellipse_R(a, b, t):
+    """Local radius of curvature of the ellipse at parameter t."""
+    num = (a * a * math.sin(t) ** 2 + b * b * math.cos(t) ** 2) ** 1.5
+    return num / max(a * b, 1e-9)
+
+
+def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None):
+    """ADAPTIVE sampling: dense only where the curve is actually tight.
+
+    Uniform sampling at n_per=600 gave 0.237mm segments, which at 235 mm/s is 990 moves/second.
+    Klipper drains its lookahead buffer well below that and stalls to refill — the head stopped
+    dead roughly every 3 seconds (Oleg spotted it, 2026-07-25). Resolution is only needed where
+    curvature is high; an ellipse's radius runs from b^2/a at the major-axis tips to a^2/b at the
+    minor ones, a factor of (a/b)^2, so uniform sampling oversamples most of the path by an order
+    of magnitude.
+
+    Segment length at each point is the longest that still holds `speed` there, from the same
+    junction-deviation model the fillet uses."""
+    if speed is None:
+        pts = []
+        for k in range(N):
+            rot = phase + math.pi * k / N
+            c, s = math.cos(rot), math.sin(rot)
+            for i in range(n_per + 1):
+                t = 2 * math.pi * i / n_per
+                x, y = a * math.cos(t), b * math.sin(t)
+                pts.append((cx + x * c - y * s, cy + x * s + y * c))
+        return pts
+    accel = accel or machine.ACCEL
+    jd = 5.0 ** 2 * (math.sqrt(2.0) - 1.0) / accel
+    kk = speed ** 2 / (jd * accel)
+    h = math.acos(min(1.0, kk / (1.0 + kk)))          # half turn-angle budget per junction
     pts = []
     for k in range(N):
         rot = phase + math.pi * k / N
         c, s = math.cos(rot), math.sin(rot)
-        for i in range(n_per + 1):
-            t = 2 * math.pi * i / n_per
+        t = 0.0
+        while t < 2 * math.pi:
             x, y = a * math.cos(t), b * math.sin(t)
             pts.append((cx + x * c - y * s, cy + x * s + y * c))
+            R = _ellipse_R(a, b, t)
+            seg = max(2.0 * R * h, 0.15)              # arc length we may travel before turning
+            dRdt = math.hypot(a * math.sin(t), b * math.cos(t))   # |dP/dt|
+            t += max(seg / max(dRdt, 1e-9), 1e-4)
+        x, y = a, 0.0
+        pts.append((cx + x * c - y * s, cy + x * s + y * c))
     return pts
 
 
 def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_win,
-         temp, bed, fan, fil_d, home, n_per, first_slow=1, first_speed_frac=0.18,
+         temp, bed, fan, fil_d, home, n_per, first_slow=0, first_speed_frac=1.0,
          first_squish=0.85):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
-    speed = flow / (strand_w * layer_h)
+    # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
+    # a calm head beat chasing volumetric throughput; and on stacked geometry the two cannot both
+    # be satisfied anyway (see machine.MAX_SPEED).
+    speed = min(flow / (strand_w * layer_h), machine.MAX_SPEED)
+    actual_flow = strand_w * layer_h * speed
     f_mm_min = round(speed * 60)
     b = a * ratio
     cx = cy = origin + a
@@ -71,7 +112,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
 
     L = []; w = L.append
     w(f"; NUCLEON — {N} ellipses a={a} b={b:.1f}, weld={weld}, {layers} layers")
-    w(f"; flow={flow} mm3/s -> {speed:.0f} mm/s, strand_w={strand_w} layer_h={layer_h}")
+    w(f"; flow={actual_flow:.1f} mm3/s at {speed:.0f} mm/s (capped), bead {strand_w}x{layer_h} = {strand_w*layer_h:.2f}mm2")
     w(f"; predicted junctions/layer = 2*N*(N-1) = {2*N*(N-1)}")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
@@ -89,11 +130,11 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     e = 0.0; total_x = 0; total_lift = 0
     for layer in range(layers):
         z0 = layer_h * (layer + 1)
-        # FIRST-LAYER ADHESION. At max flow the head runs 235 mm/s and the bead has no dwell to wet
-        # the plate — it rides the nozzle and pills into balls (observed 2026-07-25). Deposit per mm
-        # of path is unchanged by slowing down (E is per mm, not per second), so a slow first layer
-        # costs material nothing and seconds only, and every layer above still runs flat out.
-        # Also squish layer 1 into the plate: nominal Z would leave the bead sitting on top of it.
+        # FIRST LAYER. The balls failure (2026-07-25) came from 235 mm/s giving the bead no dwell to
+        # wet the plate. With the head now capped at 50 mm/s the whole print runs at what IS a
+        # first-layer speed, so no slowdown is needed and --first-slow defaults to 0.
+        # The SQUISH stays: it presses the bead into the plate and does not touch flow, which is
+        # what Oleg asked for — thick and irregular lines, always.
         if layer < first_slow:
             lf = round(speed * first_speed_frac * 60)
             z0 = layer_h * first_squish
@@ -102,7 +143,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # rotate each layer off the last so crossings distribute through the volume instead of
         # stacking into welded vertical columns
         phase = (math.pi / N) * (layer * 0.5)
-        pts = nucleon_path(N, a, b, cx, cy, n_per, phase)
+        pts = nucleon_path(N, a, b, cx, cy, n_per, phase, speed=speed)
         cum = [0.0]
         for i in range(len(pts) - 1):
             cum.append(cum[-1] + math.dist(pts[i], pts[i + 1]))
@@ -129,7 +170,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h*layers+40:.1f} F900", "G0 X10 Y340 F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed), lines=len(L),
+    return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed), flow=round(actual_flow,1), lines=len(L),
                                      junctions=total_x, lifts=total_lift,
                                      mins=round(e / e_per_mm / speed / 60, 1))
 
@@ -141,8 +182,13 @@ if __name__ == "__main__":
     ap.add_argument("--ratio", type=float, default=0.55, help="b/a — fatter prints faster")
     ap.add_argument("--origin", type=float, default=40.0)
     ap.add_argument("--layers", type=int, default=12)
-    ap.add_argument("--layer_h", type=float, default=0.4)
-    ap.add_argument("--strand_w", type=float, default=0.85)
+    ap.add_argument("--layer_h", type=float, default=0.6)   # 0.75x nozzle — the stacking ceiling
+    ap.add_argument("--strand_w", type=float, default=1.2)  # 1.5x nozzle — the stacking ceiling.
+                    # Together these give the fattest bead a 0.8 nozzle can stack (0.72mm2),
+                    # which is what lets max flow run at the SLOWEST possible speed: 111 mm/s
+                    # instead of 235. Oleg wanted 5x slower at constant flow; 2.1x is the
+                    # physical limit for stacked geometry, and going further would land the
+                    # bead taller than the Z step and plough the part off the plate.
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--weld", type=float, default=1.0, help="1=fuse all (Phase 1 winner), 0=weave")
     ap.add_argument("--lift", type=float, default=0.5)
@@ -151,8 +197,9 @@ if __name__ == "__main__":
     ap.add_argument("--bed", type=int, default=60)
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--n-per", type=int, default=600, help="samples per ellipse")
-    ap.add_argument("--first-slow", type=int, default=1, help="layers printed slow for adhesion")
-    ap.add_argument("--first-frac", type=float, default=0.18, help="first-layer speed as a fraction")
+    ap.add_argument("--first-slow", type=int, default=0,
+                    help="layers slowed for adhesion — 0 by default: the whole print now runs\n                          at 50 mm/s, which IS a first-layer speed, so nothing needs slowing.\n                          Oleg: thick and irregular lines are good, always.")
+    ap.add_argument("--first-frac", type=float, default=1.0, help="first-layer speed fraction")
     ap.add_argument("--first-squish", type=float, default=0.85, help="first-layer Z as a fraction")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
@@ -165,4 +212,4 @@ if __name__ == "__main__":
     open(fn, "w").write(g)
     print(f"{fn}\n  N={a.N} ({2*a.N*(a.N-1)} junctions/layer predicted, {st['junctions']} measured "
           f"over {a.layers} layers), {st['lifts']} lifts")
-    print(f"  {st['speed']} mm/s, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
+    print(f"  {st['speed']} mm/s (capped at {machine.MAX_SPEED:.0f}), flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
