@@ -57,11 +57,50 @@ def comb_path(cell, cols, rows, ox, oy):
             # start each cell at whichever vertex is nearest where the path currently is, so the
             # step between cells is the shortest possible and never crosses the cell
             if pts:
-                k0 = min(range(6), key=lambda i: math.dist(pts[-1], hexa[i]))
+                # Nearest-vertex alone doubles back: the nearest vertex of the next cell is often
+                # the one we just CAME FROM, so the path retraces the edge it has just laid -- a
+                # 180-degree reversal. The corner fillet then hid it by shrinking it into 0.006mm
+                # segments, small enough in angle to pass a turn check while still being a dead
+                # stop with the extruder running. Exclude the previous point from the choice.
+                # Prefer not to start the next cell on the vertex we just came FROM, which
+                # retraces the edge just laid. This helps (13 near-reversals -> 11) but does not
+                # solve it: closing every cell means the walk ENDS where it started, so entering a
+                # neighbour that shares that vertex tends to double back whatever we pick. Excluding
+                # the arrival vertex too made it worse (18), and the walk direction cannot fix it
+                # because both directions share the same first vertex.
+                #
+                # The structural fix is a different construction: zigzag rows with EVERY strut drawn
+                # as a narrow loop (down one side, back up ~1.2mm over) rather than per-cell closed
+                # hexagons. At a 1.5mm bead the loop merges into a single wall, gives every cell its
+                # vertical walls, and has no reversal anywhere. Not done yet -- the current path
+                # prints correctly, and the fillet turns these cusps into tight arcs, so this is
+                # wasted moves and dead stops rather than a defect on the plate.
+                back = pts[-2] if len(pts) > 1 else None
+                cand = [i for i in range(6)
+                        if back is None or math.dist(hexa[i], back) > 1e-6] or list(range(6))
+                k0 = min(cand, key=lambda i: math.dist(pts[-1], hexa[i]))
             else:
                 k0 = 0
-            loop = [hexa[(k0 + i) % 6] for i in range(6)] + [hexa[k0]]
-            pts.extend(loop)
+            # AND PICK THE DIRECTION OF TRAVEL. When the next cell starts on a vertex shared with
+            # the last one, walking it in a fixed direction sends the first edge straight back along
+            # the edge just laid -- a 180-degree reversal. The corner fillet then hid it by shrinking
+            # it into 0.006mm segments: small enough in angle to pass a turn check, still a dead stop
+            # with the extruder running. Walk each cell whichever way continues the current heading.
+            loops = [[hexa[(k0 + d * i) % 6] for i in range(6)] + [hexa[k0]] for d in (1, -1)]
+            if len(pts) > 1:
+                hx, hy = pts[-1][0] - pts[-2][0], pts[-1][1] - pts[-2][1]
+                hl = math.hypot(hx, hy)
+                if hl > 1e-9:
+                    def _turn(loop):
+                        nxt = loop[1] if math.dist(pts[-1], loop[0]) < 1e-6 else loop[0]
+                        vx, vy = nxt[0] - pts[-1][0], nxt[1] - pts[-1][1]
+                        vl = math.hypot(vx, vy)
+                        if vl < 1e-9:
+                            return 180.0
+                        return math.degrees(math.acos(
+                            max(-1.0, min(1.0, (hx * vx + hy * vy) / (hl * vl)))))
+                    loops.sort(key=_turn)
+            pts.extend(loops[0])
     if math.dist(pts[0], pts[-1]) > 1e-6:
         pts.append(pts[0])
     return pts
