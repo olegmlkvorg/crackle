@@ -45,9 +45,11 @@ class Params:
     size: float = 60.0          # coupon footprint (mm, square)
     n: int = 4                  # pillars per side (n*n total)
     pitch: float = 20.0         # pillar spacing (mm) — set from size/n if 0
-    layer_h: float = 0.30
-    layers: int = 20            # ~6 mm tall — enough to stand on, inside the time budget
-    line_w: float = 0.60        # extrusion width (0.4 nozzle, fat line = sturdier pillar)
+    layer_h: float = 0.40       # 0.8 nozzle: ~50% of orifice
+    layers: int = 15            # ~6 mm tall at 0.4 layers
+    line_w: float = 0.90        # 0.8 NOZZLE — you cannot extrude narrower than the orifice.
+                                # v1 used 0.6 here, which a 0.8 nozzle physically cannot lay down;
+                                # that plus oozed strands is why coupon A's web never built.
     pillar_turns: float = 1.0   # how much material to lay down AT each pillar per layer
     order: str = "star"         # perimeter | serpentine | star | random | maxcross
     passes: int = 1             # extra crossing passes per layer (travel-only cost)

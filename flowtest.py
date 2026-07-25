@@ -23,7 +23,7 @@ Usage:
 import argparse, math, os
 
 MATERIALS = {   # sane starting ladders; the point is to find the truth, not trust these
-    "pla":  dict(temp=230, bed=60,  flows=[5, 8, 11, 14, 17, 20, 23, 26]),
+    "pla":  dict(temp=230, bed=60,  flows=[10, 16, 22, 28, 34, 40, 46, 52]),  # 0.8 nozzle range
     "petg": dict(temp=245, bed=80,  flows=[5, 8, 11, 14, 17, 20, 23, 26]),
     "tpu":  dict(temp=230, bed=50,  flows=[2, 3, 4, 5, 6, 8, 10, 12]),
     "abs":  dict(temp=255, bed=100, flows=[6, 9, 12, 15, 18, 21, 24, 27]),
@@ -90,8 +90,8 @@ if __name__ == "__main__":
     ap.add_argument("--flows", default=None, help="comma list of mm3/s, e.g. 8,12,16,20,24")
     ap.add_argument("--temp", type=int, default=None)
     ap.add_argument("--size", type=float, default=60.0)
-    ap.add_argument("--layer_h", type=float, default=0.2)
-    ap.add_argument("--line_w", type=float, default=0.45)
+    ap.add_argument("--layer_h", type=float, default=0.4)   # 0.8 nozzle: ~50% of orifice
+    ap.add_argument("--line_w", type=float, default=0.9)   # 0.8 nozzle: never narrower than the orifice
     ap.add_argument("--band_layers", type=int, default=6)
     ap.add_argument("--fan", type=int, default=255)   # flow test WANTS cooling (unlike crackle)
     ap.add_argument("--origin", type=float, default=100.0)
