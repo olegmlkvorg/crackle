@@ -211,4 +211,15 @@ BED_TEMP = {"pla": 60, "petg": 80, "tpu": 45, "abs": 100}
 # The 13.3 "ceiling" measured before this was a partial clog, cleared by Oleg — a limit that moves
 # when you push it is the symptom, not the limit.
 TPU_FLOW = 15.2
-TPU_TEMP = 230
+# TPU_TEMP: 200, NOT the 225-235 the generic TPU guidance says. Measured 2026-07-25 on the K2 Plus.
+#
+# At 230 and at 220 the extruder jammed roughly 35 SECONDS into a print -- and critically, it did so
+# at the same TIME under a ramping flow AND under a constant 15.2 mm3/s. A failure that ignores the
+# flow rate and lands at a fixed time is not a rate limit; it is something that accumulates. Here it
+# is HEAT CREEP: heat climbing the feed path softens the filament until it buckles and stops
+# feeding. Hotter made it worse, which is why every attempt to fix it by lowering flow failed.
+# At 200 the same file ran 4x longer and was still feeding.
+#
+# The hotend heatsink fan was verified running (speed 1.0) before blaming temperature. The K2's
+# separate `output_pin extruder_fan` reads 0.0 and is the next lever if 200 ever proves marginal.
+TPU_TEMP = 200

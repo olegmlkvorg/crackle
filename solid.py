@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""SOLID PARTS AS ONE CONTINUOUS PATH — concentric contours, no slicer.
+
+The gap this closes: every generator here emits thin-wall geometry (a lattice, a ribbon, a belt, a
+pulley whose fill is a spoke web). A bracket, a bearing block, a clamp -- anything that is genuinely
+SOLID -- needed perimeters and infill, which meant going out to trimesh -> STL -> a slicer GUI, and
+that is not autonomous. Oleg: "we dont do normal slicing, everhything we print is path based gen we
+discovered today".
+
+The method: take a 2D region (a shapely polygon, holes and all) and walk it INWARD in concentric
+contours spaced one bead apart, until nothing is left. Concentric fill is not a compromise for small
+mechanical parts -- it is stronger than rectilinear infill because every pass follows the load path
+around holes instead of cutting across it.
+
+    contour 0 = region.buffer(-bead/2)      the outer wall's centreline
+    contour n = contour n-1 .buffer(-bead)  each one bead further in
+    stop when the buffer comes back empty
+
+Two things this has to get right, both learned the hard way today:
+  · buffer() can return a MultiPolygon (a region pinches into separate islands) or drop holes.
+    Handle both, or the part silently comes out with a missing wall.
+  · Consecutive contours are separate closed loops, so linking them is the only place a jog can
+    occur. Those jogs are INSIDE solid material -- they overprint, which this project accepts
+    ("overprint or whatever but no sharp turning") -- and the start angle rotates per layer so the
+    seam never stacks into a visible line.
+"""
+import argparse
+import math
+import os
+
+from shapely.geometry import Point, Polygon
+from shapely.ops import unary_union
+
+import machine
+
+
+def contours(region, bead_w, max_rings=200):
+    """Concentric centrelines, outermost first, spaced one bead apart."""
+    rings = []
+    cur = region.buffer(-bead_w / 2.0)
+    n = 0
+    while not cur.is_empty and n < max_rings:
+        geoms = list(cur.geoms) if cur.geom_type == "MultiPolygon" else [cur]
+        for g in geoms:
+            if g.is_empty or g.area < (bead_w * bead_w):
+                continue
+            rings.append(list(g.exterior.coords))
+            # A HOLE IS A WALL TOO. Dropping interiors here would print a bracket whose bores have
+            # no wall on the inside -- the part looks right in plan and is hollow where it matters.
+            for ring in g.interiors:
+                rings.append(list(ring.coords))
+        cur = cur.buffer(-bead_w)
+        n += 1
+    return rings
+
+
+def densify(loop, step):
+    """Split long straight edges into `step`-sized pieces.
+
+    Shapely keeps a flat wall as two points, so a 30mm edge arrives as one segment. That breaks any
+    rule expressed in terms of move length, and it also starves the motion planner of the points it
+    needs to hold a constant speed through a corner.
+    """
+    out = [loop[0]]
+    for a, b in zip(loop, loop[1:]):
+        d = math.dist(a, b)
+        n = max(1, int(math.ceil(d / step)))
+        for i in range(1, n + 1):
+            t = i / n
+            out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+    return out
+
+
+def start_nearest(loop, here):
+    """Rotate a closed loop to begin at the point nearest `here`."""
+    core = loop[:-1] if loop[0] == loop[-1] else loop[:]
+    if len(core) < 3:
+        return loop
+    k = min(range(len(core)), key=lambda i: math.dist(core[i], here))
+    out = core[k:] + core[:k]
+    return out + [out[0]]
+
+
+def order_rings(rings, here):
+    """Visit contours nearest-first, each entered at its closest point.
+
+    Printing them in generation order drew a 43.9mm line straight across the part when the path
+    stepped from one contour to the next -- and since every move extrudes, that line was laid down
+    OVER the bores, bridging holes that are supposed to stay open. Greedy nearest-neighbour keeps
+    every link down to roughly one bead, which stays inside solid material where an overprint is
+    harmless.
+    """
+    todo = list(rings)
+    out = []
+    while todo:
+        best_i, best_d, best_loop = 0, float('inf'), None
+        for i, r in enumerate(todo):
+            loop = start_nearest(r, here)
+            d = math.dist(loop[0], here)
+            if d < best_d:
+                best_i, best_d, best_loop = i, d, loop
+        out.append(best_loop)
+        here = best_loop[-1]
+        todo.pop(best_i)
+    return out
+
+
+def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
+         first_w, aux, printer, name, link_max=2.0):
+    area = math.pi * (fil_d / 2) ** 2
+    e_per_mm = (bead_w * layer_h) / area
+    speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
+    flow = speed * bead_w * layer_h
+    f = round(speed * 60)
+    layers = max(1, int(round(height / layer_h)))
+    e_first = (first_w * press) / area
+    f_first = round(min(flow / (first_w * press), 20.0) * 60)
+
+    rings = contours(region, bead_w)
+    if not rings:
+        raise SystemExit(f"{name}: the region is smaller than one {bead_w}mm bead — nothing to print.")
+
+    xs = [p[0] for r in rings for p in r]
+    ys = [p[1] for r in rings for p in r]
+    ox = (bed_xy[0] - (max(xs) + min(xs))) / 2.0
+    oy = (bed_xy[1] - (max(ys) + min(ys))) / 2.0
+    if min(xs) + ox < 4 or min(ys) + oy < 4 or max(xs) + ox > bed_xy[0] - 4 \
+            or max(ys) + oy > bed_xy[1] - 4:
+        raise SystemExit(f"{name} spans {max(xs)-min(xs):.0f}x{max(ys)-min(ys):.0f}mm — "
+                         f"off a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} plate.")
+
+    L = []
+    w = L.append
+    w(f"; {name} — solid part as concentric contours, one continuous path per layer")
+    w(f"; {len(rings)} contours, bead {bead_w}x{layer_h}, {layers} layers = {height}mm tall")
+    w(f"; {speed:.0f} mm/s at flow {flow:.1f} mm3/s (cap {machine.MAX_SPEED:.0f} mm/s)")
+    w("; HEADER_BLOCK_START")
+    w(f"; total layer number: {layers}")
+    w("; HEADER_BLOCK_END")
+    w(f"M104 S{temp}")
+    w("G90")
+    w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
+    w(f"M140 S{bed}")
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
+    w(f"M109 S{temp}")
+    w("M204 S8000")
+    w("M107" if not fan else f"M106 S{fan}")
+    for ln in machine.aux_fans(printer, aux):
+        w(ln)
+    w("M82")
+    w("G92 E0")
+
+    x0, y0 = rings[0][0][0] + ox, rings[0][0][1] + oy
+    w(f"G1 Z{press:.3f} F600")
+    w(f"G0 F9000 X{max(6.0, x0 - 40):.3f} Y{max(6.0, y0):.3f}")
+    w("G1 E20 F300                      ; stationary purge — pressure before motion")
+    w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E30")
+    w("G92 E0")
+    w("; BODY_START")
+
+    e = 0.0
+    px = py = None
+    for k in range(layers):
+        z = press + k * layer_h
+        if k:
+            e += layer_h * e_per_mm
+            L.append(f"G1 F{round(min(speed, 15)*60)} Z{z:.3f} E{e:.5f}")
+            L.append(f"G1 F{f}")
+        ordered = order_rings(rings, (px - ox, py - oy) if px is not None else rings[0][0])
+        for li, loop in enumerate(ordered):
+            loop = densify(loop, 0.8)
+            for pi, (x, y) in enumerate(loop):
+                X, Y = x + ox, y + oy
+                if px is None:
+                    px, py = X, Y
+                    continue
+                d = math.dist((px, py), (X, Y))
+                if d < 1e-9:
+                    continue
+                # ONLY the step INTO a new loop may be a hop. A long move inside a loop is the
+                # part's own straight wall -- shapely stores a flat edge as two points, so a naive
+                # "long move = travel" rule turned this bracket's 30mm flat side into a travel and
+                # produced 17 hops per layer. The link is pi == 0, and nothing else.
+                if pi == 0 and d > link_max:
+                    L.append(f"G0 F{round(min(speed * 2, 60) * 60)} X{X:.3f} Y{Y:.3f}")
+                    px, py = X, Y
+                    L.append(f"G1 F{f_first if k == 0 else f}")
+                    continue
+                e += d * (e_first if k == 0 else e_per_mm)
+                L.append(f"G1 {'F%d ' % (f_first if k == 0 else f) if (px, py) == (x0, y0) else ''}"
+                         f"X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
+                px, py = X, Y
+
+    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + height + 30:.1f} F900",
+          f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
+    grams = e * area * 1.24 / 1000
+    return "\n".join(L) + "\n", dict(rings=len(rings), layers=layers, grams=round(grams, 1),
+                                     speed=round(speed), flow=round(flow, 1),
+                                     mins=round(e / e_per_mm / speed / 60, 1),
+                                     size=(round(max(xs)-min(xs)), round(max(ys)-min(ys))))
+
+
+def bracket(axle_d, stick_d, centres, wall, shrink=0.25):
+    """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
+
+    Both bores are modelled OVERSIZE by the measured printed-hole shrink (printed = model - 0.25 on
+    these machines), so the axle turns and the stick slides in rather than the part being scrap.
+    """
+    r_a = (axle_d + shrink) / 2.0
+    r_s = (stick_d + shrink) / 2.0
+    # CONSTANT-HEIGHT BODY, not a waisted one. A waist PINCHES as the region is buffered inward:
+    # the contours split into two islands and the path has to cross the gap once per layer -- a
+    # 12.8mm hop, measured. Making the connecting body as tall as the larger boss means the region
+    # shrinks as a single blob and never splits, so every contour links to the next in about one
+    # bead and the part needs no travel at all. It also puts more material around the stick bore,
+    # which is the joint that carries the frame.
+    h = r_s + wall
+    body = unary_union([
+        Point(0, 0).buffer(r_a + wall, 96),
+        Point(centres, 0).buffer(r_s + wall, 96),
+        Polygon([(0, -h), (centres, -h), (centres, h), (0, h)]),
+    ])
+    return body.difference(Point(0, 0).buffer(r_a, 96)) \
+               .difference(Point(centres, 0).buffer(r_s, 96))
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--part", default="bracket", choices=["bracket"])
+    ap.add_argument("--axle", type=float, default=6.0)
+    ap.add_argument("--stick", type=float, default=12.7, help="1/2 inch bamboo")
+    ap.add_argument("--centres", type=float, default=32.0)
+    ap.add_argument("--wall", type=float, default=4.0)
+    ap.add_argument("--height", type=float, default=12.0)
+    ap.add_argument("--bead-w", type=float, default=1.2)
+    ap.add_argument("--layer-h", type=float, default=0.4)
+    ap.add_argument("--flow", type=float, default=machine.FLOW)
+    ap.add_argument("--temp", type=int, default=machine.TEMP)
+    ap.add_argument("--bed", type=int, default=0, help="0 = machine.BED_TEMP['pla']")
+    ap.add_argument("--press", type=float, default=0.10)
+    ap.add_argument("--first-w", type=float, default=3.0)
+    ap.add_argument("--fan", type=int, default=80)
+    ap.add_argument("--aux", type=float, default=0.2)
+    ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
+    ap.add_argument("--no-home", action="store_true")
+    ap.add_argument("--out", default="out")
+    a = ap.parse_args()
+    region = bracket(a.axle, a.stick, a.centres, a.wall)
+    g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
+                 a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
+                 not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
+                 f"BRACKET axle{a.axle:g} stick{a.stick:g} centres{a.centres:g}")
+    os.makedirs(a.out, exist_ok=True)
+    fn = f"{a.out}/bracket_{a.printer}_a{a.axle:g}_s{a.stick:g}_c{a.centres:g}_T{a.temp}.gcode"
+    open(fn, "w").write(g)
+    print(f"{fn}")
+    print(f"  {st['size'][0]}x{st['size'][1]}mm, {st['rings']} concentric contours, "
+          f"{st['layers']} layers = {a.height}mm tall")
+    print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g")
