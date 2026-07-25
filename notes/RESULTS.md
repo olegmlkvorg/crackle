@@ -120,3 +120,15 @@ landed bead width = 3.0 − (gap) = ______ mm   _(measure between spiral turns o
 ## Next, gated on that number
 1. `crackle.py --sweep all --fast --no-home --max-flow <n>` → regenerate B and A, run Phase 1.
 2. `zwave.py --no-home --flow <working>` → Oleg's Z-during-extrusion sweep (`notes/Z-MODULATION.md`).
+
+### Weld-time ladder (generated, gated behind B/A)
+`crackle.py --preset A --fast --no-home --vary travel_f=6000,12000,24000` → strand speed
+**100 / 200 / 400 mm/s** at identical geometry (all 4.63 g, 77 crossings/layer — verified, so it is
+a genuine one-factor sweep). Tests the claim behind my hardcoded speed cap: that contact time at a
+crossing decides whether it fuses, and fusing IS the crackle mechanism. Same question the fan axis
+asks, approached from the other side — fan removes heat, speed removes time.
+
+**Caveat:** over the shortest moves (20 mm pitch) at M204 S8000 the peak reachable speed is
+sqrt(8000 × 20) = 400 mm/s, so the fastest variant is right at the accel limit on short moves and
+fully reached only on long diagonals. The effective spread is therefore under the nominal 4×.
+Read it as a ladder, not as calibrated speeds.
