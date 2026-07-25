@@ -1,67 +1,55 @@
 #!/usr/bin/env python3
-"""HONEYCOMB in our technique — one continuous extrusion, no travels, pressed hard, at max flow.
+"""WAVES — long rippled ribbons, one continuous extrusion, to be shaped by hand while warm.
 
-Oleg: "create honeycomb out of our technic". The sliced STL version on the K2 is 321 x 310mm and
-does not fit the K1C at all; more to the point, a sliced honeycomb is thousands of travel moves and
-a stop-start extruder. Ours is one unbroken line.
+This began as a broken honeycomb: zigzag rows joined by a single strut per row pair, so it drew a
+field of waves with 12 vertical walls for 96 cells -- no closed cells at all. As a honeycomb it was
+simply wrong, and it was on its way to being deleted.
 
-HOW A HONEYCOMB IS DRAWN WITHOUT LIFTING THE PEN
-A hex lattice has vertices of degree 3 — odd — so no Eulerian circuit exists and it cannot be traced
-edge-once without retracing. The standard construction avoids that: a honeycomb is rows of ZIGZAGS
-joined by short VERTICAL struts.
+Oleg peeled the rows off the plate while they were still warm, splayed them radially and welded
+them at the centre: a flower roughly 300mm across with a rippled edge, and the best thing either
+machine made that day. 2026-07-25.
 
-    row:      hexagon cells, walked one by one
-    struts:   |   |   |         the vertical walls, drawn between rows
+So the wave path is kept HERE as its own product instead of being fixed away. What makes it work
+as hand-forming feedstock:
+  · each ribbon is one uninterrupted strand -- no travels means nothing to snap at
+  · the ripple gives the strand spring and grip, so a hand-formed curve HOLDS
+  · rounded ends (the corner fillet) make a bent ribbon read as finished, not cut
+  · translucent PLA pressed to 0.55mm is thin enough to bend warm, stiff enough to keep the shape
 
-Walk a row left to right, drop a strut, walk the next row right to left, drop a strut, and so on.
-Every edge is drawn exactly once, the pen never lifts, and the result is a true hexagonal lattice.
-Boustrophedon — the way an ox ploughs a field.
-
-Everything else follows the project's method: pressed to machine.PRESS_HARD, flow held at target by
-deriving speed from the bead, no travel between first and last extrusion.
+The honeycomb this failed to be now lives in honeycomb.py as a real hex lattice.
+See guides/alien-tech-forming.md -- the FORMING vertical arriving on its own.
 """
-import argparse, math, os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import argparse
+import math
+import os
+
 import machine
 
-
 def comb_path(cell, cols, rows, ox, oy):
-    """A real hex lattice as one continuous polyline. `cell` is the hexagon circumradius.
-
-    The previous version laid zigzag rows joined by a single strut per row pair -- 12 vertical walls
-    for 96 cells. That is a field of waves, not a honeycomb: without the vertical walls nothing
-    closes into a cell.
-
-    A hex lattice cannot be drawn edge-once (every interior vertex has degree 3, so no Eulerian
-    circuit exists). Rather than fake it, each CELL is walked as a closed hexagon and the walk steps
-    from cell to neighbouring cell. Shared walls therefore get printed twice -- Oleg: "overprint or
-    whatever but no sharp turning" -- which costs filament and buys real closed cells, plus double
-    thickness on every shared wall.
-
-    Pointy-top hexagons: flat left and right sides, so horizontal neighbours share a vertical wall
-    and the step between them is short.
-    """
-    R = cell
-    w = math.sqrt(3) * R                 # across the flats
-    vsp = 1.5 * R                        # row-to-row centre spacing
-    verts = [(math.cos(math.radians(90 + 60 * k)) * R,
-              math.sin(math.radians(90 + 60 * k)) * R) for k in range(6)]
+    """Hex lattice as one continuous polyline. `cell` is the hexagon side length."""
+    s = cell
+    dx = s * math.sqrt(3) / 2.0          # half-width of a hexagon
+    up = s / 2.0                          # vertical rise of a slanted wall
+    strut = s                             # length of a vertical wall
     pts = []
+    y = oy
     for r in range(rows):
-        cy = oy + R + r * vsp
-        xoff = (w / 2.0) if (r % 2) else 0.0
-        order = range(cols) if r % 2 == 0 else range(cols - 1, -1, -1)
-        for c in order:
-            cx = ox + w / 2.0 + xoff + c * w
-            hexa = [(cx + vx, cy + vy) for vx, vy in verts]
-            # start each cell at whichever vertex is nearest where the path currently is, so the
-            # step between cells is the shortest possible and never crosses the cell
-            if pts:
-                k0 = min(range(6), key=lambda i: math.dist(pts[-1], hexa[i]))
-            else:
-                k0 = 0
-            loop = [hexa[(k0 + i) % 6] for i in range(6)] + [hexa[k0]]
-            pts.extend(loop)
+        rightward = (r % 2 == 0)
+        xs = range(cols * 2 + 1) if rightward else range(cols * 2, -1, -1)
+        for i, k in enumerate(xs):
+            x = ox + k * dx
+            zig = y + (up if (k % 2 == 1) else 0.0)
+            pts.append((x, zig))
+        # strut down into the next row, at whichever end we finished on
+        if r < rows - 1:
+            xend = pts[-1][0]
+            pts.append((xend, pts[-1][1] + strut))
+            y = y + strut
+    # CLOSE THE CIRCUIT. Stacking by reversing the path makes each layer retrace the previous
+    # layer's last segment backwards -- a 180-degree reversal, the sharpest turn there is, with the
+    # extruder still running. Closing the comb into a loop instead lets every layer run the SAME
+    # direction from the SAME point: no reversal, no travel, and the closing run down the left edge
+    # is not waste, it is the left wall.
     if math.dist(pts[0], pts[-1]) > 1e-6:
         pts.append(pts[0])
     return pts
@@ -130,8 +118,8 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     speed = flow / (bead_w * bead_h)
     f = round(speed * 60)
     s = cell
-    w_total = cols * math.sqrt(3) * s + math.sqrt(3) * s / 2.0
-    h_total = (rows - 1) * 1.5 * s + 2 * s
+    w_total = cols * 2 * (s * math.sqrt(3) / 2.0)      # wave-row geometry, not hex-cell
+    h_total = (rows - 1) * s + s / 2.0
     ox = (bed_xy[0] - w_total) / 2.0
     oy = (bed_xy[1] - h_total) / 2.0
     if ox < 8 or oy < 8:
@@ -145,7 +133,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
                          f"{max(_ys):.0f} on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed — off the plate.")
 
     L = []; w = L.append
-    w(f"; HONEYCOMB — one continuous extrusion, {cols}x{rows} cells of {cell}mm")
+    w(f"; WAVES — rippled ribbons to shape by hand, {cols}x{rows} of {cell}mm")
     w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow} mm3/s")
     w(f"; {w_total:.0f} x {h_total:.0f}mm on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed, pressed to {press}mm")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")

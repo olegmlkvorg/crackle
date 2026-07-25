@@ -391,9 +391,15 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
               e += (z_base - anchor) * e_per_mm
               L.append(f"G1 F600 Z{z_base:.4f} E{e:.5f}            ; back to the squished baseline")
               L.append(f"G1 F{f_mm_min}")                     # restore the BASE feedrate
-              th2 = th + (span / max(r, 1.0))
-              x2, y2 = cx + r * math.cos(th2), cy + r * math.sin(th2)
-              th = th2; px, py = x2, y2
+              # DO NOT invent a position. This used to skip the spiral forward by `span` so the
+              # next base move would not overwrite the landing -- but that skip was expressed as
+              # `th = th2`, and once the spiral became a precomputed `for th in ths` loop the
+              # assignment was dead while `px, py = x2, y2` still ran. The code then believed the
+              # head was ~9.6mm further along than it was and metered the NEXT move's extrusion for
+              # that phantom distance: 9.586mm of filament into a 0.98mm move, 224 mm/s of extruder
+              # velocity, 539 mm3/s. The nozzle MCU shut down mid-print ("Stepper too far in past").
+              # The petal closes on its own launch point (u = Lr*sin(phi/2) is 0 at phi=2pi), so
+              # px, py are ALREADY correct here. Leave them alone.
               arcs.append((round(amp, 2), round(r)))
               next_arc = s + pitch
 

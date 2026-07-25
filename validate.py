@@ -8,9 +8,14 @@ ratio is actually high (if it isn't, we're not making a web).
 
 Usage: python3 validate.py out/*.gcode
 """
-import re, sys, math
+import re, sys, math, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import machine
 
 BED = (350, 350)   # K2 Plus
+
+FIL_AREA = math.pi * (1.75 / 2) ** 2
+
 
 def check(path):
     # The machine start block (START_PRINT + Creality's own prime) legitimately lifts to Z3 and
@@ -193,6 +198,44 @@ def check(path):
         if len(top) == 1 and 'crackle' in path:
             warns.append("only one bead cross-section — strands and pillars are indistinguishable, "
                          "so the web may not be forming")
+
+    # EXTRUDER VELOCITY PER MOVE. A gcode file can be perfectly well-formed and still ask the
+    # extruder for a speed no extruder can reach: on 2026-07-25 a stale position variable metered
+    # 9.586mm of filament into a 0.98mm move, which is 224 mm/s of filament and 539 mm3/s of flow.
+    # Klipper does not reject it -- the nozzle MCU shut down mid-print with "Stepper too far in
+    # past". Flow is what this whole project is built on, so an emitted move that violates the cap
+    # is a FAIL, not a warning.
+    _cap = machine.FLOW * 1.35          # headroom for legitimate press/dab moves
+    _f = 0.0
+    _pp = None
+    _pe = 0.0
+    _worst = (0.0, 0)
+    for _i, _ln in enumerate(open(path)):
+        _m = re.match(r'G1 (?:F(\d+) )?(?:X([-\d.]+) Y([-\d.]+) )?(?:Z([\d.]+) )?E([-\d.]+)', _ln)
+        if not _m:
+            _mf = re.match(r'G1 F(\d+)\s*$', _ln)
+            if _mf:
+                _f = float(_mf.group(1)) / 60.0
+            continue
+        if _m.group(1):
+            _f = float(_m.group(1)) / 60.0
+        _e = float(_m.group(5)); _de = _e - _pe; _pe = _e
+        if _m.group(2):
+            _p = (float(_m.group(2)), float(_m.group(3)), float(_m.group(4) or 0))
+            _d = math.dist(_p, _pp) if _pp else 0.0
+            _pp = _p
+        else:
+            continue                     # stationary dab: no path, flow is dwell not rate
+        if _d > 1e-6 and _de > 0 and _f > 0:
+            _flow = _de * FIL_AREA * _f / _d
+            if _flow > _worst[0]:
+                _worst = (_flow, _i + 1)
+    if _worst[0] > _cap:
+        problems.append(f"move at line {_worst[1]} implies {_worst[0]:.0f} mm3/s "
+                        f"(cap {machine.FLOW:.0f}) — the extruder cannot deliver this and the MCU "
+                        f"will shut down; a position variable is probably stale")
+    elif _worst[0]:
+        print(f"  peak implied flow {_worst[0]:.1f} mm3/s (cap {machine.FLOW:.0f})")
 
     mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
