@@ -73,7 +73,24 @@ safe, which is what makes the filament visible at low speed.
 | notch every 5 mm³/s | the plate labels itself; count teeth on the right edge, no ruler |
 | floor raised 34 → 42 | Oleg: still perfectly fine at 24% of the prior run |
 
-### RESULT 2026-07-25 — **max flow ≈ 83 mm³/s**
+### RESULT 2026-07-25 (refined) — **max flow = 81.2 mm³/s**
+Zoom run 76→90 with a pimple per 1 mm³/s: first skip at 20% of path = **81.2 mm³/s**, r75 mm.
+The two runs agree within 2.4% (83.1 → 81.2), so the hot-bed slumping I flagged was real but small.
+It flattered the first reading; it did not invalidate it. **Working = 0.85 × 81 = 68.8.**
+
+### ⚠️ The measurement does NOT bind the coupon — and my "no invented numbers" claim was wrong
+Both derived speeds hit **hardcoded caps I wrote**: working flow wants 344 mm/s for strands and
+191 mm/s for pillars, and `crackle.py` clamps to 200 (travel_f 12000) and 150 (print_f 9000). So
+83 and 81 produce byte-identical coupons, and anything above ~55 mm³/s would too. The flow ceiling
+binds the wide-line single-layer work (flow sheet, Z-spiral), not the coupon.
+
+The caps are not indefensible — 200 mm/s sits well inside the machine's 800, and strand speed
+*should* plausibly be bounded because **contact time at a crossing is what decides whether it
+welds, and welding is the crackle mechanism**. But that is a physical claim to test, not a constant
+to pick. **TODO: sweep it** — `--vary travel_f=6000,12000,24000` belongs beside the fan axis, since
+both are testing the same thing: whether crossings fuse.
+
+### Earlier reading (superseded, kept for the record) — 83.1 mm³/s
 Oleg, watching live: *"72% we get first skips."* 72% of path on the 50→90 spiral = **83.1 mm³/s**,
 radius 137 mm, 69 mm/s commanded. The bump spoke corroborates it independently: the 80 pimple sits
 at r127 and the 85 pimple at r145, so the skips begin between the 6th and 7th pimple, nearer the 7th.
