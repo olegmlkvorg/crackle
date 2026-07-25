@@ -13,6 +13,10 @@ import re, sys, math
 BED = (350, 350)   # K2 Plus
 
 def check(path):
+    # The machine start block (START_PRINT + Creality's own prime) legitimately lifts to Z3 and
+    # comes back down to Z0.2, and homes inside a macro rather than a literal G28. Checking the
+    # body only — a validator that cries wolf on correct machine gcode trains you to ignore it.
+    body = False
     z = 0.0; e = 0.0; x = y = 0.0
     abs_e = True
     problems, warns = [], []
@@ -20,6 +24,7 @@ def check(path):
     zs, temps, maxz = [], [], 0.0
     n = 0
     for ln, raw in enumerate(open(path), 1):
+        if 'base layer 1' in raw or 'web layer 1 ' in raw: body = True   # start block ends here
         s = raw.split(';')[0].strip()
         if not s: continue
         n += 1
@@ -39,19 +44,21 @@ def check(path):
             if me:
                 ev = float(me.group(1))
                 de = ev - e if abs_e else ev
-                if abs_e and de < -1e-6:
+                if body and abs_e and de < -1e-6:
                     problems.append(f"L{ln}: absolute E goes BACKWARDS ({e:.3f}->{ev:.3f}) — that is an unintended retraction")
                 e = ev if abs_e else e + ev
                 extrude_mm += d
             else:
                 travel_mm += d
-            if nz < z - 1e-6 and nz < maxz - 1e-6:
+            if body and nz < z - 1e-6 and nz < maxz - 1e-6:
                 problems.append(f"L{ln}: Z descends to {nz} (below max {maxz}) — nozzle would plough the part")
             if not (0 <= nx <= BED[0] and 0 <= ny <= BED[1]):
                 problems.append(f"L{ln}: XY off bed ({nx},{ny})")
             x, y, z = nx, ny, nz; maxz = max(maxz, z); zs.append(z)
     if not any(t >= 150 for t in temps): problems.append("no hotend temp >=150 commanded")
-    if 'G28' not in open(path).read(): problems.append("never homes (G28)")
+    src = open(path).read()
+    if 'G28' not in src and 'START_PRINT' not in src:
+        problems.append("never homes (no G28 and no START_PRINT macro)")
     ratio = travel_mm / max(extrude_mm, 1e-9)
     if ratio < 1.0: warns.append(f"travel:extrude = {ratio:.2f} — LOW; this may not build much web")
     # crude time estimate: travels at F6000, extrudes at F1200

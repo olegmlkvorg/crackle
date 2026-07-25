@@ -63,6 +63,7 @@ class Params:
     wipe_every: int = 0         # layers between a nozzle-wipe pass (0 = off)
     inset: float = 8.0          # keep pillars off the coupon edge
     prime_f: int = 3000         # from filament_max_volumetric_speed/0.3*60 (PLA ~15mm3/s)
+    tally: int = 1              # raised bars on the base = which coupon this is
     machine: str = "k2"         # k2 | generic — k2 uses Creality's START_PRINT/END_PRINT macros
     start_gcode: str = ""       # if set, used VERBATIM instead of the generic start (see README)
     end_gcode: str = ""         # ditto
@@ -71,17 +72,17 @@ class Params:
 
 PRESETS = {
     # The PRD's guess, made concrete — the control.
-    "A": Params(name="A", order="star"),
+    "A": Params(name="A", tally=2, order="star"),
     # Axis 1: ORDER (the thesis says this dominates). Same everything else.
-    "B": Params(name="B", order="perimeter"),      # ~0 crossings -> should NOT crackle
-    "C": Params(name="C", order="serpentine"),     # few crossings
-    "D": Params(name="D", order="maxcross"),       # most crossings
+    "B": Params(name="B", tally=1, order="perimeter"),      # ~0 crossings -> should NOT crackle
+    "C": Params(name="C", tally=3, order="serpentine"),     # few crossings
+    "D": Params(name="D", tally=4, order="maxcross"),       # most crossings
     # Axis 2: crossing DENSITY at fixed order (travel-only cost)
-    "E": Params(name="E", order="star", passes=3),
+    "E": Params(name="E", tally=7, order="star", passes=3),
     # Axis 3: does it WELD? fan on should kill the crackle if welding matters
-    "F": Params(name="F", order="star", fan=255),
+    "F": Params(name="F", tally=5, order="star", fan=255),
     # Axis 4: finer web
-    "G": Params(name="G", order="star", n=6, pitch=0, layer_h=0.25, layers=16),  # time-budgeted
+    "G": Params(name="G", tally=6, order="star", n=6, pitch=0, layer_h=0.25, layers=16),  # time-budgeted
 }
 
 # ---------------------------------------------------------------- geometry
@@ -232,6 +233,13 @@ def emit(p: Params) -> tuple[str, dict]:
         g.move(x0 + off, y0 + off)
         for (tx, ty) in [(x1-off, y0+off), (x1-off, y1-off), (x0+off, y1-off), (x0+off, y0+off)]:
             g.extrude_to(tx, ty, p.size, f=p.base_f)
+        # ID TALLY — N raised bars at the front-left corner, N = coupon index.
+        # Six identical 60mm black squares are unscoreable in a pile; this is countable by eye and
+        # by fingertip, which matters because the protocol asks you to score BLIND.
+        tally = p.tally
+        for t in range(tally):
+            bx = x0 + 4.0 + t * (p.line_w * 2.2)
+            g.move(bx, y0 + 1.5); g.extrude_to(bx, y0 + 7.5, 6.0, f=p.base_f)
         rows = sorted({y for _, y in pts}); cols = sorted({x for x, _ in pts})
         for yy in rows:                                                 # rib per pillar row
             g.move(x0, yy); g.extrude_to(x1, yy, x1 - x0, f=p.base_f)

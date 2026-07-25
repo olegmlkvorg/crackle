@@ -41,6 +41,12 @@ crackle, and it is computed for you — it's in every filename.
 crackles, the effect is controllable and everything after is calibration. If they feel the same, the
 thesis is dead and you've spent nine minutes learning it.
 
+## Telling them apart afterwards
+Six identical black squares are unscoreable in a pile, so each coupon has **raised tally bars on its
+base** — count them by eye or by fingertip:
+**1=B · 2=A · 3=C · 4=D · 5=F · 6=G** (7=E). That's also why blind scoring works: someone can hand
+you a coupon face-up and you can identify it afterwards without having seen the filename.
+
 ## Scoring (stand on it, barefoot, same floor each time)
 Record for each coupon — 1–5 unless stated:
 
