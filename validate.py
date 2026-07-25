@@ -101,10 +101,46 @@ def check(path):
     ratio = travel_mm / max(extrude_mm, 1e-9)
     # v2: strands are DRAWN (G1 at travel feedrate with a small E), so travel:extrude no longer
     # measures web content. Count fast extrusion moves instead — those are the strands.
-    if 'crackle' in path:
-        strands = len(re.findall(r'^G1 F(?:[6-9]\d{3}|\d{5,}) .*E', src, re.M))
-        print(f"  strand moves (fast G1 w/ E): {strands}")
-        if strands < 50: warns.append(f"only {strands} strand moves — the web may be sparse")
+    # CONTENT CHECK — by cross-section, not by feedrate.
+    # The old version matched a regex on F-values (F6000-F9999 or 5+ digits) to identify strands.
+    # That is decoupled from anything physical: at --max-flow 22, the flow this project actually
+    # measured, travel_f lands at ~5610 and the regex reported ZERO strands on a file containing
+    # 239 — a false alarm on a correct file, which teaches you to ignore the warning. At higher
+    # flows it matched the pillar moves too and reported 6x the truth. Found by the adversarial
+    # audit, 2026-07-25.
+    # Cross-section = (filament consumed / distance travelled) * filament area, which is the
+    # width*height of the bead being laid. Strands and pillar lines differ in it by construction,
+    # so it separates them regardless of how fast either is moving.
+    xs_hist = {}
+    px = py = None; pe = None; abs2 = True
+    for raw in open(path):
+        t = raw.split(';')[0].strip()
+        if t.startswith('M83'): abs2 = False
+        elif t.startswith('M82'): abs2 = True
+        elif t.startswith('G92'):
+            m = re.search(r'E([-\d.]+)', t)
+            if m: pe = float(m.group(1))
+        elif t.startswith(('G0', 'G1')):
+            nx = float(re.search(r'X([-\d.]+)', t).group(1)) if 'X' in t else px
+            ny = float(re.search(r'Y([-\d.]+)', t).group(1)) if 'Y' in t else py
+            me = re.search(r'E([-\d.]+)', t)
+            if me and px is not None and nx is not None:
+                ev = float(me.group(1))
+                de = (ev - pe) if (abs2 and pe is not None) else ev
+                d = math.dist((px, py), (nx, ny))
+                if d > 1e-6 and de > 0:
+                    xsec = de * (math.pi * (1.75 / 2) ** 2) / d
+                    xs_hist[round(xsec, 2)] = xs_hist.get(round(xsec, 2), 0) + 1
+                pe = ev if abs2 else (pe or 0) + ev
+            px, py = nx, ny
+    if xs_hist:
+        top = sorted(xs_hist.items(), key=lambda kv: -kv[1])[:3]
+        print("  bead cross-sections (mm2 -> moves): " +
+              ", ".join(f"{k:.2f}->{v}" for k, v in top))
+        if len(top) == 1 and 'crackle' in path:
+            warns.append("only one bead cross-section — strands and pillars are indistinguishable, "
+                         "so the web may not be forming")
+
     mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
     print(f"  lines={n}  maxZ={maxz:.2f}mm  travel={travel_mm/1000:.1f}m  extrude={extrude_mm/1000:.1f}m"

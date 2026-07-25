@@ -62,6 +62,10 @@ class Params:
     base_layers: int = 2        # solid anchor slab (adhesion + handleable coupon)
     filament_d: float = 1.75
     flow: float = 1.0
+    pillar_flow: float = 1.1854 # explicit over-extrusion at the pillar body. Was an accident —
+                                # a wrong distance argument inflated it 1.13-1.6x — but it is what
+                                # makes the pillar deposit ~0.406mm against a 0.400mm layer, so it
+                                # is preserved deliberately rather than silently.
     jitter: float = 1.0         # mm of deterministic pillar offset — BREAKS GRID SYMMETRY.
                                 # Measured 2026-07-25: a perfect grid makes star-order chords
                                 # concurrent through the same points, and HALF of all crossing
@@ -333,8 +337,18 @@ def emit(p: Params) -> tuple[str, dict]:
         # The base only has two jobs: anchor every pillar against nozzle drag, and hold the coupon
         # together so it peels off and can be stood on. A perimeter frame + ribs through every
         # pillar row/column does both for ~1/8 the extrusion.
-        x0, y0 = p.origin + 3.0, p.origin + 3.0
-        x1, y1 = p.origin + p.size - 3.0, p.origin + p.size - 3.0
+        # Frame sized from the ACTUAL pillar bounding box, not from origin/size.
+        # Those two were computed by different formulas and diverged silently: pitch defaults to
+        # 20.0 (truthy), so `inset` is never applied, and the pillar span is pitch*(n-1) while the
+        # base stayed origin+3 .. origin+size-3. At the defaults the corner pillars land exactly ON
+        # the coupon edge with no base under them; on the dose-response ladder (--vary n=4,5,6,7)
+        # the span grows to 120mm while the base stays 54mm, leaving 16 of 49 pillars unanchored
+        # and 8 ribs laid OUTSIDE the frame as loose lines on bare plate. Unanchored pillars are
+        # dragged loose by the first strand travel, and the ladder stops being a one-factor sweep
+        # because the footprint doubles too. Found by the adversarial audit, 2026-07-25.
+        _px = [q[0] for q in pts]; _py = [q[1] for q in pts]
+        x0, y0 = min(_px) - 3.0, min(_py) - 3.0
+        x1, y1 = max(_px) + 3.0, max(_py) + 3.0
         g.move(x0, y0)
         for (tx, ty) in [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]:      # frame, 2 loops
             g.extrude_to(tx, ty, math.dist((g_last(g) or (x0, y0)), (tx, ty)) if False else abs(tx - x0) + abs(ty - y0) or p.size, f=p.base_f)
@@ -362,22 +376,48 @@ def emit(p: Params) -> tuple[str, dict]:
         order = base_order if not p.rotate_per_layer else \
             base_order[layer % len(base_order):] + base_order[:layer % len(base_order)]
         g.w(f"; web layer {layer+1}  crossings~{xr*p.passes}")
-        for _ in range(p.passes):
+        for _pass in range(p.passes):
             for i, pi in enumerate(order):
                 x, y = pts[pi]
                 d = math.dist((last_x, last_y), (x, y)) if last_x is not None else 0.0
                 if d > 0: g.strand(x, y, d)        # <- the strand, deliberately drawn
                 else: g.move(x, y)
                 last_x, last_y = x, y
-                # lay a little material AT the pillar so it has a body to anchor the web
-                r = p.line_w * 0.6
-                for a in range(4):
-                    ang = (a + 1) * math.pi / 2
-                    g.extrude_to(x + r*math.cos(ang), y + r*math.sin(ang), r*1.6, f=p.print_f)
-                g.extrude_to(x, y, r, f=p.print_f)
+                # Lay a little material AT the pillar so it has a body to anchor the web —
+                # but ONLY on the first pass. Re-running it deposited the pillar body once PER
+                # PASS at the same XY and the same Z: preset E (passes=3) put 4.32mm3 into a
+                # ~3.55mm2 footprint = 1.22mm of height against a 0.40mm Z step, gaining
+                # +0.82mm/layer on the nozzle. That is the tower failure again, except on 16 rigid
+                # pillars glued to a base rather than a thin wall that could peel — it would shear
+                # the coupon off the plate or stall the gantry. The docstring already promised
+                # extra passes cost "travel time only, ~no filament"; now that is true.
+                # Found 2026-07-25 by the adversarial toolchain audit; verified by counting pillar
+                # re-visits in the emitted gcode (3x per layer for preset E).
+                if _pass == 0:
+                    r = p.line_w * 0.6
+                    # extrude_to's third argument is the DISTANCE used to compute E. It used to be
+                    # passed as r*1.6 while the head actually moved r (or r*sqrt(2) between arms),
+                    # so the pillar silently over-extruded 1.6x on the first arm and 1.13x on the
+                    # rest. Measured from the emitted gcode as bead cross-sections of 0.58 and 0.41
+                    # against a nominal 0.36 mm2.
+                    # That inflation turned out to be LOAD-BEARING by accident: it is what brings
+                    # the pillar to ~0.406mm of deposit per 0.400mm layer. Removing it naively
+                    # would under-fill the pillars and the web would stop anchoring. So the
+                    # distance is now truthful and the extra material is an EXPLICIT multiplier
+                    # that preserves the current physical result.
+                    prev = (x, y)
+                    for a in range(4):
+                        ang = (a + 1) * math.pi / 2
+                        tip = (x + r*math.cos(ang), y + r*math.sin(ang))
+                        g.extrude_to(tip[0], tip[1], math.dist(prev, tip) * p.pillar_flow,
+                                     f=p.print_f)
+                        prev = tip
+                    g.extrude_to(x, y, math.dist(prev, (x, y)) * p.pillar_flow, f=p.print_f)
         if p.wipe_every and (layer + 1) % p.wipe_every == 0:
             g.w("; wipe pass — shed accumulated ooze on the base edge")
-            g.move(p.origin + 3.0, p.origin + 3.0, f=9000); g.extrude_to(p.origin + p.size - 3.0, p.origin + 3.0, p.size - 6.0, f=3000)
+            _wx = [q[0] for q in pts]; _wy = [q[1] for q in pts]
+            g.move(min(_wx) - 3.0, min(_wy) - 3.0, f=9000)
+            g.extrude_to(max(_wx) + 3.0, min(_wy) - 3.0, max(_wx) - min(_wx) + 6.0, f=3000)
     # --- end ---
     if p.machine == "k2" and not p.end_gcode.strip():
         if p.fast:
