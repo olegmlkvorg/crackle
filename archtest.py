@@ -170,6 +170,7 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
             L.append(f"G1 F600 Z{anchor:.4f} E{e:.5f}            ; PRESS in — anchor the petal foot")
             e += weld_dab
             L.append(f"G1 F180 E{e:.5f}                     ; dab a foot")
+            L.append(f"G1 F{round(petal_v*60)}")            # restore: F persists in gcode
             # Reach and height are INDEPENDENT. A circle in a vertical plane locks them at 1:2 —
             # throwing 130mm out would have meant a 260mm apex. An ellipse decouples them, so the
             # petal can be a long low throw: far out, barely up, and back. Oleg: "throw it way
@@ -288,6 +289,11 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                     L.append(f"G1 F600 Z{max(heart_z,0.08):.4f} E{e:.5f}            ; press the foot")
                     e += weld_dab
                     L.append(f"G1 F180 E{e:.5f}                     ; weld the foot")
+                    # RESTORE THE FEEDRATE. F persists in gcode, so the F600 press and the F180 dab
+                    # leave every following move crawling until something sets it again — a stretch
+                    # of base spiral was running at 10 mm/s and 24 mm3/s instead of 55. Oleg spotted
+                    # it as "places where extrusion is paused". Nothing was paused; it was starved.
+                    L.append(f"G1 F{round(petal_v*60)}")
                     prev = (hx, hy, max(heart_z, 0.08))
                 elif k in touches_at and heart_mm > 0:
                     # A LITTLE HEART AT EVERY FOOT. Oleg: "when you land to glue it, make a little
@@ -326,11 +332,13 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
                         hprev = (qx, qy, hz)
                     e += weld_dab
                     L.append(f"G1 F180 E{e:.5f}                     ; weld the foot")
+                    L.append(f"G1 F{round(petal_v*60)}")            # restore: F persists in gcode
                     prev = (hp[-1][0], hp[-1][1], hz)
             e += weld_dab
             L.append(f"G1 F180 E{e:.5f}                     ; dab the landing foot")
             e += (z_base - anchor) * e_per_mm
             L.append(f"G1 F600 Z{z_base:.4f} E{e:.5f}            ; back to the squished baseline")
+            L.append(f"G1 F{f_mm_min}")                     # restore the BASE feedrate
             th2 = th + (span / max(r, 1.0))
             x2, y2 = cx + r * math.cos(th2), cy + r * math.sin(th2)
             th = th2; px, py = x2, y2
