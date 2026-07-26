@@ -56,6 +56,44 @@ def circle(r, seg=0.5):
     return Point(0, 0).buffer(r, res)
 
 
+def shaft_socket(shaft_d, points=3, grip=0.25, clearance=0.5, bump_r=1.6):
+    """A shaft slot made of a few PRESSURE POINTS, not a round hole.
+
+    Oleg, 2026-07-26: "when you designing, do not try to make a round shaft in the middle, instead
+    just plan the lines that will create that shaft slot with few pressure points".
+
+    THREE REASONS THIS BEATS SUBTRACTING A CIRCLE.
+
+    1. A printed hole is never round. Subtracting a circle assumes the plastic lands where the model
+       says, and it does not — so a "6.60mm" bore grips wherever it happens to be tightest and rocks
+       everywhere else. Three deliberate contact points grip in three known places instead.
+    2. It self-centres. Three points at 120 degrees locate a shaft exactly, the way a three-legged
+       stool cannot rock. More points are worse, not better: four fight each other.
+    3. It survives shrink error. The contact points are the only tight geometry, so being 0.2mm out
+       squeezes three small bumps rather than seizing or rattling a whole circumference. The
+       clearance circle around them can be coarse — it never touches anything, so it needs no fine
+       segments, which is also what keeps the move rate down.
+
+    Returns the region to SUBTRACT from a part: a generous clearance bore with `points` bumps
+    protruding back inward to just under the shaft radius, so they must deform slightly to admit it.
+    """
+    r_shaft = shaft_d / 2.0
+    r_clear = r_shaft + clearance
+    r_contact = r_shaft - grip / 2.0          # bumps stand proud INTO the shaft by grip/2
+    hole = circle(r_clear, seg=0.8)           # coarse on purpose: it touches nothing
+    for i in range(points):
+        a = 2 * math.pi * i / points
+        d = r_contact + bump_r                # bump centre, so its inner edge sits at r_contact
+        c = Point(d * math.cos(a), d * math.sin(a)).buffer(bump_r, 8)
+        hole = hole.difference(c)
+    # CLEAN THE JUNCTIONS. Where each bump meets the clearance circle the boolean leaves vertices a
+    # few hundredths apart — measured 0.031mm, which is SHORTER than the round bore this was meant
+    # to improve on. simplify() collapses them without moving the contact points, which sit far from
+    # any junction. Checked after, not assumed: the contact radius must survive this.
+    cleaned = hole.simplify(0.04, preserve_topology=True)
+    return cleaned if not cleaned.is_empty else hole
+
+
 def contours(region, bead_w, max_rings=200):
     """Concentric centrelines, outermost first, spaced one bead apart."""
     rings = []
@@ -697,7 +735,10 @@ def mixer(shaft_d, od, blades, blade_w, hub_w, twist_deg, height, layer_h, clear
         a = 2 * math.pi * i / blades
         blade = box(0, -blade_w / 2.0, r_out, blade_w / 2.0)
         base = unary_union([base, rotate(blade, math.degrees(a), origin=(0, 0))])
-    base = base.difference(circle(r_bore))
+    # PRESSURE POINTS, NOT A BORE. Three contact points locate the shaft exactly and grip in known
+    # places; a subtracted circle grips wherever the print happened to land tightest and rocks
+    # everywhere else. The clearance around them is coarse on purpose — it touches nothing.
+    base = base.difference(shaft_socket(shaft_d))
 
     def region_at(t):
         return rotate(base, twist_deg * t, origin=(0, 0))

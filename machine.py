@@ -121,8 +121,15 @@ MAX_Z_A = 1000.0
 # motion and airflow began. Its config claims max_temp 135; what it can hold under load is another
 # thing entirely, and only the second number is real.
 # Consequences of ignoring this: ~15 minutes of pre-print heating that never satisfies M190, then a
-# bed sagging through the whole print.
-BED_MAX = {"k2plus": 120.0, "k1c": 100.0, "f022": 100.0}
+# bed sagging through the whole print — and twice, klippy_shutdown, because Klipper's verify_heater
+# sees a heater at full power losing temperature and concludes the hardware has failed.
+#
+# MEASURED AGAIN AT TARGET 100 (2026-07-26, mid-print): the K1C settles at 90.6-91.4C with power
+# still pinned at 1.00. It does not diverge, so verify_heater tolerates it and the print survives —
+# but the bed never reaches target and has no regulation left. Its real sustained ceiling is ~91C,
+# so k1c is set to 90: a target it can actually hold with power to spare.
+# The K2 by contrast holds 120.0 at power 0.36.
+BED_MAX = {"k2plus": 120.0, "k1c": 90.0, "f022": 90.0}
 BED_MAX_DEFAULT = 100.0
 
 
