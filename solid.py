@@ -1002,8 +1002,28 @@ def bowl_lid(bowl_id, shaft_d, height, spigot_h, wall, shaft_clear=2.0, fill_por
     # dodged that by making the lid a SOLID 14mm puck: 87g and 27 minutes for a cover.
     # Inverted, the face lands flat on the plate and the spigot grows upward off it. The taper then
     # runs inward as it rises, which is self-supporting. Flip it after printing.
-    face_frac = min(0.6, max(0.15, (wall * 2) / max(height, 1e-9)))
+    # --spigot-h WAS A DEAD PARAMETER. bowl_lid() took it and never read it: --spigot-h 6 and
+    # --spigot-h 12 emitted BYTE-IDENTICAL files. The bands were derived from `wall` and `step`
+    # alone, so the one number that decides HOW DEEP THE LID LOCATES IN THE BOWL could not be set —
+    # and the audit measured the resulting lid seating only 5.40mm into a 91.8mm-deep vessel.
+    #
+    # The taper is NOT free: it must be at least `step` tall or its 45-degree wall becomes an
+    # overhang this toolchain cannot print. So the spigot takes what it asks for, the taper takes
+    # what physics demands, and the FACE gets the remainder — which is checked rather than assumed.
     taper_frac = min(0.3, step / max(height, 1e-9))
+    if spigot_h and spigot_h > 0:
+        spig_frac = spigot_h / max(height, 1e-9)
+        face_frac = 1.0 - spig_frac - taper_frac
+        _min_face = wall / max(height, 1e-9)      # a face thinner than one wall is not a lid
+        if face_frac < _min_face:
+            raise SystemExit(
+                f"bowl_lid: --spigot-h {spigot_h:g}mm plus a {step:.1f}mm taper leaves "
+                f"{face_frac*height:.1f}mm of face on a {height:g}mm lid — under the "
+                f"{wall:g}mm (one wall) needed to be a lid rather than a ring.\n"
+                f"  Raise --height to {math.ceil(spigot_h + step + wall)}, "
+                f"or lower --spigot-h.")
+    else:
+        face_frac = min(0.6, max(0.15, (wall * 2) / max(height, 1e-9)))
 
     def region_at(t):
         _in_bowl = False
