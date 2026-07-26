@@ -292,8 +292,22 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
             L.append(f"; --- layer {k+1} at Z{z:.2f} — closed loop, straight up, same direction")
             L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
-        px, py = pts[0][0]
-        for li, loop in enumerate(pts):
+        # DO NOT PRETEND THE HEAD WENT BACK TO THE START.
+        # This reset px,py to the FIRST tile's first point at every layer, but with --tile the head
+        # physically finished at the LAST tile's end. The zero-length first move was then skipped
+        # and the next move became a 389.8mm diagonal ACROSS THE WHOLE PLATE, metered as if it were
+        # 0.8mm — an extruding move dragged over every finished tile, once per layer. Measured on
+        # moore_k2plus_o1_40mm_L5: head at (313.7, 293.0), next commanded point (38.5, 17.0).
+        # The position now carries across the layer change, so that move is metered for what it is.
+        if k == 0:
+            px, py = pts[0][0]
+        # SERPENTINE THE TILES BETWEEN LAYERS, not just within one.
+        # The tile grid already snakes left-right-left within a layer, so a layer ENDS at the far
+        # corner while the next one began at the near corner — a real 389.8mm move across every
+        # finished tile, once per layer. Walking the tiles in the opposite order on alternate
+        # layers means each layer starts in the tile the previous one just finished.
+        _order = pts if (k % 2 == 0) else pts[::-1]
+        for li, loop in enumerate(_order):
             for pi, (x, y) in enumerate(loop):
                 d = math.dist((px, py), (x, y))
                 if d < 1e-9:
