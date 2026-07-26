@@ -184,9 +184,19 @@ def joint_layers(pts, layers, bead_w, tenon_n, mortise_n, slot_gap, wall_n):
 
 def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          fillet, layers, closed, printer='k1c', aux=0.2, material='pla',
-         tile=1, gap=6.0, mix=(), first_h=0.0, first_w=0.0):
+         tile=1, gap=6.0, mix=(), first_h=0.0, first_w=0.0, layer_z=0.0, fuse_ok=False):
     area = math.pi * (fil_d / 2) ** 2
+    # COMMANDED CROSS-SECTION vs Z STEP — deliberately decoupled.
+    # Oleg: "you can do line width 10mm to compensate for the flow... we know it is not going to
+    # make 10mm, but it will extrude enough" and "its fine to violate max nozzle recommended
+    # settings". Commanding a very wide bead buys material per mm, which lets the head crawl while
+    # the flow target is still met. What it does NOT buy is a 10mm-wide line: the plastic lands
+    # somewhere narrower and correspondingly TALLER (measured on this machine: a commanded 2.0mm
+    # landed 1.53 wide and 1.573 tall — cross-section conserved, shape not).
+    # So the Z step must be set to what LANDS, not what was commanded, or the nozzle ploughs the
+    # layer it just laid. --layer-z sets it independently; bead_h alone still meters E.
     e_per_mm = (bead_w * bead_h) / area
+    z_step = layer_z or bead_h
     # LAYER 1 IS NOT AS TALL AS THE OTHERS, SO IT MUST NOT BE FED LIKE THEM.
     # This metered every layer with the BODY cross-section (bead_w * bead_h) while printing layer 1
     # at Z=press. With press 0.30 and bead_h 0.60 that is exactly 2x over-extrusion on the one layer
@@ -203,11 +213,18 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     for o in orders:
         n_o = (2 ** (o + 1)) if closed else (2 ** o)
         p_o = span / (n_o - 1)
-        if p_o < bead_w * 1.6:
-            raise SystemExit(
-                f"order {o} over {span:.0f}mm gives a {p_o:.2f}mm pitch, but the bead is "
-                f"{bead_w}mm wide — neighbouring passes would fuse into a solid slab. Lower the "
-                f"order or raise --span (need pitch >= {bead_w*1.6:.2f}mm).")
+        # LANDED width, not commanded. Oleg deliberately commands a bead far past the nozzle to buy
+        # material per mm at a crawling head speed — "we know it is not going to make 10mm, but it
+        # will extrude enough". What lands is the cross-section divided by the Z step.
+        _landed = (bead_w * bead_h) / (layer_z or bead_h)
+        if p_o < _landed * 1.6:
+            _msg = (f"order {o} over {span:.0f}mm gives a {p_o:.2f}mm pitch. Commanding "
+                    f"{bead_w}mm wide at a {(layer_z or bead_h):.2f}mm Z step lands about "
+                    f"{_landed:.2f}mm wide, so neighbouring passes will FUSE "
+                    f"(pitch >= {_landed*1.6:.2f}mm keeps them open).")
+            if not fuse_ok:
+                raise SystemExit(_msg + "\n  Pass --fuse-ok if merging the cells is the intent.")
+            print(f"  ! {_msg}\n    --fuse-ok: printing anyway, cells will merge — deliberate.")
     n = (2 ** (order + 1)) if closed else (2 ** order)
     pitch = span / (n - 1)
     # LAYER 1: 0.1mm OFF THE PLATE, FULL FLOW, WIDTH TAKES THE STRAIN.
@@ -321,12 +338,12 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
 
     e = 0.0
     for k in range(layers):
-        z = first_h + k * bead_h
+        z = first_h + k * z_step
         if k:
             # A closed curve ends where it starts, so the next layer needs nothing but a vertical
             # step -- no repositioning, no reversal, no seam artifact. This is the whole reason the
             # closed form was chosen over an open Hilbert.
-            e += bead_h * e_per_mm
+            e += z_step * e_per_mm
             L.append(f"; --- layer {k+1} at Z{z:.2f} — closed loop, straight up, same direction")
             if k == 1:
                 L.append("M107" if not _fan_body else f"M106 S{_fan_body}   ; part cooling from layer 2")
@@ -381,6 +398,11 @@ if __name__ == "__main__":
     ap.add_argument("--press", type=float, default=0.55)
     ap.add_argument("--first-h", type=float, default=0.10,
                     help="layer-1 height — thin squashes it into the plate (default 0.10)")
+    ap.add_argument("--fuse-ok", action="store_true",
+                    help="allow a bead wide enough to merge neighbouring cells")
+    ap.add_argument("--layer-z", type=float, default=0.0,
+                    help="Z step per layer. 0 = same as --bead-h. Set it to what the bead ACTUALLY "
+                         "lands at when commanding a width far past the nozzle.")
     ap.add_argument("--first-w", type=float, default=0.0,
                     help="layer-1 bead WIDTH; 0 = auto, wide enough to hold the body flow at "
                          "--first-h, capped at 0.62x the lattice pitch so cells stay open")
@@ -410,7 +432,7 @@ if __name__ == "__main__":
     fillet = a.fillet or max(0.8, pitch * 0.45)
     g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75, bxy,
                  not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer, a.aux, a.material,
-                 a.tile, a.gap, (), a.first_h, a.first_w)
+                 a.tile, a.gap, (), a.first_h, a.first_w, a.layer_z, a.fuse_ok)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     kind = "hilbert" if a.open else "moore"

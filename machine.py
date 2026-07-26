@@ -70,7 +70,13 @@ MACHINE_MAX_SPEED = 120.0   # what the MACHINE can do — headroom above the 111
 # ever reported the reduction. Oleg found it by asking "are you using pla 55 flow on k2?".
 #
 # 70 is his stated ceiling, not a measured limit. The only speed failure on record is 115 mm/s.
-MAX_SPEED = 70.0
+# LOWERED 70 -> 60 on 2026-07-26. Oleg: "dont we have a rule that head speed should not exceed
+# certain value?" — asked while the body was running at exactly 70, i.e. AT the cap rather than
+# under it. His rule is "cap UNDER 70", and his standing principle is "max layer height and width,
+# min moving speed". At the 0.72mm2 stacking ceiling the flow target of 55 would need 76 mm/s, so
+# speed and flow genuinely trade off here: 60 mm/s delivers 43.2 mm3/s. Deposition per mm of path
+# is unaffected — only the rate — so this costs minutes, not material.
+MAX_SPEED = 60.0
 MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the head stalls; measured
 
 
