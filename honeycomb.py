@@ -165,9 +165,14 @@ def round_corners(pts, fillet, seg=0.8):
     return out
 
 
-def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan, fillet=3.0, layers=1, material='pla'):
+def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
+         fillet=3.0, layers=1, material='pla', printer='k1c'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
+    # LAYER 1 IS PRESSED TO `press`, SO FEED IT FOR `press`. Was metering every layer with the body
+    # cross-section: 0.720mm2 into a 0.120mm gap — SIX times over, the same defect found today in
+    # hilbert.py (2x) and waves.py (6x) and a day earlier in solid.py's foot (+10.4%).
+    e_first_mm = (bead_w * press) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
     flow = speed * bead_w * bead_h
     f = round(speed * 60)
@@ -181,6 +186,15 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
                          f"too big for a {bed_xy[0]:.0f} x {bed_xy[1]:.0f} bed. Reduce --cols/--rows "
                          f"or --cell.")
     pts = round_corners(comb_path(cell, cols, rows, ox, oy), fillet)
+    # DECIMATE FOR THE COMMANDED SPEED. round_corners samples by angle; at 70 mm/s that was 1174
+    # moves/second against a host that stalls near 300 and then FREEZES with no error.
+    _min_seg = max(0.25, speed / 250.0)
+    _dec = [pts[0]]
+    for _p in pts[1:-1]:
+        if math.dist(_p, _dec[-1]) >= _min_seg:
+            _dec.append(_p)
+    _dec.append(pts[-1])
+    pts = _dec
     _xs = [p[0] for p in pts]; _ys = [p[1] for p in pts]
     if min(_xs) < 4 or min(_ys) < 4 or max(_xs) > bed_xy[0] - 4 or max(_ys) > bed_xy[1] - 4:
         raise SystemExit(f"comb spans X {min(_xs):.0f}..{max(_xs):.0f} Y {min(_ys):.0f}.."
@@ -244,7 +258,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
             d = math.dist((px, py), (x, y))
             if d < 1e-9:
                 continue
-            e += d * e_per_mm
+            e += d * (e_first_mm if k == 0 else e_per_mm)
             L.append(f"G1 {'F%d ' % f if (px, py) == seq[0] and k == 0 else ''}"
                      f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = x, y
@@ -283,7 +297,7 @@ if __name__ == "__main__":
     bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
            else machine.BED[a.printer])
     g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75,
-                 bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers)
+                 bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers, a.material, a.printer)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     fn = f"{a.out}/honeycomb_{tag}_{a.cols}x{a.rows}_c{a.cell:g}_T{a.temp}.gcode"
