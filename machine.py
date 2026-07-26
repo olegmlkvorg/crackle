@@ -54,8 +54,34 @@ MACHINE_MAX_SPEED = 120.0   # what the MACHINE can do — headroom above the 111
 # reversing direction transmits straight into a thin wall stuck to glass, and a part that lets go
 # becomes a ball of filament. This is a limit of the work, not the machine, so it OVERRIDES the
 # flow target: when they conflict, flow drops. validate.py FAILS any file that commands more.
-MAX_SPEED = 30.0
+#
+# RAISED 30 -> 70 on 2026-07-26. The 30 was stale: Oleg revised the cap himself the same day
+# ("movement speed of printer head is not appreciated we areed to cap under 70") and the constant
+# was never updated. The cost of leaving it was invisible and large — the cap SILENTLY overrode the
+# FLOW target, so every solid part ran at 30 x 0.48 = 14.4 mm3/s while FLOW said 55, and nothing
+# ever reported the reduction. Oleg found it by asking "are you using pla 55 flow on k2?".
+#
+# 70 is his stated ceiling, not a measured limit. The only speed failure on record is 115 mm/s.
+MAX_SPEED = 70.0
 MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the head stalls; measured
+
+
+def speed_for(flow, bead_area, label=""):
+    """Derive speed from a flow target, and SAY SO when the cap overrides it.
+
+    Every generator computed min(flow/area, MAX_SPEED) inline and then quietly recomputed flow from
+    the capped speed. That is how FLOW=55 printed at 14.4 for a day without anyone noticing: the
+    number the operator set was not the number that ran, and no line of output compared the two.
+    A cap that silently rewrites your input is indistinguishable from a bug.
+    """
+    want = flow / bead_area
+    speed = min(want, MAX_SPEED)
+    got = speed * bead_area
+    if want > MAX_SPEED * 1.001:
+        print(f"  ! flow target {flow:g} mm3/s needs {want:.0f} mm/s, but MAX_SPEED is "
+              f"{MAX_SPEED:g} — running {got:.1f} mm3/s ({got/flow*100:.0f}% of target){label}."
+              f" Raise the bead, not the speed, to close the gap.")
+    return speed
                            # 2026-07-25 as a ~3s stutter at 990 moves/s
 MAX_Z_V = 30.0
 MAX_Z_A = 1000.0

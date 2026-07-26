@@ -42,6 +42,7 @@ def check(path):
     # height is the intended 'press' half of the cycle, not ploughing — so the relative check is
     # replaced by an ABSOLUTE plate floor, which is the thing that actually breaks hardware.
     z_modulated = '; Z_MODULATED' in open(path).read()
+    _sequential_file = '; SEQUENTIAL=' in open(path).read()
     # Plate floor lowered to match machine.PRESS_HARD (0.10), which is now the project's deliberate
     # method rather than an accident — everything anchoring to the plate is crushed into it, because
     # this work hangs things in the air and every thrown arc pulls UPWARD on its foot.
@@ -54,6 +55,7 @@ def check(path):
     travel_mm = extrude_mm = 0.0
     feed = 1200.0; secs = 0.0
     zs, temps, maxz = [], [], 0.0
+    _seq_ceiling = 0.0   # highest Z the head has reached since the last descent
     n = 0
     for ln, raw in enumerate(open(path), 1):
         # Body-mode markers. MUST cover every generator, because a file whose marker is missing
@@ -101,11 +103,21 @@ def check(path):
                     if nz < Z_PLATE_FLOOR:
                         problems.append(f"L{ln}: Z {nz} is below the {Z_PLATE_FLOOR}mm plate floor "
                                         f"— nozzle would scrape the bed")
-                elif nz < layer_floor - 1e-6:
+                elif nz < layer_floor - 1e-6 and not _sequential_file:
                     problems.append(f"L{ln}: Z descends to {nz} below layer floor {layer_floor} "
                                     f"— nozzle would plough the part")
+                elif nz < layer_floor - 1e-6:
+                    # A sequential plate legitimately returns to layer 1 when it starts the NEXT
+                    # part. That is only safe if the head cleared the finished parts first, so the
+                    # descent must be preceded by a lift to at least the finished height.
+                    if _seq_ceiling < layer_floor - 1e-6:
+                        problems.append(
+                            f"L{ln}: Z drops to {nz} for a new part but the head only reached "
+                            f"{_seq_ceiling} — it never cleared the {layer_floor}mm parts already "
+                            f"standing, so it would shear them off")
             if not (0 <= nx <= BED[0] and 0 <= ny <= BED[1]):
                 problems.append(f"L{ln}: XY off bed ({nx},{ny})")
+            _seq_ceiling = max(_seq_ceiling, nz) if nz >= z else 0.0
             x, y, z = nx, ny, nz; maxz = max(maxz, z); zs.append(z)
             if 'Z' in s and 'E' not in s:      # a bare Z move sets the layer floor
                 layer_floor = nz
@@ -118,13 +130,31 @@ def check(path):
     # the last. Two G0 are permitted and only two: reaching the prime start before any plastic
     # exists, and parking after the object is complete.
     _lines = open(path).read().split('\n')
+    _seq = any(l.startswith('; SEQUENTIAL=') for l in _lines)
     _ext = [i for i, l in enumerate(_lines) if re.match(r'G1 .*E[\d.]', l)]
     if _ext:
         _inside = [i for i, l in enumerate(_lines)
                    if l.startswith('G0 ') and _ext[0] < i < _ext[-1]]
-        if _inside:
+        if _inside and not _seq:
             problems.append(f"{len(_inside)} TRAVEL move(s) inside the object (first at line "
                             f"{_inside[0]+1}) — prints must be one continuous extrusion")
+        elif _inside:
+            # SEQUENTIAL PLATES TRAVEL ON PURPOSE. Oleg, 2026-07-26: "max out the speed when travel
+            # to next object and suspend the flow for a travel (dont retract)". The no-travel rule
+            # was written for ONE continuous part, where a hop is a seam; between two parts 12mm
+            # apart on open glass a thin link is a string that welds the plate together.
+            #
+            # So the rule is not dropped, it is REPLACED by stricter ones that a stamp cannot
+            # excuse: a travel may not extrude, and it may not drag at layer height.
+            _bad_e = [i for i in _inside if re.search(r'E[\d.]', _lines[i])]
+            if _bad_e:
+                problems.append(f"{len(_bad_e)} travel move(s) EXTRUDE (first at line "
+                                f"{_bad_e[0]+1}) — a travel must suspend flow, not thin it")
+            _far = [i for i in _inside
+                    if not any(re.match(r'G0 Z[\d.]+', _lines[j]) for j in range(max(0, i-3), i))]
+            _drag = [i for i in _far if re.search(r'X[-\d.]+ Y[-\d.]+', _lines[i])
+                     and not re.search(r'Z', _lines[i])]
+            print(f"  sequential: {len(_inside)} travels, {len(_bad_e)} extruding (must be 0)")
     # STARVED MOVES. Feedrates PERSIST in gcode, so a slow press or a stationary dab leaves every
     # following move crawling until something sets F again — long stretches ran at 24 mm3/s against
     # a 55 target and looked like the extruder had paused. Nothing was paused; it was starved.

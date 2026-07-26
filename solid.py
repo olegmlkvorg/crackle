@@ -27,6 +27,7 @@ Two things this has to get right, both learned the hard way today:
 import argparse
 import math
 import os
+import re
 
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
@@ -160,14 +161,15 @@ def order_rings(rings, here):
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, brim_gap=0.18,
-         material='pla'):
+         material='pla', hop_min=8.0):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
-    speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
+    speed = machine.speed_for(flow, bead_w * layer_h, f" for {name}")
     flow = speed * bead_w * layer_h
     f = round(speed * 60)
     layers = max(1, int(round(height / layer_h)))
     e_first = (first_w * press) / area
+    travel_f = int(machine.MACHINE_MAX_SPEED * 60)   # inter-object travel: machine max
     f_first = round(min(flow / (first_w * press), 20.0) * 60)
 
     # A region may be a fixed polygon OR a callable of layer fraction (see adapter()). Contours
@@ -320,6 +322,26 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                 # part's own straight wall -- shapely stores a flat edge as two points, so a naive
                 # "long move = travel" rule turned this bracket's 30mm flat side into a travel and
                 # produced 17 hops per layer. The link is pi == 0, and nothing else.
+                if pi == 0 and d > hop_min:
+                    # BETWEEN OBJECTS: TRAVEL. Oleg, 2026-07-26: "max out the speed when travel to
+                    # next object and suspend the flow for a travel (dont retract)".
+                    #
+                    # The no-travel rule was written for a single continuous part, where a hop is a
+                    # seam. Across a 15-part plate it is the opposite: a thin link between two parts
+                    # 12mm apart is a string laid over open glass that welds the plate into one
+                    # object and has to be cut off every part. So the rule holds INSIDE a part and
+                    # inverts BETWEEN parts.
+                    #
+                    # No retract on purpose: retract/prime is the thing that leaves a blob at each
+                    # end and needs pressure-advance tuning to hide. Simply not advancing E lets the
+                    # melt relax on its own over a move that is over in a few hundredths of a second.
+                    L.append(f"G0 X{X:.3f} Y{Y:.3f} Z{z:.3f} F{travel_f}")
+                    # RESTORE THE PRINT FEEDRATE. F is STICKY in gcode: without this line the next
+                    # extruding move inherits the travel's 120 mm/s and lays the bead at 106 mm3/s
+                    # against a 36 target. Measured in the emitted file, not assumed.
+                    L.append(f"G1 F{f_first if k == 0 else f}")
+                    px, py = X, Y
+                    continue
                 if pi == 0 and d > link_max:
                     # LINK BETWEEN CONTOURS: extrude, but THIN. Two bad options were tried first.
                     # Extruding at full rate lays a second bead on top of one already at this Z --
@@ -532,6 +554,10 @@ def main():
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--parts", default="",
                     help="ONE PLATE, many parts: 'coupler*3,bracket*2,foot'. Overrides --part.")
+    ap.add_argument("--sequential", action="store_true", default=True,
+                    help="print each part to full height before the next (default)")
+    ap.add_argument("--layerwise", dest="sequential", action="store_false",
+                    help="all parts together, layer by layer")
     ap.add_argument("--part-gap", type=float, default=8.0,
                     help="mm between parts on a multi-part plate")
     ap.add_argument("--margin", type=float, default=12.0, help="mm kept clear at the bed edge")
@@ -645,6 +671,13 @@ def run_plate(a):
         raise SystemExit(f"{len(built)} parts need {total_h:.0f}mm of Y on a "
                          f"{bed_y:.0f}mm plate — drop some or raise --margin.")
 
+    counts = ", ".join(f"{n}x {name}" for name, n in spec)
+    print(f"  plate: {counts} — {len(built)} parts, {x if y == 0 else usable_x:.0f}x{total_h:.0f}mm")
+    fn = f"{a.out}/plate_{a.printer}_{len(built)}parts_h{a.height:g}_T{a.temp}.gcode"
+
+    if a.sequential:
+        return emit_sequential(placed, a, counts, fn)
+
     region = unary_union([r for _, r in placed])
     # A CAVITY WORKS ON A PLATE — shell the UNION, not each part. buffer(-shell) on a MultiPolygon
     # erodes every member independently, so each part gets its own floor and its own open mouth.
@@ -652,10 +685,80 @@ def run_plate(a):
     # fraction, which cannot be translated or unioned.)
     if a.cavity > 0:
         region = shelled(region, a.cavity, a.floor, a.height, a.layer_h)
-    counts = ", ".join(f"{n}x {name}" for name, n in spec)
-    print(f"  plate: {counts} — {len(built)} parts, {x if y == 0 else usable_x:.0f}x{total_h:.0f}mm")
-    fn = f"{a.out}/plate_{a.printer}_{len(built)}parts_h{a.height:g}_T{a.temp}.gcode"
     return finish(region, a, "PLATE " + counts, fn)
+
+
+def emit_sequential(placed, a, counts, fn):
+    """PART BY PART, NOT LAYER BY LAYER. Oleg, 2026-07-26: "lets print part by part not layer by
+    layer".
+
+    Each part is taken to full height before the head moves to the next. Two things this buys that
+    layer-by-layer cannot: a stop midway leaves N FINISHED parts instead of 15 ruined stumps — which
+    is the difference between a wasted hour and a wasted afternoon on a machine that has been
+    stopping all day — and no inter-part travel ever crosses a part at layer height.
+
+    Built by generating each part through the normal emit() and splicing the bodies, so every
+    per-part check still runs: the fill-ratio guard, the brim ordering, the ring ordering. A
+    hand-rolled sequential loop would have quietly skipped all three.
+
+    THE COLLISION RULE: between parts the head lifts CLEAR of everything already standing, travels,
+    and only then descends. Without that lift the move to the next part happens at first-layer
+    height and shears off every finished part in the way.
+    """
+    bodies = []
+    head = None
+    for i, (name, r) in enumerate(placed):
+        reg = shelled(r, a.cavity, a.floor, a.height, a.layer_h) if a.cavity > 0 else r
+        g, st = emit(reg, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
+                     a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
+                     not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
+                     f"{name.upper()} #{i+1}")
+        pre, _, post = g.partition("; BODY_START\n")
+        if head is None:
+            head = pre + "; BODY_START\n"
+        body = post.split("; BODY_END")[0] if "; BODY_END" in post else post
+        # drop the tail (M107/M104 S0/park) — it belongs once, at the end of the whole plate
+        body = "\n".join(ln for ln in body.splitlines()
+                         if not ln.startswith(("M107", "M104 S0", "M140 S0", "G0 X10 Y340"))
+                         and not re.match(r"^G1 Z\d+\.\d+ F900$", ln))
+        bodies.append((name, body, st))
+
+    safe_z = a.height + 2.0
+    travel_f = int(machine.MACHINE_MAX_SPEED * 60)
+    print_f = round(machine.speed_for(a.flow, a.bead_w * a.layer_h) * 60)
+    L = [head.rstrip("\n")]
+    # STAMP IT. validate.py relaxes the no-travel rule ONLY for a file that declares itself
+    # sequential, and replaces it with stricter checks (no extruding travel, every descent
+    # preceded by a clearing lift). An unstamped file still gets the original rule.
+    L.append(f"; SEQUENTIAL={len(bodies)} parts, hop clears Z{safe_z:.1f}")
+    for i, (name, body, st) in enumerate(bodies):
+        first = next((ln for ln in body.splitlines() if ln.startswith(("G1 ", "G0 ")) and "X" in ln),
+                     None)
+        if i:
+            fx = re.search(r"X([-\d.]+)", first).group(1)
+            fy = re.search(r"Y([-\d.]+)", first).group(1)
+            L.append(f"; ---- part {i+1}/{len(bodies)}: {name} ----")
+            L.append(f"G0 Z{safe_z:.3f} F900          ; clear everything already standing")
+            L.append(f"G0 X{fx} Y{fy} F{travel_f}     ; travel at machine max, flow suspended")
+            L.append(f"G0 Z{a.press:.3f} F900")
+            L.append(f"G1 F{print_f}")   # sticky-F: never let the travel rate print
+            L.append("G92 E0")
+        L.append(body.rstrip("\n"))
+    L.append("M107")
+    L.append("M104 S0")
+    L.append("M140 S0")
+    L.append(f"G1 Z{safe_z + 20:.3f} F900")
+    L.append("G0 X10 Y340 F9000")
+    open(fn, "w").write("\n".join(L) + "\n")
+    grams = sum(st["grams"] for _, _, st in bodies)
+    mins = sum(st["mins"] for _, _, st in bodies)
+    print(f"{fn}")
+    print(f"  SEQUENTIAL — {len(bodies)} parts one at a time, {bodies[0][2]['layers']} layers each")
+    print(f"  hop clears to Z{safe_z:.1f} at {machine.MACHINE_MAX_SPEED:g} mm/s, no retract")
+    print(f"  ~{mins:.0f} min, {grams:.1f} g")
+    return dict(grams=grams, mins=mins, size=(0, 0), rings=0,
+                layers=bodies[0][2]["layers"], speed=bodies[0][2]["speed"],
+                flow=bodies[0][2]["flow"])
 
 
 if __name__ == "__main__":
