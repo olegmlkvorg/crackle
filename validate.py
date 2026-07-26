@@ -194,6 +194,38 @@ def check(path):
         else:
             print(f"  sequential: {len(_bb)} part footprints, none overlapping")
 
+    # NO TRAVEL MAY CROSS THE PART AT LAYER HEIGHT.
+    # A non-extruding move is only safe if it is ABOVE everything already printed. 161 moves at
+    # 120 mm/s at the current layer Z swept the nozzle through the fresh layer and knocked every
+    # model off a K1C plate. Height alone decides this, so it is checkable exactly: track the
+    # highest Z at which material has been deposited, and fail any long travel at or below it.
+    _z = 0.0
+    _max_printed = 0.0
+    _plough = []
+    for _i, _l in enumerate(_lines):
+        # Reset at a part boundary: the head lifts clear between parts, and the NEW part's ground
+        # is empty, so the previous part's height says nothing about what is under the nozzle now.
+        # Without this the legitimate descent to start part 2 looks like a plough.
+        if _l.startswith('; ---- part'):
+            _max_printed = 0.0
+        _mz = re.search(r'Z([\d.]+)', _l)
+        if _l.startswith(('G0 ', 'G1 ')) and _mz:
+            _z = float(_mz.group(1))
+        if re.match(r'^G1 .*E[\d.]', _l):
+            _max_printed = max(_max_printed, _z)
+        elif _l.startswith('G0 ') and re.search(r'X[-\d.]+', _l) and re.search(r'Y[-\d.]+', _l):
+            _mf = re.search(r'F(\d+)', _l)
+            if _max_printed > 0.3 and _z <= _max_printed + 1e-6 and (not _mf or int(_mf.group(1)) > 3000):
+                _plough.append((_i + 1, _z, _max_printed))
+    if _plough:
+        _p0 = _plough[0]
+        problems.append(
+            f"{len(_plough)} travel move(s) run AT OR BELOW the height of already-printed material "
+            f"— e.g. line {_p0[0]} travels at Z{_p0[1]} with material standing at Z{_p0[2]}. The "
+            f"nozzle would plough through the part. Lift clear before travelling. "
+            f"(A travel AT the layer height is the damaging case, not merely below it — the "
+            f"nozzle is exactly at the top of the material it just laid.)")
+
     # STARVED MOVES. Feedrates PERSIST in gcode, so a slow press or a stationary dab leaves every
     # following move crawling until something sets F again — long stretches ran at 24 mm3/s against
     # a 55 target and looked like the extruder had paused. Nothing was paused; it was starved.

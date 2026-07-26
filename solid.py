@@ -161,7 +161,7 @@ def order_rings(rings, here):
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, brim_gap=0.18,
-         material='pla', hop_min=8.0, centre=True):
+         material='pla', hop_min=float('inf'), centre=True):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = machine.speed_for(flow, bead_w * layer_h, f" for {name}")
@@ -332,8 +332,14 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                 # "long move = travel" rule turned this bracket's 30mm flat side into a travel and
                 # produced 17 hops per layer. The link is pi == 0, and nothing else.
                 if pi == 0 and d > hop_min:
-                    # BETWEEN OBJECTS: TRAVEL. Oleg, 2026-07-26: "max out the speed when travel to
-                    # next object and suspend the flow for a travel (dont retract)".
+                    # DISABLED BY DEFAULT (hop_min=inf) — AND THIS IS WHY.
+                    # Oleg said "max out the speed when travel to next OBJECT". I applied it to
+                    # links INSIDE a part too, which put 161 non-extruding moves at 120 mm/s at the
+                    # CURRENT LAYER HEIGHT — the nozzle sweeping across material it had just laid,
+                    # at exactly that material's height. It ploughed through the fresh layer and
+                    # knocked every model off the plate. Between-object travel is emitted by
+                    # emit_sequential instead, which lifts Z clear FIRST.
+                    # A travel is only safe if it is ABOVE what is already printed.
                     #
                     # The no-travel rule was written for a single continuous part, where a hop is a
                     # seam. Across a 15-part plate it is the opposite: a thin link between two parts
