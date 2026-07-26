@@ -57,7 +57,8 @@ def stadium(length, width, n=720):
     return pts, per
 
 
-def add_cleats(pts, per, n_cleats, height, width, ease=0.35):
+def add_cleats(pts, per, n_cleats, height, width, ease=0.35, centres=None,
+               return_centres=False):
     """Push `n_cleats` bumps outward from the ring, spaced evenly by ARC LENGTH.
 
     Spacing by arc length and not by point index matters: the semicircle ends are sampled at the
@@ -117,17 +118,26 @@ def add_cleats(pts, per, n_cleats, height, width, ease=0.35):
     # the last cleat placed. Distributing evenly across the LIST of valid indices does not work --
     # they come in contiguous runs, so even spacing in index put cleats 6.3mm apart on a 22mm cleat.
     need = width * 1.15
-    centres = []
-    for i in ok:
+    # CENTRES ARE CHOSEN ONCE, AT FULL CLEAT HEIGHT, AND REUSED FOR EVERY LAYER.
+    # The acceptance test is `r_local > 3.5 * height`, so when height ramps per layer a DIFFERENT
+    # set of positions qualifies and every cleat centre slides — measured 0.787mm between adjacent
+    # layers on a 1.2mm wall. Amplitude may vary per layer; position may not.
+    if centres is not None:
+        centres = list(centres)
+    else:
+      centres = []
+      for i in ok:
         if not centres or s[i] - centres[-1] >= need:
             centres.append(s[i])
-    if len(centres) > n_cleats:
+      if len(centres) > n_cleats:
         keep = [centres[round(k * (len(centres) - 1) / (n_cleats - 1))] for k in range(n_cleats)] \
             if n_cleats > 1 else centres[:1]
         # re-check: thinning by index can still land two of them adjacent
         centres = [keep[0]] + [c for j, c in enumerate(keep[1:], 1) if c - keep[j-1] >= need]
     if len(centres) < 2:
         raise SystemExit("no room for cleats on the straight runs — reduce --cleat-w.")
+    if return_centres:
+        return centres
     if len(centres) < n_cleats:
         print(f"  note: straight runs hold {len(centres)} cleats of {width}mm, not {n_cleats} "
               f"— using {len(centres)}")
@@ -206,7 +216,8 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
         cx = (bed_xy[0] - (length + width + 2 * cleat_h)) / 2.0 + cleat_h
         cy = bed_xy[1] / 2.0
     base_ring = [(p[0], p[1]) for p in base_ring]
-    _probe = add_cleats(base_ring, per, n_cleats, cleat_h, cleat_w)
+    _fixed_centres = add_cleats(base_ring, per, n_cleats, cleat_h, cleat_w, return_centres=True)
+    _probe = add_cleats(base_ring, per, n_cleats, cleat_h, cleat_w, centres=_fixed_centres)
     ring = [(p[0] + cx, p[1] + cy) for p in _probe]
     xs = [p[0] for p in ring]
     ys = [p[1] for p in ring]
@@ -281,11 +292,22 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
         # straight for the whole loop and take ALL the tension, so the cleated layers between them
         # are never loaded and cannot be pulled flat. The rails also give the ball two edges to sit
         # between, which is the same job the dish does.
-        if abs(u) > 1.0 - 2.0 * rail / max(belt_w, 1e-6):
+        # RAMP THE CLEAT IN, DO NOT SWITCH IT ON.
+        # This was a hard boolean, so h_k jumped 0 -> full cleat height between two adjacent layers:
+        # measured 9.26mm of lateral displacement across one 0.6mm layer step on the shipped belt,
+        # against a 1.2mm bead. 23% of that layer was extruded onto nothing, in TPU, and 22 further
+        # layers stacked on the single bridged bead. pulley.py already ramps a 2.5mm step for
+        # exactly this reason; the belt did not.
+        _edge = 1.0 - 2.0 * rail / max(belt_w, 1e-6)
+        if abs(u) >= _edge:
             h_k = 0.0
         else:
-            h_k = max(0.0, cleat_h - dish * (1.0 - u * u))
-        ring = add_cleats(base_ring, per, n_cleats, h_k, cleat_w)
+            # smoothstep from the rail boundary inward, so the cleat grows over many layers
+            _t = (_edge - abs(u)) / max(_edge, 1e-6)
+            _ramp = _t * _t * (3.0 - 2.0 * _t)
+            h_k = _ramp * max(0.0, cleat_h - dish * (1.0 - u * u))
+        ring = add_cleats(base_ring, per, n_cleats, h_k, cleat_w,
+                          centres=_fixed_centres)
         ring = [(p[0] + cx, p[1] + cy) for p in ring]
         px, py = ring[0]
         for (x, y) in ring[1:]:
