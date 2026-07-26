@@ -886,6 +886,53 @@ def mixer_bowl(id_dia, height, wall, floor_h, layer_h, baffles=4, baffle_d=8.0, 
     return region_at
 
 
+def bowl_lid(bowl_id, shaft_d, height, spigot_h, wall, shaft_clear=2.0, fill_port=0.0):
+    """A lid that locates itself in the bowl, with a taper so the step is printable.
+
+    Spinning a stiff paste at CNC speeds throws it. This closes the bowl and keeps the shaft
+    centred; the shaft hole is deliberately LOOSE — this is a cover, not a bearing, and a lid that
+    grips the shaft turns with it.
+
+    THE STEP IS THE PROBLEM. A lid is a spigot that drops inside the bowl plus a skirt that covers
+    the rim, and that is a 4.2mm horizontal ledge. Printed spigot-down it has nothing beneath it —
+    a bridge, which this toolchain cannot do. Tapering the step over the same 4.2mm of height makes
+    it 45 degrees, which prints unsupported. The taper is not decoration; without it the lid needs
+    support and this generator has none to give.
+
+    fill_port, if set, cuts a second opening so the mix can be topped up without stopping.
+    """
+    r_spig = (bowl_id - 0.6) / 2.0            # drops inside with a little slack
+    r_skirt = r_spig + wall + 2.0
+    step = r_skirt - r_spig
+    r_hole = (shaft_d + shaft_clear) / 2.0
+
+    # PRINTED UPSIDE DOWN, AND THAT IS THE WHOLE TRICK.
+    # A lid is a thin face plus a spigot that drops into the bowl. Printed face-up, the face is a
+    # roof over the spigot's void — a bridge, which this toolchain cannot do, and my first version
+    # dodged that by making the lid a SOLID 14mm puck: 87g and 27 minutes for a cover.
+    # Inverted, the face lands flat on the plate and the spigot grows upward off it. The taper then
+    # runs inward as it rises, which is self-supporting. Flip it after printing.
+    face_frac = min(0.6, max(0.15, (wall * 2) / max(height, 1e-9)))
+    taper_frac = min(0.3, step / max(height, 1e-9))
+
+    def region_at(t):
+        if t <= face_frac:
+            body = circle(r_skirt)                       # the lid face: solid, on the plate
+        elif t <= face_frac + taper_frac:
+            k = (t - face_frac) / max(taper_frac, 1e-9)
+            r = r_skirt - step * k                       # 45 deg inward — self-supporting
+            body = circle(r).difference(circle(max(r - wall, r_hole + 0.6)))
+        else:
+            body = circle(r_spig).difference(circle(r_spig - wall))   # spigot ring
+        body = body.difference(circle(r_hole))
+        if fill_port > 0 and t <= face_frac:
+            body = body.difference(translate(circle(fill_port / 2.0),
+                                             (r_spig + r_hole) / 2.0, 0))
+        return body
+
+    return region_at
+
+
 def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
     """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
 
@@ -915,7 +962,7 @@ def main():
     ap.add_argument("--part", default="bracket",
                     choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4",
                              "gauge", "adapter", "shell", "mixer", "collet", "seat",
-                             "postfoot", "bowl"])
+                             "postfoot", "bowl", "lid"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=6.35, help="1/4 inch bamboo (6.35mm)")
     ap.add_argument("--centres", type=float, default=32.0)
@@ -925,6 +972,8 @@ def main():
     ap.add_argument("--od-large", type=float, default=22.0, help="collet wide end")
     ap.add_argument("--slots", type=int, default=3, help="collet splits")
     ap.add_argument("--slot-w", type=float, default=2.0)
+    ap.add_argument("--spigot-h", type=float, default=6.0, help="lid spigot depth")
+    ap.add_argument("--fill-port", type=float, default=0.0, help="lid top-up hole diameter")
     ap.add_argument("--baffles", type=int, default=4)
     ap.add_argument("--baffle-d", type=float, default=8.0)
     ap.add_argument("--blades", type=int, default=3)
@@ -1015,6 +1064,8 @@ def build_part(part, a):
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
+    elif part == "lid":
+        return bowl_lid(a.od, a.axle, a.height, a.spigot_h, a.wall, fill_port=a.fill_port)
     elif part == "bowl":
         _paddle = a.od_small
         print(f"  bowl ID {a.od:g} vs paddle {_paddle:g} -> shear gap "
