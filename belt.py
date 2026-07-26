@@ -243,11 +243,17 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
-    w("M107" if not fan else f"M106 S{fan}")
+    # FAN OFF FOR LAYER 1, CLAMPED BY MATERIAL AFTER. This ran the requested fan from the first
+    # millimetre and ignored machine.FAN_MAX entirely — `--fan 255 --material pla` emitted M106 S255,
+    # 5x the PLA ceiling, on the layer whose only job is to bond.
+    _fan_body = int(round(machine.fan_for(material, (fan or 0) / 255.0) * 255))
+    _fan_l1 = int(round(machine.fan_first_layer(material) * 255))
+    w(f"M106 S{_fan_l1}" if _fan_l1 else
+      "M107                              ; layer 1: no part cooling, let it bond")
     # PER-MACHINE fan syntax. Hardcoding the K1C form here put SET_FAN_SPEED
     # FAN=side_fan into a K2 file — a command that machine does not have, which
     # would have errored out a 76-minute print. Ask machine.aux_fans().
-    for _ln in machine.aux_fans(printer, aux):
+    for _ln in machine.aux_fans(printer, machine.aux_for(material, aux)):
         w(_ln)
     w("M82")
     w("G92 E0")

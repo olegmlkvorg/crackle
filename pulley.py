@@ -168,13 +168,15 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     # on 20% at most". This defaulted to 80/255 = 31% and ran from the first millimetre, chilling
     # the bond while it formed — the cheapest possible way to lose a first layer.
     _fan_body = int(round(machine.fan_for(material, (fan or 0) / 255.0) * 255))
-    w("M107                              ; layer 1: no part cooling, let it bond")
+    _fan_l1 = int(round(machine.fan_first_layer(material) * 255))
+    w(f"M106 S{_fan_l1}" if _fan_l1 else
+      "M107                              ; layer 1: no part cooling, let it bond")
     # Oleg: "other fans to 20%". side/chassis fans move air through the chamber without blasting
     # the bead the way the part fan does.
     # PER-MACHINE fan syntax. Hardcoding the K1C form here put SET_FAN_SPEED
     # FAN=side_fan into a K2 file — a command that machine does not have, which
     # would have errored out a 76-minute print. Ask machine.aux_fans().
-    for _ln in machine.aux_fans(printer, aux):
+    for _ln in machine.aux_fans(printer, machine.aux_for(material, aux)):
         w(_ln)
     w("M82")
     w("G92 E0")

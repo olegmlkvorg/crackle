@@ -337,7 +337,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # the bond while it formed — the cheapest possible way to lose a first layer.
     _fan_body = int(round(machine.fan_for(material, (fan or 0) / 255.0) * 255))
     w("M107                              ; layer 1: no part cooling, let it bond")
-    for ln in machine.aux_fans(printer, aux):
+    for ln in machine.aux_fans(printer, machine.aux_for(material, aux)):
         w(ln)
     w("M82")
     w("G92 E0")

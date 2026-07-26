@@ -332,9 +332,29 @@ BED_TEMP = {"pla": 120, "petg": 80, "tpu": 45, "abs": 100}
 # possible way to lose adhesion and it looks like nothing in the file.
 # TPU is the exception and goes the other way: it needs FULL fans (see the guard in validate.py).
 FAN_MAX = {"pla": 0.20, "petg": 0.40, "tpu": 1.00, "abs": 0.10}
-# LAYER 1 GETS NO FAN AT ALL, whatever the material. The first layer's job is to weld to the plate;
-# cooling it is working against the only thing that matters at that moment.
+# LAYER 1 GETS NO FAN — EXCEPT WHERE THE MATERIAL DEMANDS IT.
+# The first layer's job is to weld to the plate, and cooling it works against the only thing that
+# matters at that moment. But TPU is the exception in BOTH directions: it needs full fans throughout,
+# and validate.py fails any TPU file whose part fan is off. Turning layer 1's fan off for TPU
+# satisfied one rule by breaking another — caught by that guard within a minute of writing it.
 FAN_FIRST_LAYER = 0.0
+
+
+def aux_for(material, requested):
+    """Chamber/side fan fraction, forced to full where the material requires it.
+
+    validate.py fails a TPU file whose chamber fans are below full, and --aux defaults to 0.2. So a
+    TPU print inherited a 51/255 chamber fan and failed its own guard — the part fan had been fixed
+    and the auxiliaries forgotten, which is the same half-applied fix twice over.
+    """
+    if FAN_MAX.get(material, 0.20) >= 1.0:
+        return 1.0
+    return requested
+
+
+def fan_first_layer(material):
+    """Fan fraction for layer 1: none, unless the material requires full cooling regardless."""
+    return 1.0 if FAN_MAX.get(material, 0.20) >= 1.0 else FAN_FIRST_LAYER
 
 
 def fan_for(material, requested):

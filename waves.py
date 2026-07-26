@@ -166,7 +166,13 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # blocks in BOTH directions.
     w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
-    w("M204 S8000"); w("M107" if not fan else f"M106 S{fan}")
+    w("M204 S8000")
+    # fan: clamped to the material ceiling, and OFF on layer 1 unless the material needs it
+    _fan_body = int(round(machine.fan_for(material, (fan or 0) / 255.0) * 255))
+    _fan_l1 = int(round(machine.fan_first_layer(material) * 255))
+    w(f"M106 S{_fan_l1}" if _fan_l1 else "M107")
+    for _ln in machine.aux_fans(printer, machine.aux_for(material, 0.2)):
+        w(_ln)
     w("M82"); w("G92 E0")
     x0, y0 = pts[0]
     w(f"G1 Z{press:.3f} F600")
@@ -253,7 +259,7 @@ if __name__ == "__main__":
     bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
            else machine.BED[a.printer])
     g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed or machine.bed_for(a.material, a.printer), 1.75,
-                 bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers, a.printer)
+                 bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers, a.printer, a.material)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     fn = f"{a.out}/waves_{tag}_{a.cols}x{a.rows}_c{a.cell:g}_T{a.temp}.gcode"

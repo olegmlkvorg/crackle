@@ -318,11 +318,13 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # The requested fan is clamped to what the material tolerates and switched on at layer 2.
     _fan_frac = machine.fan_for(material, (fan or 0) / 255.0)
     _fan_body = int(round(_fan_frac * 255))
-    w("M107                              ; layer 1: no part cooling, let it bond")
+    _fan_l1 = int(round(machine.fan_first_layer(material) * 255))
+    w(f"M106 S{_fan_l1}" if _fan_l1 else
+      "M107                              ; layer 1: no part cooling, let it bond")
     # AUX FANS — hilbert/honeycomb/waves never set these at all, so every pad and lattice
     # printed with the chamber fans OFF while belt/pulley/solid/flowtest set them. Oleg
     # spotted it on the machine: "i noticed fans on 0, what the heck!?"
-    for _ln in machine.aux_fans(printer, aux):
+    for _ln in machine.aux_fans(printer, machine.aux_for(material, aux)):
         w(_ln)
     w("M82")
     w("G92 E0")
