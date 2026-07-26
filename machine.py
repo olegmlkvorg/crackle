@@ -34,7 +34,15 @@ ACCEL = 5000.0          # what the toolhead ACTUALLY reports while printing — 
 # past the nozzle and gets ploughed off the plate — that failure cost a print on 2026-07-25.
 BEAD_W = 1.2            # 1.5 x nozzle — stacking ceiling
 BEAD_H = 0.6            # 0.75 x nozzle — stacking ceiling
-FIRST_LAYER_SPEED = 50.0  # mm/s CEILING for layer 1 — never a target. It must be applied as
+FIRST_LAYER_SPEED = 20.0  # mm/s CEILING for layer 1 — never a target. It must be applied as
+                          # LOWERED 50 -> 20 on 2026-07-26. Oleg: "k2 adhesion broke you moving head
+                          # too fast". Layer 1 was running 55 mm/s with a 10mm-wide bead. The wider
+                          # the first bead, the more time the plastic needs to spread and wet the
+                          # plate — and a 10mm bead from a 0.8mm nozzle is an extreme spread.
+                          # THE KEY POINT, ALREADY WRITTEN BELOW AND IGNORED FOR A DAY: slowing does
+                          # NOT thin the line. E is metered per mm of PATH, so at 20 mm/s the bead
+                          # is still 10.0 x 0.1mm — identical material, laid with four times the
+                          # dwell. Only the RATE (mm3/s) falls, and the rate is not what bonds.
                           # min(FIRST_LAYER_SPEED, body_speed), because when the body runs SLOWER
                           # than 50 this becomes a speed-UP: on 2026-07-25 a 2.40mm2 bead with a
                           # 28 mm/s body ran layer 1 at 50 = 120 mm3/s against a 74 ceiling, so the

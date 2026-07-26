@@ -227,7 +227,10 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     if first_w <= 0:
         first_w = 10.0
     first_area = first_w * first_h
-    first_speed = min(flow_target / first_area, machine.MAX_SPEED)
+    # DWELL, NOT RATE. The first layer's job is to wet the plate, and that takes TIME under the
+    # bead — not volume per second. Deposit per mm is fixed by first_area and does not change with
+    # speed, so slowing costs nothing but minutes and buys the whole bond.
+    first_speed = min(flow_target / first_area, machine.FIRST_LAYER_SPEED, machine.MAX_SPEED)
     e_first_mm = first_area / area
 
     shapes = [round_corners(curve(o, span, closed), fillet) for o in orders]
