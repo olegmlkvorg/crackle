@@ -288,12 +288,37 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     w("M82")
     w("G92 E0")
 
-    x0, y0 = rings[0][0][0] + ox, rings[0][0][1] + oy
+    # WHERE THE PATH ACTUALLY STARTS — not where the outer contour happens to be indexed.
+    # The prime used to target rings[0][0], but layer 0 prints the BRIM first, so the head began
+    # 4.99mm away on a coupler and 18.12mm away on a bracket, and that gap was extruded at 4-8% of
+    # the metered rate — a starved thread dragged across the part's own footprint and over an open
+    # bore. Compute the real first point the same way the layer loop will.
+    if base_extra:
+        _bfirst = sorted(base_extra, key=lambda r: -max(
+            (q[0] - ox) ** 2 + (q[1] - oy) ** 2 for q in r))
+        _start = _bfirst[0][0]
+    else:
+        _r0 = rings_at(0)
+        _start = _r0[0][0]
+    x0, y0 = _start[0] + ox, _start[1] + oy
+
+    # PURGE AND PRIME IN THE CORRIDOR, NOT ON THE PART.
+    # The old approach was a blind `x0 - 40`, which on a packed plate lies INSIDE layer-1 material;
+    # the stationary purge landed 0.09mm from deposited material and the prime laid a ridge at
+    # 2.00x the layer-1 ribbon, which the brim then printed on top of. The corridor is a Y line
+    # already computed to have no part on it.
+    _py = min(max(corridor, 6.0), bed_xy[1] - 6.0)
+    _px = min(max(x0, 30.0), bed_xy[0] - 6.0)
     w(f"G1 Z{press:.3f} F600")
-    w(f"G0 F9000 X{max(6.0, x0 - 40):.3f} Y{max(6.0, y0):.3f}")
+    w(f"G0 F9000 X{_px - 24:.3f} Y{_py:.3f}")
     w("G1 E20 F300                      ; stationary purge — pressure before motion")
-    w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E30")
+    w(f"G1 F1200 X{_px:.3f} Y{_py:.3f} E30      ; prime line, laid in the clear corridor")
     w("G92 E0")
+    # ONE lifted travel from the prime to the real start. Kept explicit and tagged: it is cheaper
+    # than the alternative, which was extruding a starved thread across the part to reach it.
+    w(f"G0 Z{press + hop_clear:.3f} F900 ; PRIME-TRAVEL up")
+    w(f"G0 X{x0:.3f} Y{y0:.3f} F{travel_f} ; PRIME-TRAVEL to first point")
+    w(f"G0 Z{press:.3f} F900 ; PRIME-TRAVEL down")
     # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
     # knowing which plate, and a filename is not a contract.
     # THE FILE MUST RECORD THE COMMAND THAT MADE IT. The belt that fixed the cleats
@@ -307,7 +332,13 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     w("; BODY_START")
 
     e = 0.0
-    px = py = None
+    # THE HEAD IS AT THE FIRST POINT — say so, instead of leaving it None.
+    # With px None the layer loop's first step hits `if px is None: continue`, which SWALLOWED the
+    # move onto the start rather than emitting or checking it. That swallow is what hid a 4.99mm
+    # (coupler) and 18.12mm (bracket) starved thread for as long as the prime targeted the wrong
+    # ring. Now the position is known, the first step measures zero, and any future mismatch shows
+    # up as a real move instead of silence.
+    px, py = x0, y0
     for k in range(layers):
         z = press + k * layer_h
         if k:
@@ -403,7 +434,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                     # (the extruder never stops, so no ooze/restart artefact) and adds too little
                     # material to build a ridge.
                     e += d * (e_first if k == 0 else e_per_mm) * link_flow
-                    L.append(f"G1 X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
+                    L.append(f"G1 X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f} ; LINK thin")
                     px, py = X, Y
                     continue
                 e += d * (e_first if k == 0 else e_per_mm)

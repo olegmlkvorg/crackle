@@ -137,7 +137,8 @@ def check(path):
     _ext = [i for i, l in enumerate(_lines) if re.match(r'G1 .*E[\d.]', l)]
     if _ext:
         _inside = [i for i, l in enumerate(_lines)
-                   if l.startswith('G0 ') and _ext[0] < i < _ext[-1] and '; HOP' not in l]
+                   if l.startswith('G0 ') and _ext[0] < i < _ext[-1]
+                   and '; HOP' not in l and '; PRIME-TRAVEL' not in l]
         _hops = sum(1 for l in _lines if '; HOP over' in l)
         if _hops:
             print(f"  {_hops} inter-object hops (lifted, flow suspended, no retract)")
@@ -231,6 +232,52 @@ def check(path):
             f"nozzle would plough through the part. Lift clear before travelling. "
             f"(A travel AT the layer height is the damaging case, not merely below it — the "
             f"nozzle is exactly at the top of the material it just laid.)")
+
+    # PER-MOVE STARVATION — classify by physics, not by opcode.
+    # The existing starved-move check is an AGGREGATE (>5% of moves), which suppressed 244 genuinely
+    # starved moves out of 62,965 because they were a small fraction. A single 18mm move dragged
+    # across a part at 4% of the metered rate is a defect on its own, however rare it is: it is a
+    # thread laid over open bores and over material, and it is exactly how the prime-handoff bug
+    # stayed invisible. So this one fires on ANY single move.
+    _fa = math.pi * (1.75 / 2) ** 2
+    _z2 = 0.0; _px2 = _py2 = None; _pe2 = 0.0; _starved = []
+    _nominal = None
+    for _i, _l in enumerate(_lines):
+        _b = _l.split(';')[0].strip()
+        if not _b.startswith(('G0', 'G1')): continue
+        _mx = re.search(r'X([-\d.]+)', _b); _my = re.search(r'Y([-\d.]+)', _b)
+        _me = re.search(r'E([\d.]+)', _b)
+        # A G0 MOVES THE HEAD TOO. Tracking position only from G1 measured every post-hop move from
+        # the stale pre-hop position and invented a 146.8mm "starved" move that does not exist —
+        # the third guard today whose first version measured the wrong quantity.
+        if not _me:
+            if _mx: _px2 = float(_mx.group(1))
+            if _my: _py2 = float(_my.group(1))
+            continue
+        _nx = float(_mx.group(1)) if _mx else _px2
+        _ny = float(_my.group(1)) if _my else _py2
+        _ne = float(_me.group(1))
+        if _px2 is not None and _nx is not None and _ne > _pe2:
+            _d = math.dist((_px2, _py2), (_nx, _ny))
+            if _d > 0.05:
+                _x = (_ne - _pe2) * _fa / _d
+                if _nominal is None or _x > _nominal: _nominal = _x
+                if _nominal and _x < 0.25 * _nominal and _d > 2.0:
+                    _starved.append((_i + 1, _d, _x, _nominal))
+        if _nx is not None: _px2, _py2 = _nx, _ny
+        _pe2 = max(_pe2, _ne)
+    # thin inter-tile links are deliberate (hilbert --tile) and are stamped; everything else is not
+    # Deliberate thin links are TAGGED in the source that emits them; anything untagged that is
+    # starved is a bug. Tagging beats loosening the threshold — a looser threshold would have let
+    # the 18mm prime thread through, which is the exact defect this guard exists to catch.
+    _starved = [t for t in _starved if '; LINK' not in _lines[t[0] - 1]]
+    if _starved:
+        _w = max(_starved, key=lambda t: t[1])
+        problems.append(
+            f"{len(_starved)} STARVED move(s): extruding moves longer than 2mm laid at under a "
+            f"quarter of the file's own bead. Worst: line {_w[0]}, {_w[1]:.1f}mm at "
+            f"{_w[2]:.3f}mm2 against a {_w[3]:.3f}mm2 bead — that is a thread dragged across the "
+            f"plate, not a printed line.")
 
     # STARVED MOVES. Feedrates PERSIST in gcode, so a slow press or a stationary dab leaves every
     # following move crawling until something sets F again — long stretches ran at 24 mm3/s against
