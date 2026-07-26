@@ -746,6 +746,32 @@ def collet(stick_d, od_small, od_large, slots, slot_w, height, wall, clearance=0
     return region_at
 
 
+def collet_seat(od_small, od_large, od, height, wall, seat_gap=0.30):
+    """The conical seat the collet is pulled into — the other half of the tension pair.
+
+    Alone, a collet does nothing: it needs a hole that narrows in the direction of pull. This is
+    that hole. It sits at the top of the post stack; the post passes through it, the collet rides on
+    the post inside it, and tightening drags the cone up into the narrowing bore.
+
+    THE BORE NARROWS GOING UP, which means material grows inward as it prints. That is an overhang,
+    and it is only printable because the taper is shallow: 22->14mm over 30mm is 7.6 degrees from
+    vertical, far inside the ~45 degrees this toolchain can hold unsupported. A steeper collet would
+    grip harder and be unprintable without support, which is the trade if this one slips.
+
+    seat_gap widens the bore over the collet's own profile so the two are not an interference fit
+    before any load is applied — the collet must be able to enter the seat and THEN be drawn in.
+    """
+    def region_at(t):
+        r_bore = (od_large + (od_small - od_large) * t) / 2.0 + seat_gap
+        r_out = od / 2.0
+        if r_bore >= r_out - wall:
+            raise SystemExit(
+                f"collet_seat: bore {r_bore*2:.1f}mm leaves under {wall:g}mm of wall inside a "
+                f"{od:g}mm body — widen --od.")
+        return circle(r_out).difference(circle(r_bore))
+    return region_at
+
+
 def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
     """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
 
@@ -774,13 +800,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", default="bracket",
                     choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4",
-                             "gauge", "adapter", "shell", "mixer", "collet"])
+                             "gauge", "adapter", "shell", "mixer", "collet", "seat"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=6.35, help="1/4 inch bamboo (6.35mm)")
     ap.add_argument("--centres", type=float, default=32.0)
     ap.add_argument("--wall", type=float, default=4.0)
     ap.add_argument("--od", type=float, default=34.0, help="shell/mixer outer diameter")
     ap.add_argument("--od-small", type=float, default=14.0, help="collet narrow end")
+    ap.add_argument("--od-large", type=float, default=22.0, help="collet wide end")
     ap.add_argument("--slots", type=int, default=3, help="collet splits")
     ap.add_argument("--slot-w", type=float, default=2.0)
     ap.add_argument("--blades", type=int, default=3)
@@ -871,6 +898,8 @@ def build_part(part, a):
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
+    elif part == "seat":
+        return collet_seat(a.od_small, a.od_large, a.od, a.height, a.wall)
     elif part == "collet":
         return collet(a.stick, a.od_small, a.od, a.slots, a.slot_w, a.height, a.wall,
                       clearance=a.clearance)
