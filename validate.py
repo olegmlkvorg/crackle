@@ -279,6 +279,50 @@ def check(path):
             f"{_w[2]:.3f}mm2 against a {_w[3]:.3f}mm2 bead — that is a thread dragged across the "
             f"plate, not a printed line.")
 
+    # OVERHANG — does each layer have anything to sit on?
+    # No check in this toolchain ever asked. A belt shipped with 72.9% of its points extruded onto
+    # nothing, because TPU tolerates it and every layer was individually valid; the defect existed
+    # only BETWEEN consecutive layers. Sampled, because the exact computation is O(n*m) per pair
+    # and these files run to a quarter-million lines.
+    _ly = {}
+    _zz = 0.0
+    for _l in _lines:
+        _b = _l.split(';')[0]
+        _m = re.search(r'Z([\d.]+)', _b)
+        if _b.startswith(('G0 ', 'G1 ')) and _m: _zz = round(float(_m.group(1)), 3)
+        _mm = re.match(r'^G1 .*X([-\d.]+) Y([-\d.]+).*E[\d.]', _b)
+        if _mm: _ly.setdefault(_zz, []).append((float(_mm.group(1)), float(_mm.group(2))))
+    _zs = sorted(_ly)
+    if len(_zs) > 2:
+        _bead = 1.2
+        _mb = re.search(r'bead ([\d.]+)x', open(path).read()[:4000])
+        if _mb: _bead = float(_mb.group(1))
+        _worstz, _worstf = None, 0.0
+        for _a, _bz in zip(_zs, _zs[1:]):
+            _A = _ly[_a]
+            _B = _ly[_bz][::max(1, len(_ly[_bz]) // 400)]
+            if len(_A) < 3 or len(_B) < 3: continue
+            # INDEX THE LOWER LAYER IN FULL. Sampling it to 250 points spread over a 315mm plate
+            # put the nearest sample far from every query point and reported 94% of a perfectly
+            # supported layer as overhanging — the same measure-the-easy-quantity error this guard
+            # exists to catch. A spatial hash at bead resolution is exact enough and O(n).
+            _cell = _bead
+            _grid = set()
+            for _q in _A:
+                _grid.add((int(_q[0] // _cell), int(_q[1] // _cell)))
+            def _supported(_p):
+                _cx, _cy = int(_p[0] // _cell), int(_p[1] // _cell)
+                return any((_cx + _dx, _cy + _dy) in _grid
+                           for _dx in (-1, 0, 1) for _dy in (-1, 0, 1))
+            _un = sum(1 for _p in _B if not _supported(_p))
+            _frac = _un / len(_B)
+            if _frac > _worstf: _worstf, _worstz = _frac, (_a, _bz)
+        if _worstf > 0.05:
+            problems.append(
+                f"OVERHANG: {_worstf*100:.0f}% of layer Z{_worstz[1]} has no material within one "
+                f"bead ({_bead}mm) of it on layer Z{_worstz[0]} — that fraction of the layer is "
+                f"being extruded onto nothing. Ramp the change over more layers.")
+
     # STARVED MOVES. Feedrates PERSIST in gcode, so a slow press or a stationary dab leaves every
     # following move crawling until something sets F again — long stretches ran at 24 mm3/s against
     # a 55 target and looked like the extruder had paused. Nothing was paused; it was starved.
