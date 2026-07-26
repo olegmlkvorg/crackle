@@ -738,7 +738,7 @@ def emit_sequential(placed, a, counts, fn):
         body = post.split("; BODY_END")[0] if "; BODY_END" in post else post
         # drop the tail (M107/M104 S0/park) — it belongs once, at the end of the whole plate
         body = "\n".join(ln for ln in body.splitlines()
-                         if not ln.startswith(("M107", "M104 S0", "M140 S0", "G0 X10 Y340"))
+                         if not ln.startswith(("M107", "M104 S0", "M140 S0", "G0 X10 Y"))
                          and not re.match(r"^G1 Z\d+\.\d+ F900$", ln))
         bodies.append((name, body, st))
 
@@ -767,7 +767,11 @@ def emit_sequential(placed, a, counts, fn):
     L.append("M104 S0")
     L.append("M140 S0")
     L.append(f"G1 Z{safe_z + 20:.3f} F900")
-    L.append("G0 X10 Y340 F9000")
+    # PARK WHERE THE PLATE ACTUALLY IS. This was hardcoded to Y340 — a K2 coordinate — and on the
+    # K1C's 220mm bed that is 120mm off the plate. validate.py caught it as "XY off bed"; it would
+    # otherwise have driven the head into the frame at the end of every sequential print.
+    _bx, _by = machine.BED[a.printer]
+    L.append(f"G0 X{min(10.0, _bx - 10):.0f} Y{_by - 10:.0f} F9000")
     open(fn, "w").write("\n".join(L) + "\n")
     grams = sum(st["grams"] for _, _, st in bodies)
     mins = sum(st["mins"] for _, _, st in bodies)

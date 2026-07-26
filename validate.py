@@ -168,7 +168,11 @@ def check(path):
                 if _xs:
                     _bb.append((_cur, min(_xs), max(_xs), min(_ys), max(_ys)))
                 _cur = l.strip('; -').split(':')[0].strip(); _xs, _ys = [], []
-            _m = re.match(r'^G[01] .*X([-\d.]+) Y([-\d.]+)', l)
+            # A PART'S FOOTPRINT IS WHERE IT DEPOSITS MATERIAL, not everywhere the head went.
+            # Including travels and the end-of-print park put Y340 inside the last part's box and
+            # reported 15 phantom overlaps on a plate whose parts were provably disjoint. Measure
+            # extruding moves only.
+            _m = re.match(r'^G1 .*X([-\d.]+) Y([-\d.]+).*E[\d.]', l)
             if _m:
                 _xs.append(float(_m.group(1))); _ys.append(float(_m.group(2)))
         if _xs:
