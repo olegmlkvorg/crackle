@@ -407,8 +407,14 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
                          f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
                 px, py = x, y
 
+    # THE PART'S HEIGHT IS THE Z STEP, NOT THE BEAD HEIGHT. These are deliberately decoupled here
+    # (--layer-z sets what LANDS; bead_h only meters E), and the end-of-print lift used the wrong
+    # one. With --bead-h 0.6 --layer-z 1.5 --layers 60 the part tops out at 88.6mm and the head
+    # lifted to 75.5 — then travelled to park, driven 13.1mm THROUGH the finished object. Shipped
+    # files escaped only because the +40mm of slack absorbs the error below about 45 layers, so it
+    # would have surfaced first on the tallest print anyone ever ran.
     L += ["M107", "M104 S0", "M140 S0",
-          f"G1 Z{first_h + (layers-1)*bead_h + 40:.1f} F900",
+          f"G1 Z{first_h + (layers-1)*z_step + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
     # `pts` was rebound from a point list to a LIST OF LOOPS 150 lines above, so len() had been
