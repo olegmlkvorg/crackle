@@ -354,10 +354,17 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
     w("; HEADER_BLOCK_END")
+    # ASK FOR THE BED BEFORE HOMING, so it heats WHILE the machine homes instead of afterwards.
+    # M140 is non-blocking (M190/TEMPERATURE_WAIT is what waits), so there is no reason to sit at
+    # room temperature through a 30-60s homing cycle and then start heating a cold plate. Every
+    # other generator in this repo already ordered it this way; solid.py was the only one that did
+    # not, which is why a K1C job showed `bed 22/0` while the nozzle was already at 169.
+    # Nothing about safety changes: TEMPERATURE_WAIT below still blocks until the plate is at
+    # temperature, so layer 1 cannot start on a cold bed either way. This only reclaims the overlap.
+    w(f"M140 S{bed}")
     w(f"M104 S{temp}")
     w("G90")
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
-    w(f"M140 S{bed}")
     w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
