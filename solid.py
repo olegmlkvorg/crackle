@@ -270,10 +270,15 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                 return poly
             keep = []
             for ring in poly.interiors:
-                shrunk = Polygon(ring).buffer(-d)      # hole grows == its polygon shrinks
-                if shrunk.is_empty:
-                    continue                            # hole swallowed by the ribbon: drop it
-                for g in (shrunk.geoms if shrunk.geom_type == 'MultiPolygon' else [shrunk]):
+                # AN INTERIOR RING *IS* THE HOLE, so growing the hole means buffering that
+                # polygon OUTWARD. The first version used -d and made every bore 1.8mm SMALLER
+                # than the defect it was fixing: measured 5.0/5.2/5.49 -> 3.2/3.45/3.69 where the
+                # body is 6.80/7.05/7.30. Sign errors in offsets do not announce themselves; only
+                # sweeping the real ribbon and measuring the hole it leaves does.
+                grown = Polygon(ring).buffer(+d)
+                if grown.is_empty:
+                    continue
+                for g in (grown.geoms if grown.geom_type == 'MultiPolygon' else [grown]):
                     keep.append(g.exterior.coords)
             return Polygon(poly.exterior.coords, keep)
         if reg.geom_type == 'MultiPolygon':
