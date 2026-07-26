@@ -813,6 +813,79 @@ def collet_seat(od_small, od_large, od, height, wall, seat_gap=0.30):
     return region_at
 
 
+def post_foot(stick_d, od_base, od_top, height, wall, floor_h, layer_h, points=3):
+    """What a post stands in: a flared, fillable base with a three-point socket.
+
+    The bottom of the stack has three jobs at once and this does all three with one shape.
+      · SPREAD the load, so a 610mm post does not punch into a soft floor — hence the flare.
+      · CARRY MASS as low as physically possible. Weight at the base is what stops a tall shelf
+        walking, and the same gypsum+sand that fills the spacers fills this, only lower.
+      · LOCATE the post, on three pressure points rather than a round bore
+        (Oleg: "just plan the lines that will create that shaft slot with few pressure points").
+
+    The flare tapers OUTWARD going down, which prints as an overhang-free constant cross-section
+    stack — wide first, narrowing upward, so every layer lands on the one below.
+
+    Filled, this is by far the heaviest part of the shelf, which is exactly where the weight belongs.
+    """
+    ang = math.degrees(math.atan2((od_base - od_top) / 2.0, height))
+    if ang > 40:
+        raise SystemExit(
+            f"post_foot: a {od_base:g}->{od_top:g}mm flare over {height:g}mm leans {ang:.0f} deg "
+            f"from vertical. Over ~40 the wall prints onto air — raise --height or narrow the base.")
+
+    floor_frac = min(0.9, max(0.0, floor_h / max(height, 1e-9)))
+    socket = shaft_socket(stick_d, points=points)
+
+    def region_at(t):
+        r_out = (od_base + (od_top - od_base) * t) / 2.0
+        body = circle(r_out)
+        if t <= floor_frac:
+            return body.difference(socket)      # solid plinth, fill sits on it
+        inner = body.buffer(-wall)
+        shell = body if inner.is_empty else body.difference(inner)
+        # the socket wall must persist up the whole height or the post has nothing to grip
+        boss = circle((stick_d / 2.0) + wall).difference(socket)
+        return unary_union([shell, boss])
+
+    return region_at
+
+
+def mixer_bowl(id_dia, height, wall, floor_h, layer_h, baffles=4, baffle_d=8.0, foot=6.0):
+    """A mixing vessel with internal baffles, sized to the paddle that stirs it.
+
+    BAFFLES ARE THE WHOLE POINT. A smooth round bowl and a rotating paddle spin the entire mass as
+    one plug — the mix travels with the blade instead of across it and almost nothing shears. Ribs
+    standing proud of the wall stop the rotation, so material forced round by the blade has to break
+    over them. Industrial mixers do this; a bucket does not, which is why a bucket mixes badly.
+
+    They cost nothing to print here: a rib is a vertical feature, so it is a constant cross-section
+    extruded straight up — no overhang, no support, no extra time beyond the material.
+
+    THE GAP IS THE SHEAR ZONE. Bowl radius minus paddle radius is where the mix is actually worked;
+    too wide and the blade stirs a hole through the middle, too tight and it wedges. This sizes from
+    the paddle rather than from a round number, and the caller is told what the gap came out as.
+
+    The floor is solid and slightly wider than the wall — a mixing vessel gets pushed sideways, and a
+    flat-bottomed tube tips.
+    """
+    r_i = id_dia / 2.0
+    r_o = r_i + wall
+    floor_frac = min(0.9, max(0.0, floor_h / max(height, 1e-9)))
+
+    def region_at(t):
+        if t <= floor_frac:
+            return circle(r_o + foot)                 # solid, wider base
+        body = circle(r_o).difference(circle(r_i))
+        for i in range(baffles):
+            a = 2 * math.pi * i / baffles
+            rib = box(r_i - baffle_d, -baffle_d / 2.0, r_i + 1.0, baffle_d / 2.0)
+            body = unary_union([body, rotate(rib, math.degrees(a), origin=(0, 0))])
+        return body
+
+    return region_at
+
+
 def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
     """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
 
@@ -841,7 +914,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", default="bracket",
                     choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4",
-                             "gauge", "adapter", "shell", "mixer", "collet", "seat"])
+                             "gauge", "adapter", "shell", "mixer", "collet", "seat",
+                             "postfoot", "bowl"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=6.35, help="1/4 inch bamboo (6.35mm)")
     ap.add_argument("--centres", type=float, default=32.0)
@@ -851,6 +925,8 @@ def main():
     ap.add_argument("--od-large", type=float, default=22.0, help="collet wide end")
     ap.add_argument("--slots", type=int, default=3, help="collet splits")
     ap.add_argument("--slot-w", type=float, default=2.0)
+    ap.add_argument("--baffles", type=int, default=4)
+    ap.add_argument("--baffle-d", type=float, default=8.0)
     ap.add_argument("--blades", type=int, default=3)
     ap.add_argument("--blade-w", type=float, default=10.0)
     ap.add_argument("--hub-w", type=float, default=4.0)
@@ -939,6 +1015,14 @@ def build_part(part, a):
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
+    elif part == "bowl":
+        _paddle = a.od_small
+        print(f"  bowl ID {a.od:g} vs paddle {_paddle:g} -> shear gap "
+              f"{(a.od - _paddle)/2:.1f} mm per side")
+        return mixer_bowl(a.od, a.height, a.wall, a.floor, a.layer_h,
+                          baffles=a.baffles, baffle_d=a.baffle_d)
+    elif part == "postfoot":
+        return post_foot(a.stick, a.od, a.od_small, a.height, a.wall, a.floor, a.layer_h)
     elif part == "seat":
         return collet_seat(a.od_small, a.od_large, a.od, a.height, a.wall)
     elif part == "collet":
