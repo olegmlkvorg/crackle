@@ -609,8 +609,6 @@ def run_plate(a):
     built = []
     for name, n in spec:
         r = build_part(name, a)
-        if a.cavity > 0 and name in ("foot",):
-            raise SystemExit("cavity parts are callables; keep them on their own plate")
         for _ in range(n):
             built.append((name, r))
 
@@ -648,6 +646,12 @@ def run_plate(a):
                          f"{bed_y:.0f}mm plate — drop some or raise --margin.")
 
     region = unary_union([r for _, r in placed])
+    # A CAVITY WORKS ON A PLATE — shell the UNION, not each part. buffer(-shell) on a MultiPolygon
+    # erodes every member independently, so each part gets its own floor and its own open mouth.
+    # (Applied here rather than in build_part because shelled() returns a callable of layer
+    # fraction, which cannot be translated or unioned.)
+    if a.cavity > 0:
+        region = shelled(region, a.cavity, a.floor, a.height, a.layer_h)
     counts = ", ".join(f"{n}x {name}" for name, n in spec)
     print(f"  plate: {counts} — {len(built)} parts, {x if y == 0 else usable_x:.0f}x{total_h:.0f}mm")
     fn = f"{a.out}/plate_{a.printer}_{len(built)}parts_h{a.height:g}_T{a.temp}.gcode"
