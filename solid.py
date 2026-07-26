@@ -254,8 +254,26 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # more material than the Z step can hold; it has nowhere to go but up, and the nozzle
     # eventually ploughs the part off the plate. Below 1.0 is harmless porosity — every part that
     # printed correctly sat at 0.83-0.96. The foot as originally emitted was 1.082.
-    _reg = region(0.0) if _is_fn else region
-    _fill = sum(LineString(r).length for r in rings) * bead_w / max(_reg.area, 1e-9)
+    # ...AND IT MUST LOOK AT EVERY LAYER, not just the first. Where `region` is a FUNCTION of
+    # height — vented shells, tapered collets, anything whose cross-section changes as it climbs —
+    # layer 0 cannot speak for the part. Measured on `--part shell --vents 3 --height 60 --od 34`:
+    # layer 0 fills 0.966 and sails through while 68 of the 150 layers exceed 1.02, worst 1.091.
+    # That is the foot failure (+10.4%, ploughed off the plate) shipping clean — and sustained over
+    # half the part rather than confined to one layer.
+    _n_layers = max(1, int(round(height / max(layer_h, 1e-9))))
+    if _is_fn:
+        _step = max(1, _n_layers // 40)          # contours() per sample is not free
+        _ts = sorted({min(1.0, i / max(1, _n_layers - 1)) for i in range(0, _n_layers, _step)} | {1.0})
+    else:
+        _ts = [0.0]
+    _fills = []
+    for _t in _ts:
+        _r = region(_t) if _is_fn else region
+        _rr = contours(_r, bead_w) if _is_fn else rings
+        _fills.append((sum(LineString(r).length for r in _rr) * bead_w / max(_r.area, 1e-9), _t))
+    _fill, _fill_t = max(_fills)
+    _over = sum(1 for _f, _ in _fills if _f > 1.02)
+    _reg = region(_fill_t) if _is_fn else region
     if _fill > 1.02:
         # BEAD-MULTIPLE DIMENSIONS — Oleg's design rule from 2026-07-23, and this is the physics
         # behind it. A wall that is not an integer number of beads leaves the inward and outward
@@ -264,7 +282,8 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
         # 0.729 and 4.8 (4 beads) fills 0.981.
         _mult = [round(bead_w * k, 2) for k in range(2, 9)]
         raise SystemExit(
-            f"{name}: contours cover {_fill:.3f}x the region — every layer deposits "
+            f"{name}: contours cover {_fill:.3f}x the region at {_fill_t*100:.0f}% of the part's "
+            f"height ({_over} of {len(_fills)} sampled layers exceed 1.02) — that layer deposits "
             f"{(_fill-1)*100:.1f}% more than the {layer_h}mm Z step can hold, so the part climbs "
             f"into the nozzle and gets ploughed off.\n"
             f"  Make wall thicknesses a MULTIPLE OF THE BEAD ({bead_w}mm): {_mult}\n"
