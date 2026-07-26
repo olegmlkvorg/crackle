@@ -117,6 +117,12 @@ def round_corners(pts, fillet, seg=0.8):
 def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan, fillet=3.0, layers=1, printer='k1c', material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
+    # LAYER 1 IS SQUASHED TO `press`, SO IT MUST BE FED FOR `press`, NOT FOR THE BODY HEIGHT.
+    # The comment below already said layer 1 is crushed into the plate to bond; the metering did not
+    # follow. Measured on the emitted file: 0.720mm2 commanded into 0.120mm2 of space — SIX times
+    # over. Same defect found the same day in hilbert.py (2x) and, a day earlier, in solid.py's foot
+    # (+10.4%), where it was reported as "won't stick" all three times.
+    e_first_mm = (bead_w * press) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
     flow = speed * bead_w * bead_h
     f = round(speed * 60)
@@ -130,6 +136,19 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
                          f"too big for a {bed_xy[0]:.0f} x {bed_xy[1]:.0f} bed. Reduce --cols/--rows "
                          f"or --cell.")
     pts = round_corners(comb_path(cell, cols, rows, ox, oy), fillet)
+    # DECIMATE TO KEEP THE HOST ALIVE.
+    # round_corners samples by angle, which produced ~0.15mm segments — fine at the old 30 mm/s cap,
+    # but MAX_SPEED is now 70 and that is 466 moves/second against a host that stalls near 300.
+    # Klipper does not error when it runs out of lookahead; it simply FREEZES mid-print. The limit
+    # is a rate, so the minimum segment is derived from the speed actually commanded rather than
+    # picked: at 250 moves/s of headroom, seg = speed / 250.
+    _min_seg = max(0.25, speed / 250.0)
+    _dec = [pts[0]]
+    for _p in pts[1:-1]:
+        if math.dist(_p, _dec[-1]) >= _min_seg:
+            _dec.append(_p)
+    _dec.append(pts[-1])
+    pts = _dec
     _xs = [p[0] for p in pts]; _ys = [p[1] for p in pts]
     if min(_xs) < 4 or min(_ys) < 4 or max(_xs) > bed_xy[0] - 4 or max(_ys) > bed_xy[1] - 4:
         raise SystemExit(f"comb spans X {min(_xs):.0f}..{max(_xs):.0f} Y {min(_ys):.0f}.."
@@ -193,7 +212,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
             d = math.dist((px, py), (x, y))
             if d < 1e-9:
                 continue
-            e += d * e_per_mm
+            e += d * (e_first_mm if k == 0 else e_per_mm)
             L.append(f"G1 {'F%d ' % f if (px, py) == seq[0] and k == 0 else ''}"
                      f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = x, y

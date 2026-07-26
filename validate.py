@@ -267,7 +267,13 @@ def check(path):
     _fa = math.pi * (1.75 / 2) ** 2
     _z2 = 0.0; _px2 = _py2 = None; _pe2 = 0.0; _starved = []
     _nominal = None
+    # THE PRIME IS DELIBERATELY HEAVY AND MUST NOT SET THE YARDSTICK.
+    # Taking the nominal bead from the running maximum let the prime line (metered several times the
+    # body bead, on purpose) define it — so on a single-layer file every real move measured as
+    # starved. Only body moves define what normal looks like.
+    _inbody = False
     for _i, _l in enumerate(_lines):
+        if '; BODY_START' in _l: _inbody = True
         _b = _l.split(';')[0].strip()
         if not _b.startswith(('G0', 'G1')): continue
         _mx = re.search(r'X([-\d.]+)', _b); _my = re.search(r'Y([-\d.]+)', _b)
@@ -286,7 +292,7 @@ def check(path):
             _d = math.dist((_px2, _py2), (_nx, _ny))
             if _d > 0.05:
                 _x = (_ne - _pe2) * _fa / _d
-                if _nominal is None or _x > _nominal: _nominal = _x
+                if _inbody and (_nominal is None or _x > _nominal): _nominal = _x
                 if _nominal and _x < 0.25 * _nominal and _d > 2.0:
                     _starved.append((_i + 1, _d, _x, _nominal))
         if _nx is not None: _px2, _py2 = _nx, _ny
