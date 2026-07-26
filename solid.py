@@ -930,7 +930,8 @@ def mixer_bowl(id_dia, height, wall, floor_h, layer_h, baffles=4, baffle_d=8.0, 
     return region_at
 
 
-def bowl_lid(bowl_id, shaft_d, height, spigot_h, wall, shaft_clear=2.0, fill_port=0.0):
+def bowl_lid(bowl_id, shaft_d, height, spigot_h, wall, shaft_clear=2.0, fill_port=0.0,
+             baffles=0, baffle_d=8.0, baffle_clear=0.6):
     """A lid that locates itself in the bowl, with a taper so the step is printable.
 
     Spinning a stiff paste at CNC speeds throws it. This closes the bowl and keeps the shaft
@@ -968,6 +969,34 @@ def bowl_lid(bowl_id, shaft_d, height, spigot_h, wall, shaft_clear=2.0, fill_por
             body = circle(r).difference(circle(max(r - wall, r_hole + 0.6)))
         else:
             body = circle(r_spig).difference(circle(r_spig - wall))   # spigot ring
+        # THE BOWL HAS RIBS AND THE SPIGOT HAS TO GET PAST THEM. (Oleg, 2026-07-26: "it does not
+        # close, remember the ribs".) mixer_bowl() grows `baffles` ribs INWARD from the inner wall
+        # by baffle_d — 8mm by default — and this function used to size its spigot from bowl_id
+        # alone, i.e. from the SMOOTH wall, as if the ribs did not exist. Measured on the pair that
+        # was actually printed: bowl baffle tips at r=32.59, smallest lid radius r=39.74. The lid
+        # was 7.15mm per side too big to enter and simply sat on top of the ribs.
+        #
+        # The fix is NOT to shrink the spigot to clear the tips — that abandons 8mm of location and
+        # turns the rim step into a 12mm ledge that has to be tapered over most of the lid's height.
+        # Instead the spigot is CASTELLATED: notches cut where the ribs are, so it drops between
+        # them onto the full bore. Measured from the bowl's own gcode, the channels between ribs are
+        # clear to r=40.60 while the tips reach r=32.60 — so the lobes keep the original radius and
+        # only the four rib positions are cut away.
+        #
+        # It is strictly better than a plain spigot: the ribs now key the lid against rotation, and
+        # a lid on a bowl of spinning paste WANTS that — otherwise the mix drags the cover round
+        # with the paddle. And it costs nothing to print, because a notch is a vertical feature.
+        #
+        # The notch is built from the SAME box mixer_bowl() uses for the rib, dilated by clearance,
+        # so the two parts cannot drift apart: the shared constraint is now shared in code rather
+        # than duplicated as a number in two places, which is what broke it the first time.
+        if baffles > 0:
+            r_i = bowl_id / 2.0
+            c = baffle_clear
+            for i in range(baffles):
+                a = 2 * math.pi * i / baffles
+                notch = box(r_i - baffle_d - c, -(baffle_d / 2.0 + c), r_i + wall + 4.0, baffle_d / 2.0 + c)
+                body = body.difference(rotate(notch, math.degrees(a), origin=(0, 0)))
         body = body.difference(circle(r_hole))
         if fill_port > 0 and t <= face_frac:
             body = body.difference(translate(circle(fill_port / 2.0),
@@ -1173,7 +1202,10 @@ def build_part(part, a):
         return shelf_plate(a.width, a.depth, a.height, a.stick, a.inset, a.layer_h,
                            style=a.style, rib=a.rib, cell=a.cellsize)
     elif part == "lid":
-        return bowl_lid(a.od, a.axle, a.height, a.spigot_h, a.wall, fill_port=a.fill_port)
+        # THE LID TAKES THE BOWL'S OWN BAFFLE ARGUMENTS. Same --baffles/--baffle-d the bowl was
+        # built with, so the notches are derived from the ribs rather than guessed alongside them.
+        return bowl_lid(a.od, a.axle, a.height, a.spigot_h, a.wall, fill_port=a.fill_port,
+                        baffles=a.baffles, baffle_d=a.baffle_d)
     elif part == "bowl":
         _paddle = a.od_small
         print(f"  bowl ID {a.od:g} vs paddle {_paddle:g} -> shear gap "
