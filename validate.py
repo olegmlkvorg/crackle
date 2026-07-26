@@ -233,6 +233,31 @@ def check(path):
             f"(A travel AT the layer height is the damaging case, not merely below it — the "
             f"nozzle is exactly at the top of the material it just laid.)")
 
+    # Z DESCENT WHILE EXTRUDING — the check that was silently dead.
+    # The original test compared against `layer_floor`, which only updates on BARE Z moves; solid.py
+    # carries Z on every extruding G1, so layer_floor never left its initial value and the check
+    # could not fire. Verified by forcing it: a file climbing to Z5.1 and then extruding at Z1.5
+    # passed clean. Track the highest Z at which material has actually been deposited instead.
+    _pm = 0.0
+    _pz = 0.0
+    _dives = []
+    for _i, _l in enumerate(_lines):
+        if _l.startswith('; ---- part'):
+            _pm = 0.0          # a new part stands on bare plate; the last part's height is irrelevant
+        _b = _l.split(';')[0]
+        _m = re.search(r'Z([\d.]+)', _b)
+        if _b.startswith(('G0 ', 'G1 ')) and _m: _pz = float(_m.group(1))
+        if re.match(r'^G1 .*E[\d.]', _b):
+            if _pm > 0.3 and _pz < _pm - 0.35:
+                _dives.append((_i + 1, _pz, _pm))
+            _pm = max(_pm, _pz)
+    if _dives:
+        _d0 = _dives[0]
+        problems.append(
+            f"{len(_dives)} EXTRUDING move(s) below already-printed material — e.g. line {_d0[0]} "
+            f"extrudes at Z{_d0[1]} with material standing at Z{_d0[2]}. The nozzle is inside the "
+            f"part it already made.")
+
     # PER-MOVE STARVATION — classify by physics, not by opcode.
     # The existing starved-move check is an AGGREGATE (>5% of moves), which suppressed 244 genuinely
     # starved moves out of 62,965 because they were a small fraction. A single 18mm move dragged
