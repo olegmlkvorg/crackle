@@ -119,7 +119,10 @@ def check(path):
                 problems.append(f"L{ln}: XY off bed ({nx},{ny})")
             _seq_ceiling = max(_seq_ceiling, nz) if nz >= z else 0.0
             x, y, z = nx, ny, nz; maxz = max(maxz, z); zs.append(z)
-            if 'Z' in s and 'E' not in s:      # a bare Z move sets the layer floor
+            if 'Z' in s and 'E' not in s and '; HOP' not in raw:
+                # A HOP's lift is temporary and drops straight back — treating it as a new layer
+                # floor makes the matching drop look like a plough. Layer changes set the floor;
+                # hops do not.
                 layer_floor = nz
     if not body:
         # The single most dangerous outcome: a file that silently receives no checks and passes.
@@ -134,7 +137,10 @@ def check(path):
     _ext = [i for i, l in enumerate(_lines) if re.match(r'G1 .*E[\d.]', l)]
     if _ext:
         _inside = [i for i, l in enumerate(_lines)
-                   if l.startswith('G0 ') and _ext[0] < i < _ext[-1]]
+                   if l.startswith('G0 ') and _ext[0] < i < _ext[-1] and '; HOP' not in l]
+        _hops = sum(1 for l in _lines if '; HOP over' in l)
+        if _hops:
+            print(f"  {_hops} inter-object hops (lifted, flow suspended, no retract)")
         if _inside and not _seq:
             problems.append(f"{len(_inside)} TRAVEL move(s) inside the object (first at line "
                             f"{_inside[0]+1}) — prints must be one continuous extrusion")

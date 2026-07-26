@@ -161,7 +161,7 @@ def order_rings(rings, here):
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, brim_gap=0.18,
-         material='pla', hop_min=float('inf'), centre=True):
+         material='pla', hop_min=8.0, centre=True):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = machine.speed_for(flow, bead_w * layer_h, f" for {name}")
@@ -350,7 +350,15 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                     # No retract on purpose: retract/prime is the thing that leaves a blob at each
                     # end and needs pressure-advance tuning to hide. Simply not advancing E lets the
                     # melt relax on its own over a move that is over in a few hundredths of a second.
-                    L.append(f"G0 X{X:.3f} Y{Y:.3f} Z{z:.3f} F{travel_f}")
+                    # LIFT ONE LAYER, TRAVEL, DROP BACK. Oleg: "max out the speed when travel to
+                    # next object and suspend the flow for a travel (dont retract)" — plus the
+                    # correction that cost two plates: a FLAT travel at layer height drags the
+                    # nozzle through the material just laid. One layer of lift clears it, and in
+                    # layer-by-layer printing nothing on the plate is ever taller than the current
+                    # layer, so one layer is provably enough.
+                    L.append(f"G0 Z{z + layer_h:.3f} F900 ; HOP up")
+                    L.append(f"G0 X{X:.3f} Y{Y:.3f} F{travel_f} ; HOP over")
+                    L.append(f"G0 Z{z:.3f} F900 ; HOP down")
                     # RESTORE THE PRINT FEEDRATE. F is STICKY in gcode: without this line the next
                     # extruding move inherits the travel's 120 mm/s and lays the bead at 106 mm3/s
                     # against a 36 target. Measured in the emitted file, not assumed.
@@ -569,10 +577,12 @@ def main():
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--parts", default="",
                     help="ONE PLATE, many parts: 'coupler*3,bracket*2,foot'. Overrides --part.")
-    ap.add_argument("--sequential", action="store_true", default=True,
-                    help="print each part to full height before the next (default)")
+    ap.add_argument("--sequential", action="store_true", default=False,
+                    help="print each part to full height before the next. REQUIRES a part gap "
+                         "larger than the head radius (machine.HEAD_R) — see the guard.")
     ap.add_argument("--layerwise", dest="sequential", action="store_false",
-                    help="all parts together, layer by layer")
+                    help="all parts together, layer by layer (default, and the only safe mode "
+                         "at small part gaps)")
     ap.add_argument("--part-gap", type=float, default=8.0,
                     help="mm between parts on a multi-part plate")
     ap.add_argument("--margin", type=float, default=12.0, help="mm kept clear at the bed edge")
@@ -701,6 +711,23 @@ def run_plate(a):
     fn = f"{a.out}/plate_{a.printer}_{len(built)}parts_h{a.height:g}_T{a.temp}.gcode"
 
     if a.sequential:
+        # THE HEAD SWEEPS A CYLINDER, NOT A POINT.
+        # While part N prints at first-layer height, everything within HEAD_R of the nozzle that is
+        # taller than the current layer is in the head's path. Lifting between parts does not help:
+        # the collision happens DURING printing. Oleg lost two plates to this before it was modelled.
+        need = machine.HEAD_R[a.printer] + a.bead_w
+        if a.part_gap < need:
+            raise SystemExit(
+                f"--sequential needs a part gap of at least {need:.0f}mm on the {a.printer} "
+                f"(HEAD_R {machine.HEAD_R[a.printer]:.0f}mm"
+                f"{'' if machine.HEAD_R_MEASURED else ', UNVERIFIED — measure yours'}"
+                f"), but --part-gap is {a.part_gap:g}mm.\n"
+                f"  While the head prints one part, its heater block and fan shroud sweep a "
+                f"{machine.HEAD_R[a.printer]:.0f}mm radius through anything already standing "
+                f"nearby — a Z-hop between parts does not prevent it.\n"
+                f"  Either raise --part-gap to {math.ceil(need)} (which fits far fewer parts), or "
+                f"drop --sequential and print layer-by-layer, where every part grows together and "
+                f"nothing finished is ever taller than the head's current height.")
         return emit_sequential(placed, a, counts, fn)
 
     region = unary_union([r for _, r in placed])

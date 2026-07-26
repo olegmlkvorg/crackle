@@ -198,6 +198,32 @@ BED = {
 }
 
 
+# THE HEAD IS NOT THE NOZZLE. Oleg, 2026-07-26, after the second collision on the K2:
+# "you need to make sure you taking into account diameter of entire head + safety gap".
+#
+# Sequential (part-by-part) printing was written as if the only thing that could hit a finished part
+# was the nozzle tip. It is not. While the head prints part N at first-layer height, the heater
+# block, silicone sock and part-cooling shroud sweep through a cylinder of radius HEAD_R around the
+# nozzle at every height below GANTRY_H — straight through a finished 13.3mm part standing 12mm
+# away. Lifting Z between parts does nothing about this: the collision happens DURING printing, not
+# during the hop.
+#
+# The consequence is severe and worth stating plainly: sequential printing is only safe when every
+# already-printed part is further than HEAD_R from the one being printed. At a 12mm gap it is
+# impossible on any real machine, and the guard below refuses rather than emitting it.
+#
+# THESE VALUES ARE NOT MEASURED — they are conservative placeholders, and they are deliberately
+# generous so that the failure mode is "refuses to print" rather than "crashes". Measure yours:
+# park the head, and with a ruler on the bed find the greatest horizontal distance from the nozzle
+# tip to any part of the assembly that hangs lower than your tallest planned part.
+HEAD_R = {          # mm, nozzle tip -> outermost point of the head assembly. UNVERIFIED.
+    "k1c":    45.0,
+    "k2plus": 50.0,
+    "f022":   45.0,
+}
+HEAD_R_MEASURED = False   # flip to True only once a ruler has touched the machine
+
+
 # AUXILIARY FANS — the syntax DIFFERS PER MACHINE and a wrong command errors mid-print.
 # K2 Plus exposes output_pin fan1/fan2 (SET_PIN, 0-255). K1C exposes fan_generic side_fan and
 # chassis_fan (SET_FAN_SPEED, 0-1). Hardcoding the K1C form into belt.py -- which defaults to the
