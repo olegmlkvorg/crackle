@@ -196,9 +196,18 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     _reg = region(0.0) if _is_fn else region
     _fill = sum(LineString(r).length for r in rings) * bead_w / max(_reg.area, 1e-9)
     if _fill > 1.02:
-        raise SystemExit(f"{name}: contours cover {_fill:.3f}x the region — every layer deposits "
-                         f"{(_fill-1)*100:.1f}% more than the {layer_h}mm Z step can hold, so the "
-                         f"part climbs into the nozzle. Adjust --wall.")
+        # BEAD-MULTIPLE DIMENSIONS — Oleg's design rule from 2026-07-23, and this is the physics
+        # behind it. A wall that is not an integer number of beads leaves the inward and outward
+        # ring families colliding somewhere, and e_per_mm never notices. Measured on a 100mm
+        # spacer: a 4.0mm flange (3.33 beads) fills 1.139 and would climb; 3.6 (3 beads) fills
+        # 0.729 and 4.8 (4 beads) fills 0.981.
+        _mult = [round(bead_w * k, 2) for k in range(2, 9)]
+        raise SystemExit(
+            f"{name}: contours cover {_fill:.3f}x the region — every layer deposits "
+            f"{(_fill-1)*100:.1f}% more than the {layer_h}mm Z step can hold, so the part climbs "
+            f"into the nozzle and gets ploughed off.\n"
+            f"  Make wall thicknesses a MULTIPLE OF THE BEAD ({bead_w}mm): {_mult}\n"
+            f"  A non-integer wall leaves the inward and outward contour families colliding.")
     base_extra = []
     if brim:
         src = region(0.0) if _is_fn else region
@@ -361,7 +370,7 @@ def adapter(shaft_d, flat_depth, stick_d, wall, split=0.5):
     return region_at
 
 
-def plate(bores, wall, thickness=None, clearance=0.0):
+def plate(bores, wall, thickness=None, clearance=0.0, hollow=0.0):
     """A plate with N vertical bores — the general bamboo joint.
 
     Why vertical bores and not angled sockets: this generator extrudes a 2D region up the Z axis, so
@@ -388,6 +397,22 @@ def plate(bores, wall, thickness=None, clearance=0.0):
         h = max(b[2] / 2.0 + wall for b in bores) if thickness is None else thickness / 2.0
         body = unary_union([body, Polygon([(min(xs), min(ys) - h), (max(xs), min(ys) - h),
                                            (max(xs), max(ys) + h), (min(xs), max(ys) + h)])])
+    if hollow > 0 and len(bores) > 1:
+        # I-BEAM THE SPINE. The spacer's job is to hold two bores apart against the uprights
+        # converging (compression — buckling load is 27 kN over 100mm, i.e. irrelevant) and against
+        # the ladder racking in plane (bending). Material near the neutral axis contributes almost
+        # nothing to bending: measured, removing the middle keeps 76% of the second moment for 38%
+        # of the material. Flanges stay `hollow` mm thick top and bottom.
+        xs = [b[0] for b in bores]
+        ys = [b[1] for b in bores]
+        h = max(b[2] / 2.0 + wall for b in bores)
+        keep = max(b[2] / 2.0 + wall * 0.9 for b in bores)   # never cut into a boss
+        void = Polygon([(min(xs) + keep, min(ys) - h + hollow),
+                        (max(xs) - keep, min(ys) - h + hollow),
+                        (max(xs) - keep, max(ys) + h - hollow),
+                        (min(xs) + keep, max(ys) + h - hollow)])
+        if void.is_valid and not void.is_empty and void.area > 4 * hollow ** 2:
+            body = body.difference(void)
     for (x, y, d) in bores:
         body = body.difference(Point(x, y).buffer((d + SHRINK + clearance) / 2.0, 96))
     return body
@@ -444,6 +469,8 @@ if __name__ == "__main__":
     #   grip  0.00  -> prints at nominal, holds position   (bracket, foot)
     #   slip  0.25  -> slides by hand                      (spacer)
     #   loose 0.50  -> drops on                            (guides, sleeves over a taper)
+    ap.add_argument("--hollow", type=float, default=0.0,
+                    help="I-beam the spine: flange thickness mm (0 = solid)")
     ap.add_argument("--clearance", type=float, default=0.0,
                     help="extra bore clearance mm: 0 grip, 0.25 slip, 0.5 loose")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
@@ -466,7 +493,8 @@ if __name__ == "__main__":
         region = plate([(0, 0, a.stick)], a.wall, clearance=a.clearance)
     else:
         n = int(a.part[-1])
-        region = plate([(i * a.centres, 0, a.stick) for i in range(n)], a.wall, clearance=a.clearance)
+        region = plate([(i * a.centres, 0, a.stick) for i in range(n)], a.wall,
+                       clearance=a.clearance, hollow=a.hollow)
     g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                  a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
