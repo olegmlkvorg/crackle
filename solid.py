@@ -842,7 +842,7 @@ def collet(stick_d, od_small, od_large, slots, slot_w, height, wall, clearance=0
     with no clearance: the fingers only need to travel the shrink allowance to bite. Slots run the
     full height so each finger is a cantilever from the top rather than a hoop that must stretch.
     """
-    r_bore = (stick_d + SHRINK + clearance) / 2.0
+    r_bore = (stick_d + STICK_FIT + clearance) / 2.0   # bamboo, not a metal shaft
     if od_small <= 2 * r_bore + 2 * wall:
         raise SystemExit(
             f"collet: a {od_small:g}mm narrow end cannot hold a {stick_d:g}mm stick with {wall:g}mm "
