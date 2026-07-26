@@ -355,6 +355,10 @@ def check(path):
     import math as _m
     _area = _m.pi * (1.75 / 2) ** 2
     _px = _py = _pz = None; _pe = None; _cf = None; _starved = 0; _moves = 0; _first = None
+    # lowest Z at which anything is extruded = the first layer
+    _minz = min([float(_q.group(1)) for _q in
+                 (re.search(r'Z([\d.]+)', _l) for _l in _lines
+                  if re.match(r'^G1 .*E[\d.]', _l) and 'Z' in _l) if _q] or [0.0])
     _target = None
     for _ln in open(path):
         _t = _ln.split(';')[0].strip()
@@ -375,7 +379,14 @@ def check(path):
         _nz = float(_mz.group(1)) if _mz else _pz
         if None not in (_px, _py, _pz, _nx, _ny, _nz) and _t.startswith('G1') and _target:
             _d = _m.dist((_px, _py, _pz), (_nx, _ny, _nz))
-            if _d > 1e-6 and _me and _pe is not None and float(_me.group(1)) > _pe and _cf:
+            # THE FIRST LAYER IS METERED DIFFERENTLY ON PURPOSE, in every generator: it is
+            # pressed thinner than the body, so its flow is legitimately a fraction of the target.
+            # This check counted it as starvation and only passed on tall parts by luck — on a
+            # 23-layer plate layer 1 is 4% of moves, just under the 5% threshold; on a 3-layer tray
+            # it is 33% and the file was rejected. Exclude it explicitly instead of relying on the
+            # part being tall enough to dilute it.
+            if _d > 1e-6 and _me and _pe is not None and float(_me.group(1)) > _pe and _cf \
+                    and _nz > _minz + 1e-6:
                 _moves += 1
                 _q = (float(_me.group(1)) - _pe) * _area / _d * (_cf / 60)
                 if _q < _target * 0.5:

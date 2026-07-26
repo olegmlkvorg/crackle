@@ -187,6 +187,13 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
          tile=1, gap=6.0, mix=()):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
+    # LAYER 1 IS NOT AS TALL AS THE OTHERS, SO IT MUST NOT BE FED LIKE THEM.
+    # This metered every layer with the BODY cross-section (bead_w * bead_h) while printing layer 1
+    # at Z=press. With press 0.30 and bead_h 0.60 that is exactly 2x over-extrusion on the one layer
+    # that has to bond: 0.72mm2 of plastic commanded into a 0.30mm gap. The surplus has nowhere to
+    # go but under the nozzle, which ploughs the print off the plate — reported as "bonding failed",
+    # and the same mechanism that detached the foot on 2026-07-25.
+    e_first_mm = (bead_w * press) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
     flow = speed * bead_w * bead_h
     f = round(speed * 60)
@@ -314,7 +321,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
                     continue
                 # the hop between tiles extrudes THIN — continuous, but it snaps off
                 thin = 0.3 if (pi == 0 and li > 0) else 1.0
-                e += d * e_per_mm * thin
+                e += d * (e_first_mm if k == 0 else e_per_mm) * thin
                 L.append(f"G1 {'F%d ' % f if (px, py) == pts[0][0] and k == 0 else ''}"
                          f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
                 px, py = x, y
