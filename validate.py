@@ -339,6 +339,38 @@ def check(path):
     elif _worst_rate[0]:
         print(f"  peak move rate {_worst_rate[0]:.0f}/s (stall ~{machine.MAX_MOVES_PER_SEC:.0f})")
 
+    # TPU RUNS FULL FANS, ALWAYS. Oleg's rule, 2026-07-26, after finding the chamber fans at 0 on
+    # a TPU print: "tpu must allway run full fans, add a guard". hilbert/honeycomb/waves never set
+    # the aux fans at all, so every lattice printed with them off while belt/pulley/solid did set
+    # them — an inconsistency no one would notice from the source.
+    _mat = None
+    for _ln in open(path):
+        if _ln.startswith('; MATERIAL='):
+            _mat = _ln.split('=', 1)[1].strip().lower()
+        if 'BODY_START' in _ln:
+            break
+    if _mat == 'tpu':
+        _head = ""
+        for _ln in open(path):
+            _head += _ln
+            if 'BODY_START' in _ln:
+                break
+        _part = re.search(r'^M106 S(\d+)', _head, re.M)
+        _aux = re.findall(r'SET_PIN PIN=fan\d VALUE=(\d+)', _head)
+        _auxk = re.findall(r"SET_FAN_SPEED FAN=\w+ SPEED=([\d.]+)", _head)
+        if not _part or int(_part.group(1)) < 250:
+            problems.append(f"MATERIAL=tpu but the part fan is "
+                            f"{_part.group(1) if _part else 'OFF (M107)'} — TPU runs full fans.")
+        if _aux and min(int(v) for v in _aux) < 250:
+            problems.append(f"MATERIAL=tpu but a chamber fan is at {min(int(v) for v in _aux)}/255 "
+                            f"— TPU runs full fans.")
+        if _auxk and min(float(v) for v in _auxk) < 0.98:
+            problems.append(f"MATERIAL=tpu but a chamber fan is at {min(float(v) for v in _auxk)} "
+                            f"— TPU runs full fans.")
+        if not _aux and not _auxk:
+            problems.append("MATERIAL=tpu but the file sets no chamber fans at all — "
+                            "TPU runs full fans.")
+
     mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
     print(f"  lines={n}  maxZ={maxz:.2f}mm  travel={travel_mm/1000:.1f}m  extrude={extrude_mm/1000:.1f}m"

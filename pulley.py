@@ -97,7 +97,7 @@ def spiral_between(r0, r1, a0, turns_frac, n=60):
 
 def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, flow, temp, bed,
          fil_d, bed_xy, home, press, fan, spoke_adv, sleeve=0, first_w=3.0, aux=0.2,
-         brim=0, printer='k1c'):
+         brim=0, printer='k1c', material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
@@ -268,6 +268,7 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     # not be established from the artifact — in a project whose doctrine is measuring
     # the emitted file, that is a provenance hole. Now every file is reproducible from
     # its own header.
+    w(f"; MATERIAL={material}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
@@ -323,6 +324,9 @@ if __name__ == "__main__":
     ap.add_argument("--aux", type=float, default=0.2, help="side/chassis fan speed 0-1")
     ap.add_argument("--brim", type=int, default=5, help="brim rings on layer 1 (0 = none)")
     ap.add_argument("--fan", type=int, default=80)
+    ap.add_argument("--material", default="pla",
+                    choices=["pla","petg","tpu","abs"],
+                    help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
@@ -330,7 +334,8 @@ if __name__ == "__main__":
     bxy = machine.BED[a.printer]
     g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,
                  a.flow, a.temp, a.bed or machine.BED_TEMP['pla'], 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
-                 a.sleeve, a.first_w, a.aux, a.brim, a.printer)
+                 a.sleeve, a.first_w, a.aux, a.brim, a.printer,
+                 a.material)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/pulley_{a.printer}_od{a.od:.0f}_w{a.width:.0f}_b{a.bore:.0f}D_T{a.temp}.gcode"
     open(fn, "w").write(g)

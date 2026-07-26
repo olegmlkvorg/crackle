@@ -152,7 +152,7 @@ def add_cleats(pts, per, n_cleats, height, width, ease=0.35):
 
 def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flow, temp, bed,
          fil_d, bed_xy, home, press, fan, walls, fold=0, span=0.0, first_w=3.0, aux=0.2,
-         printer='k2plus', dish=2.0, rail=3.0):
+         printer='k2plus', dish=2.0, rail=3.0, material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
@@ -253,6 +253,7 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     # not be established from the artifact — in a project whose doctrine is measuring
     # the emitted file, that is a provenance hole. Now every file is reproducible from
     # its own header.
+    w(f"; MATERIAL={material}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
@@ -331,6 +332,9 @@ if __name__ == "__main__":
     ap.add_argument("--fold", type=int, default=0,
                     help="Moore-curve order to fold the belt into the plate (0 = plain ring)")
     ap.add_argument("--margin", type=float, default=12.0)
+    ap.add_argument("--material", default="pla",
+                    choices=["pla","petg","tpu","abs"],
+                    help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
@@ -358,7 +362,8 @@ if __name__ == "__main__":
                 f"run. Lower --fold or --cleat-h.")
     g, st = emit(length, a.ring_w, a.belt_w, a.cleats, a.cleat_h, a.cleat_w, a.bead_w, a.layer_h,
                  a.flow, a.temp, a.bed or machine.BED_TEMP['pla'], 1.75, bxy, not a.no_home, a.press, a.fan, a.walls,
-                 a.fold, span, a.first_w, a.aux, a.printer, a.dish, a.rail)
+                 a.fold, span, a.first_w, a.aux, a.printer, a.dish, a.rail,
+                 a.material)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/belt_{a.printer}_c{a.centres:.0f}_p{a.pulley_d:.0f}_"
           f"w{a.belt_w:.0f}_{a.cleats}cleat_T{a.temp}.gcode")

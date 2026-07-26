@@ -165,7 +165,7 @@ def round_corners(pts, fillet, seg=0.8):
     return out
 
 
-def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan, fillet=3.0, layers=1):
+def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan, fillet=3.0, layers=1, material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
@@ -216,6 +216,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # not be established from the artifact — in a project whose doctrine is measuring
     # the emitted file, that is a provenance hole. Now every file is reproducible from
     # its own header.
+    w(f"; MATERIAL={material}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
@@ -270,6 +271,9 @@ if __name__ == "__main__":
     ap.add_argument("--layers", type=int, default=1, help="stacked layers of comb")
     ap.add_argument("--fillet", type=float, default=3.0,
                     help="corner rounding radius mm — 0 gives sharp corners (banned)")
+    ap.add_argument("--material", default="pla",
+                    choices=["pla","petg","tpu","abs"],
+                    help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED),
                     help="picks the PRINTABLE plate size from machine.BED")
     ap.add_argument("--bed-size", default="", help="override WxY mm (rarely right)")

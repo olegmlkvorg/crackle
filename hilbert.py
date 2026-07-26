@@ -183,7 +183,7 @@ def joint_layers(pts, layers, bead_w, tenon_n, mortise_n, slot_gap, wall_n):
 
 
 def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         fillet, layers, closed, printer='k1c'):
+         fillet, layers, closed, printer='k1c', aux=0.2, material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
@@ -227,6 +227,11 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     w(f"M109 S{temp}")
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
+    # AUX FANS — hilbert/honeycomb/waves never set these at all, so every pad and lattice
+    # printed with the chamber fans OFF while belt/pulley/solid/flowtest set them. Oleg
+    # spotted it on the machine: "i noticed fans on 0, what the heck!?"
+    for _ln in machine.aux_fans(printer, aux):
+        w(_ln)
     w("M82")
     w("G92 E0")
     x0, y0 = pts[0]
@@ -244,6 +249,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # not be established from the artifact — in a project whose doctrine is measuring
     # the emitted file, that is a provenance hole. Now every file is reproducible from
     # its own header.
+    w(f"; MATERIAL={material}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
@@ -290,9 +296,14 @@ if __name__ == "__main__":
     ap.add_argument("--bed", type=int, default=80)
     ap.add_argument("--press", type=float, default=0.55)
     ap.add_argument("--fan", type=int, default=0)
+    ap.add_argument("--aux", type=float, default=0.2,
+                    help="chamber/side fans 0-1")
     ap.add_argument("--fillet", type=float, default=0)
     ap.add_argument("--layers", type=int, default=1)
     ap.add_argument("--open", action="store_true", help="open Hilbert instead of closed Moore")
+    ap.add_argument("--material", default="pla",
+                    choices=["pla","petg","tpu","abs"],
+                    help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED),
                     help="picks the PRINTABLE plate size from machine.BED")
     ap.add_argument("--bed-size", default="", help="override WxY mm (rarely right)")
@@ -307,7 +318,7 @@ if __name__ == "__main__":
     pitch = span / ((2 ** (a.order + 1) if not a.open else 2 ** a.order) - 1)
     fillet = a.fillet or max(0.8, pitch * 0.45)
     g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75, bxy,
-                 not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer)
+                 not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer, a.aux, a.material)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     kind = "hilbert" if a.open else "moore"

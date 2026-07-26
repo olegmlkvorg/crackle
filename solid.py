@@ -158,7 +158,7 @@ def order_rings(rings, here):
 
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4):
+         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
@@ -273,6 +273,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # not be established from the artifact — in a project whose doctrine is measuring
     # the emitted file, that is a provenance hole. Now every file is reproducible from
     # its own header.
+    w(f"; MATERIAL={material}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
@@ -517,6 +518,9 @@ if __name__ == "__main__":
                     help="I-beam the spine: flange thickness mm (0 = solid)")
     ap.add_argument("--clearance", type=float, default=0.0,
                     help="extra bore clearance mm: 0 grip, 0.25 slip, 0.5 loose")
+    ap.add_argument("--material", default="pla",
+                    choices=["pla","petg","tpu","abs"],
+                    help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
