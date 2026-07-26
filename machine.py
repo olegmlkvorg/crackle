@@ -129,6 +129,11 @@ MAX_Z_A = 1000.0
 # but the bed never reaches target and has no regulation left. Its real sustained ceiling is ~91C,
 # so k1c is set to 90: a target it can actually hold with power to spare.
 # The K2 by contrast holds 120.0 at power 0.36.
+#
+# FOLLOW-UP, same evening: at target 90 the K1C settles at 87.4 with power STILL at 1.00. Stable, so
+# it prints — but a heater pinned at full power has no headroom to answer a draft or a cold spool.
+# Its true regulating ceiling is nearer 85. Left at 90 because it is printing reliably there and
+# churn has its own cost; drop it to 85 if a print ever fails on bed temperature.
 BED_MAX = {"k2plus": 120.0, "k1c": 90.0, "f022": 90.0}
 BED_MAX_DEFAULT = 100.0
 
