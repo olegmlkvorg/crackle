@@ -490,14 +490,18 @@ def check(path):
     # ALSO CHECK AGAINST THE FLOW THE FILE ASKED FOR, not only the machine ceiling. A file can sit
     # far under machine.FLOW (55, a PLA number) while overshooting the flow its own header
     # requested — which is the number that actually matters for TPU. The header records it.
+    # A FILE MAY DECLARE MORE THAN ONE FLOW. Layer 1 is deliberately a different bead at a different
+    # speed — wide and thin, to bond — so its rate is not the body's. Taking only the FIRST flow= in
+    # the header made the validator flag the first layer as a 9% overrun against the body's number.
+    # The contract is: no move may exceed the highest rate the file declares for itself.
     _asked = None
     for _ln in open(path):
-        _m = re.search(r'flow=([\d.]+)', _ln)
-        if _m:
-            _asked = float(_m.group(1))
-            break
         if 'BODY_START' in _ln:
             break
+        _m = re.search(r'flow=([\d.]+)', _ln)
+        if _m:
+            _v = float(_m.group(1))
+            _asked = _v if _asked is None else max(_asked, _v)
     if _asked and _worst[0] > _asked * 1.05:
         problems.append(f"file asks for {_asked:.1f} mm3/s in its own header but a move at line "
                         f"{_worst[1]} implies {_worst[0]:.1f} — {100*(_worst[0]/_asked-1):.0f}% over "

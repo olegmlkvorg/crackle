@@ -193,6 +193,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # that has to bond: 0.72mm2 of plastic commanded into a 0.30mm gap. The surplus has nowhere to
     # go but under the nozzle, which ploughs the print off the plate — reported as "bonding failed",
     # and the same mechanism that detached the foot on 2026-07-25.
+    flow_target = flow
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
     flow = speed * bead_w * bead_h
     f = round(speed * 60)
@@ -209,19 +210,25 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
                 f"order or raise --span (need pitch >= {bead_w*1.6:.2f}mm).")
     n = (2 ** (order + 1)) if closed else (2 ** order)
     pitch = span / (n - 1)
-    # LAYER 1: THIN AND VERY WIDE. Oleg, 2026-07-26, after the tray broke contact at 30%:
-    # "adhese to plate better (first layer height 0.1 but keep the flow as high as before by
-    # instructing an insane width)". Squashing to 0.1mm maximises bed contact; holding the flow
-    # means the bead must spread to first_w = body_area / 0.1. For a 1.2x0.6 body that is 7.2mm —
-    # deliberately far past the nozzle, because at 0.1mm the plastic has nowhere to go but sideways.
+    # LAYER 1: 0.1mm OFF THE PLATE, FULL FLOW, WIDTH TAKES THE STRAIN.
+    # Oleg, 2026-07-26: "first layer maintain same 55 flow but put nozzle 0.1 to the plate,
+    # compensate with line width, set it to 10 if needed".
+    #
+    # I got this wrong once already by capping the width to keep the lattice cells open — which
+    # silently cut the flow, which was the whole thing being protected. The flow target is the
+    # constraint; the width is the free variable; the cells are not the priority on layer 1.
+    #
+    #   width 10.0 x height 0.1 = 1.00 mm2  ->  at 55 mm/s that is exactly 55 mm3/s
+    #
+    # The consequence is deliberate and worth stating: at a lattice pitch below the first-layer
+    # width the base fuses into a SOLID SHEET. That is a raft the object grows out of, and it is
+    # the strongest bed contact available.
     first_h = first_h or press
     if first_w <= 0:
-        first_w = (bead_w * bead_h) / first_h          # same volume per mm as the body
-    # ...but a bead wider than the lattice pitch welds neighbouring cells into a solid sheet.
-    _pitch_cap = 0.62 * pitch
-    if first_w > _pitch_cap:
-        first_w = _pitch_cap
-    e_first_mm = (first_w * first_h) / area
+        first_w = 10.0
+    first_area = first_w * first_h
+    first_speed = min(flow_target / first_area, machine.MAX_SPEED)
+    e_first_mm = first_area / area
 
     shapes = [round_corners(curve(o, span, closed), fillet) for o in orders]
     pts = shapes[0]
@@ -258,7 +265,11 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     w = L.append
     kind = "MOORE (closed)" if closed else "HILBERT (open)"
     w(f"; {kind} curve order {order} — one continuous extrusion, {n}x{n} grid = {n*n} cells")
+    # STATE BOTH FLOWS. Layer 1 is a different bead at a different speed, and a header that
+    # declares one number makes the validator flag the other as an overrun.
     w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow} mm3/s")
+    w(f"; layer 1: {first_w:.1f}x{first_h} = {first_area:.2f}mm2 at {first_speed:.0f} mm/s "
+      f"-> flow={first_area*first_speed:.1f} mm3/s, fan OFF")
     w(f"; {span:.0f}mm square, {pitch:.2f}mm pitch, {layers} layers, layer1 {first_h}mm x {first_w:.2f}mm wide, body bead {bead_w}x{bead_h}")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
@@ -272,7 +283,11 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
-    w("M107" if not fan else f"M106 S{fan}")
+    # LAYER 1 PRINTS WITH THE FAN OFF, whatever was asked for. Its job is to weld to the plate.
+    # The requested fan is clamped to what the material tolerates and switched on at layer 2.
+    _fan_frac = machine.fan_for(material, (fan or 0) / 255.0)
+    _fan_body = int(round(_fan_frac * 255))
+    w("M107                              ; layer 1: no part cooling, let it bond")
     # AUX FANS — hilbert/honeycomb/waves never set these at all, so every pad and lattice
     # printed with the chamber fans OFF while belt/pulley/solid/flowtest set them. Oleg
     # spotted it on the machine: "i noticed fans on 0, what the heck!?"
@@ -299,6 +314,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
+    w(f"G1 F{round(first_speed*60)}                 ; layer 1 speed holds the flow target")
 
     e = 0.0
     for k in range(layers):
@@ -309,8 +325,10 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
             # closed form was chosen over an open Hilbert.
             e += bead_h * e_per_mm
             L.append(f"; --- layer {k+1} at Z{z:.2f} — closed loop, straight up, same direction")
+            if k == 1:
+                L.append("M107" if not _fan_body else f"M106 S{_fan_body}   ; part cooling from layer 2")
             L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
-            L.append(f"G1 F{f}")
+            L.append(f"G1 F{f}")   # body rate from layer 2 onward
         # DO NOT PRETEND THE HEAD WENT BACK TO THE START.
         # This reset px,py to the FIRST tile's first point at every layer, but with --tile the head
         # physically finished at the LAST tile's end. The zero-length first move was then skipped
@@ -334,7 +352,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
                 # the hop between tiles extrudes THIN — continuous, but it snaps off
                 thin = 0.3 if (pi == 0 and li > 0) else 1.0
                 e += d * (e_first_mm if k == 0 else e_per_mm) * thin
-                L.append(f"G1 {'F%d ' % f if (px, py) == pts[0][0] and k == 0 else ''}"
+                L.append(f"G1 {'F%d ' % (round(first_speed*60) if k == 0 else f) if (px, py) == pts[0][0] else ''}"
                          f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
                 px, py = x, y
 

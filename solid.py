@@ -282,7 +282,11 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
-    w("M107" if not fan else f"M106 S{fan}")
+    # FAN OFF FOR LAYER 1, CLAMPED BY MATERIAL AFTER. Oleg: "fans for printing pla should be only
+    # on 20% at most". This defaulted to 80/255 = 31% and ran from the first millimetre, chilling
+    # the bond while it formed — the cheapest possible way to lose a first layer.
+    _fan_body = int(round(machine.fan_for(material, (fan or 0) / 255.0) * 255))
+    w("M107                              ; layer 1: no part cooling, let it bond")
     for ln in machine.aux_fans(printer, aux):
         w(ln)
     w("M82")
@@ -444,11 +448,21 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + height + 30:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
+    _prx = [p[0] for r in rings for p in r]
+    _pry = [p[1] for r in rings for p in r]
+    _pxs = (max(_prx) - min(_prx) + bead_w) if _prx else 0.0
+    _pys = (max(_pry) - min(_pry) + bead_w) if _pry else 0.0
     grams = e * area * 1.24 / 1000
     return "\n".join(L) + "\n", dict(rings=len(rings), layers=layers, grams=round(grams, 1),
                                      speed=round(speed), flow=round(flow, 1),
                                      mins=round(e / e_per_mm / speed / 60, 1),
-                                     size=(round(max(xs)-min(xs)), round(max(ys)-min(ys))))
+                                     # SIZE MUST BE THE PART, NOT THE PART PLUS ITS BRIM.
+                                     # xs/ys are taken from rings + base_extra, and base_extra IS
+                                     # the brim — so a 36.35mm foot reported as "45x45mm" and that
+                                     # number went onto a public page as the part's diameter. The
+                                     # brim is scaffolding; it snaps off and is not the object.
+                                     size=(round(_pxs), round(_pys)),
+                                     footprint=(round(max(xs)-min(xs)), round(max(ys)-min(ys))))
 
 
 def d_profile(d, flat_depth, n=96):
@@ -609,7 +623,9 @@ def main():
     ap.add_argument("--bed", type=int, default=0, help="0 = machine.BED_TEMP['pla']")
     ap.add_argument("--press", type=float, default=0.10)
     ap.add_argument("--first-w", type=float, default=3.0)
-    ap.add_argument("--fan", type=int, default=80)
+    ap.add_argument("--fan", type=int, default=51,
+                    help="0-255. 51 = 20%%, the PLA ceiling (machine.FAN_MAX). "
+                         "Layer 1 always prints with the fan OFF regardless.")
     ap.add_argument("--aux", type=float, default=0.2)
     ap.add_argument("--brim", type=int, default=4, help="brim rings on layer 1")
     ap.add_argument("--brim-gap", type=float, default=0.18,
@@ -689,7 +705,9 @@ def finish(region, a, label, fn):
     os.makedirs(a.out, exist_ok=True)
     open(fn, "w").write(g)
     print(f"{fn}")
-    print(f"  {st['size'][0]}x{st['size'][1]}mm, {st['rings']} concentric contours, "
+    print(f"  part {st['size'][0]}x{st['size'][1]}mm "
+          f"(with brim {st.get('footprint',st['size'])[0]}x{st.get('footprint',st['size'])[1]}), "
+          f"{st['rings']} concentric contours, "
           f"{st['layers']} layers = {a.height}mm tall")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g")
     return st

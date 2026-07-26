@@ -252,6 +252,25 @@ def aux_fans(printer, frac):
 # to bond, cold enough to release when the plate cools.
 BED_TEMP = {"pla": 60, "petg": 80, "tpu": 45, "abs": 100}
 
+# PART-COOLING FAN CEILING, PER MATERIAL. Oleg, 2026-07-26: "fans for printing pla should be only on
+# 20% at most". Running 80% on PLA — which this project had been doing on 320mm plates — chills the
+# bead as it lands, and on layer 1 it chills the bond while it is still forming. It is the cheapest
+# possible way to lose adhesion and it looks like nothing in the file.
+# TPU is the exception and goes the other way: it needs FULL fans (see the guard in validate.py).
+FAN_MAX = {"pla": 0.20, "petg": 0.40, "tpu": 1.00, "abs": 0.10}
+# LAYER 1 GETS NO FAN AT ALL, whatever the material. The first layer's job is to weld to the plate;
+# cooling it is working against the only thing that matters at that moment.
+FAN_FIRST_LAYER = 0.0
+
+
+def fan_for(material, requested):
+    """Clamp a requested part-cooling fraction to what the material tolerates, and say when it bites."""
+    cap = FAN_MAX.get(material, 0.20)
+    if requested > cap + 1e-9:
+        print(f"  ! fan {requested*100:.0f}% requested for {material} — capped to {cap*100:.0f}%. "
+              f"Cooling PLA hard is how first layers let go.")
+    return min(requested, cap)
+
 
 # TPU WORKING FLOW — measured 2026-07-25 on the K2 Plus, 0.8 nozzle, 230C, bed 45, all fans max.
 # Oleg watched a constant-speed ramp (8->20 mm3/s at a fixed 25 mm/s, width carrying the flow):

@@ -164,7 +164,11 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
-    w("M107" if not fan else f"M106 S{fan}")
+    # FAN OFF FOR LAYER 1, CLAMPED BY MATERIAL AFTER. Oleg: "fans for printing pla should be only
+    # on 20% at most". This defaulted to 80/255 = 31% and ran from the first millimetre, chilling
+    # the bond while it formed — the cheapest possible way to lose a first layer.
+    _fan_body = int(round(machine.fan_for(material, (fan or 0) / 255.0) * 255))
+    w("M107                              ; layer 1: no part cooling, let it bond")
     # Oleg: "other fans to 20%". side/chassis fans move air through the chamber without blasting
     # the bead the way the part fan does.
     # PER-MACHINE fan syntax. Hardcoding the K1C form here put SET_FAN_SPEED
@@ -329,7 +333,9 @@ if __name__ == "__main__":
     ap.add_argument("--first-w", type=float, default=3.0, help="base-layer ribbon width")
     ap.add_argument("--aux", type=float, default=0.2, help="side/chassis fan speed 0-1")
     ap.add_argument("--brim", type=int, default=5, help="brim rings on layer 1 (0 = none)")
-    ap.add_argument("--fan", type=int, default=80)
+    ap.add_argument("--fan", type=int, default=51,
+                    help="0-255. 51 = 20%%, the PLA ceiling (machine.FAN_MAX). "
+                         "Layer 1 always prints with the fan OFF regardless.")
     ap.add_argument("--material", default="pla",
                     choices=["pla","petg","tpu","abs"],
                     help="stamped into the file; TPU is fan-guarded")
