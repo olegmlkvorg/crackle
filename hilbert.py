@@ -241,13 +241,24 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # width the base fuses into a SOLID SHEET. That is a raft the object grows out of, and it is
     # the strongest bed contact available.
     first_h = first_h or press
-    if first_w <= 0:
-        first_w = 10.0
-    first_area = first_w * first_h
-    # DWELL, NOT RATE. The first layer's job is to wet the plate, and that takes TIME under the
-    # bead — not volume per second. Deposit per mm is fixed by first_area and does not change with
-    # speed, so slowing costs nothing but minutes and buys the whole bond.
-    first_speed = min(flow_target / first_area, machine.FIRST_LAYER_SPEED, machine.MAX_SPEED)
+    # HOLD THE FLOW, LET THE WIDTH ABSORB IT. Oleg: "why you did not force max flow for the first
+    # layer?!" — because I applied the speed cap as a FLOW cut, which is backwards. The first layer
+    # wants BOTH: a crawling head (dwell, so it wets the plate) AND the full flow target (material,
+    # so there is something to bond). Those are only compatible if the cross-section grows:
+    #
+    #     area = flow_target / first_speed      e.g. 55 / 20 = 2.75 mm2
+    #     width = area / first_h                     2.75 / 0.1 = 27.5 mm commanded
+    #
+    # It will not land 27.5mm wide. It does not need to — the point is the material, and on a
+    # lattice pitch far below that the first layer simply fuses into a solid raft, which is the
+    # strongest bed contact available and exactly what "its fine to break the shape" permits.
+    first_speed = min(machine.FIRST_LAYER_SPEED, machine.MAX_SPEED)
+    if first_w > 0:
+        first_area = first_w * first_h
+        first_speed = min(flow_target / first_area, first_speed)
+    else:
+        first_area = flow_target / first_speed
+        first_w = first_area / first_h
     e_first_mm = first_area / area
 
     shapes = [round_corners(curve(o, span, closed), fillet) for o in orders]
@@ -394,7 +405,8 @@ if __name__ == "__main__":
     ap.add_argument("--bead-h", type=float, default=machine.BEAD_H)
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
-    ap.add_argument("--bed", type=int, default=80)
+    ap.add_argument("--bed", type=int, default=0,
+                    help="0 = machine.BED_TEMP[material] — PLA is maxed to the plate ceiling by standing rule")
     ap.add_argument("--press", type=float, default=0.55)
     ap.add_argument("--first-h", type=float, default=0.10,
                     help="layer-1 height — thin squashes it into the plate (default 0.10)")
@@ -430,7 +442,7 @@ if __name__ == "__main__":
     # cell would eat into each other and the grid stops reading as a grid.
     pitch = span / ((2 ** (a.order + 1) if not a.open else 2 ** a.order) - 1)
     fillet = a.fillet or max(0.8, pitch * 0.45)
-    g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75, bxy,
+    g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed or machine.BED_TEMP[a.material], 1.75, bxy,
                  not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer, a.aux, a.material,
                  a.tile, a.gap, (), a.first_h, a.first_w, a.layer_z, a.fuse_ok)
     os.makedirs(a.out, exist_ok=True)

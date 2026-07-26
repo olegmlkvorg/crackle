@@ -264,7 +264,11 @@ def aux_fans(printer, frac):
 # TPU it is the WRONG DIRECTION: 120 is above TPU's softening point, so the first layer does not
 # stick, it FUSES -- and then has to be torn off, taking the PEI with it. TPU needs 40-50: enough
 # to bond, cold enough to release when the plate cools.
-BED_TEMP = {"pla": 60, "petg": 80, "tpu": 45, "abs": 100}
+# BED TEMPERATURE. Oleg, 2026-07-26: "max out the bed temp for pla always".
+# PLA goes to the machine ceiling (BED_MAX 120 — the config claims 135 and silently clamps).
+# TPU deliberately does NOT: Oleg ran it at 120 and reported "tpu on 120 bed is like glue, how to
+# scrap it away" — the belt welded itself to the plate.
+BED_TEMP = {"pla": 120, "petg": 80, "tpu": 45, "abs": 100}
 
 # PART-COOLING FAN CEILING, PER MATERIAL. Oleg, 2026-07-26: "fans for printing pla should be only on
 # 20% at most". Running 80% on PLA — which this project had been doing on 320mm plates — chills the

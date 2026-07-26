@@ -383,7 +383,7 @@ if __name__ == "__main__":
                 f"{2*a.cleat_h + a.bead_w + 2:.1f}mm — the cleats would print into the neighbouring "
                 f"run. Lower --fold or --cleat-h.")
     g, st = emit(length, a.ring_w, a.belt_w, a.cleats, a.cleat_h, a.cleat_w, a.bead_w, a.layer_h,
-                 a.flow, a.temp, a.bed or machine.BED_TEMP['pla'], 1.75, bxy, not a.no_home, a.press, a.fan, a.walls,
+                 a.flow, a.temp, a.bed or machine.BED_TEMP[a.material], 1.75, bxy, not a.no_home, a.press, a.fan, a.walls,
                  a.fold, span, a.first_w, a.aux, a.printer, a.dish, a.rail,
                  a.material)
     os.makedirs(a.out, exist_ok=True)

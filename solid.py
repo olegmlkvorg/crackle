@@ -771,7 +771,7 @@ def build_part(part, a):
 
 def finish(region, a, label, fn):
     g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
-                 a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
+                 a.bed or machine.BED_TEMP[a.material], 1.75, machine.BED[a.printer],
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
                  f"{label.upper()} stick{a.stick:g} wall{a.wall:g}")
     os.makedirs(a.out, exist_ok=True)
@@ -911,7 +911,7 @@ def emit_sequential(placed, a, counts, fn):
     for i, (name, r) in enumerate(placed):
         reg = shelled(r, a.cavity, a.floor, a.height, a.layer_h) if a.cavity > 0 else r
         g, st = emit(reg, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
-                     a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
+                     a.bed or machine.BED_TEMP[a.material], 1.75, machine.BED[a.printer],
                      not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
                      f"{name.upper()} #{i+1}", centre=False)
         pre, _, post = g.partition("; BODY_START\n")

@@ -233,7 +233,8 @@ if __name__ == "__main__":
     ap.add_argument("--bead-h", type=float, default=machine.BEAD_H)
     ap.add_argument("--flow", type=float, default=machine.FLOW)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
-    ap.add_argument("--bed", type=int, default=95)
+    ap.add_argument("--bed", type=int, default=0,
+                    help="0 = machine.BED_TEMP[material] — PLA is maxed to the plate ceiling by standing rule")
     ap.add_argument("--press", type=float, default=machine.PRESS_HARD)
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--layers", type=int, default=1, help="stacked layers of comb")
@@ -250,7 +251,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
            else machine.BED[a.printer])
-    g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75,
+    g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed or machine.BED_TEMP[a.material], 1.75,
                  bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers, a.printer)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer

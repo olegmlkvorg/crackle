@@ -462,7 +462,8 @@ if __name__ == "__main__":
                     help="turn spacing — 1.4 < the 1.53mm landed width, so the base is a\n                          SOLID surface for hoops to launch from and land on")
     ap.add_argument("--layer_h", type=float, default=1.2)
     ap.add_argument("--temp", type=int, default=machine.TEMP)
-    ap.add_argument("--bed", type=int, default=95)
+    ap.add_argument("--bed", type=int, default=0,
+                    help="0 = machine.BED_TEMP[material] — PLA is maxed to the plate ceiling by standing rule")
     ap.add_argument("--fan", type=int, default=51, help="20%% — off entirely for the first turn")
     ap.add_argument("--r0", type=float, default=25.0)
     ap.add_argument("--margin", type=float, default=75.0)
