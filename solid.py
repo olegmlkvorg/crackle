@@ -44,6 +44,18 @@ import machine
 SHRINK = 0.25
 
 
+def circle(r, seg=0.5):
+    """A circle whose SEGMENT LENGTH is fixed, not its segment count.
+
+    shapely renders every buffer at 96 segments whatever the radius, so a 6.25mm bore comes out with
+    0.205mm segments while a 60mm rim gets 2mm ones. The short end is the dangerous one: at 60 mm/s
+    a 0.2mm segment is 300 moves/second, which is exactly where Klipper drains its lookahead and
+    FREEZES with no error. Resolution is per quarter-circle, hence the /4.
+    """
+    res = max(4, int(math.ceil(2 * math.pi * max(r, 1e-6) / seg / 4)))
+    return Point(0, 0).buffer(r, res)
+
+
 def contours(region, bead_w, max_rings=200):
     """Concentric centrelines, outermost first, spaced one bead apart."""
     rings = []
@@ -371,7 +383,13 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                     px, py = X, Y
                     continue
                 d = math.dist((px, py), (X, Y))
-                if d < 1e-9:
+                # SKIP MOVES TOO SHORT TO BE MOTION. A rotating region (the mixer's helix) starts
+                # each layer a fraction off where the last one ended — measured 0.001mm. At 1e-9
+                # those survive as real commands and the planner is asked for 60,000 moves/second
+                # against a host that stalls near 300 and then FREEZES with no error. The material
+                # skipped is 0.0005mm of filament, i.e. nothing; the command is the whole cost.
+                if d < 0.02:
+                    px, py = X, Y
                     continue
                 # ONLY the step INTO a new loop may be a hop. A long move inside a loop is the
                 # part's own straight wall -- shapely stores a flat edge as two points, so a naive
@@ -639,6 +657,54 @@ def spacer_shell(bore_d, od, wall, height, floor_h, layer_h, vents=0, vent_w=4.0
     return region_at
 
 
+def mixer(shaft_d, od, blades, blade_w, hub_w, twist_deg, height, layer_h, clearance=0.0):
+    """A helical mixing paddle for a 6mm motor shaft.
+
+    Oleg, 2026-07-26: "you will need to print a mizer for me. i have cnc motor with contorlable
+    speed 6mm shaft" — for the gypsum+sand fill, which at 15% binder is stiff and sand-heavy rather
+    than pourable.
+
+    WHY IT TWISTS. A flat paddle spun in a stiff mix just carves a channel and the material rides
+    around with it; nothing folds. Rotating the blade profile as it rises makes a helix, so the
+    blades drive material DOWNWARD or upward along the axis depending on rotation direction — the
+    mix is turned over, not merely swept. That costs nothing here: this generator already varies its
+    region per layer, so a twist is a rotation of the same profile rather than new geometry.
+
+    Printable because every layer is still a flat cross-section: the helix exists only in how those
+    cross-sections are indexed, never as an overhang. Twist per layer is bounded so consecutive
+    layers overlap by more than half a bead — beyond that the blade edge steps into thin air.
+
+    THE BORE IS ROUND AND UNDERSIZED ON PURPOSE. Press it onto the shaft while the part is still hot
+    off the plate and the shaft moulds its own seat, including any flat — Oleg's own discovery, and
+    it beats modelling a D because it cannot be misaligned and one part fits any shaft of that size.
+    """
+    r_hub = shaft_d / 2 + hub_w
+    r_out = od / 2
+    r_bore = (shaft_d + SHRINK + clearance) / 2.0
+
+    # bound the twist so consecutive layers still overlap along the blade tip
+    layers = max(1, int(round(height / layer_h)))
+    tip_step = math.radians(twist_deg / max(layers - 1, 1)) * r_out
+    if tip_step > blade_w * 0.5:
+        safe = math.degrees((blade_w * 0.5) / r_out) * max(layers - 1, 1)
+        raise SystemExit(
+            f"a {twist_deg:.0f} deg twist over {height:g}mm moves the blade tip {tip_step:.2f}mm "
+            f"per layer, more than half the {blade_w:g}mm blade — consecutive layers would not "
+            f"overlap and the tip prints onto air. Max here is about {safe:.0f} deg.")
+
+    base = circle(r_hub)
+    for i in range(blades):
+        a = 2 * math.pi * i / blades
+        blade = box(0, -blade_w / 2.0, r_out, blade_w / 2.0)
+        base = unary_union([base, rotate(blade, math.degrees(a), origin=(0, 0))])
+    base = base.difference(circle(r_bore))
+
+    def region_at(t):
+        return rotate(base, twist_deg * t, origin=(0, 0))
+
+    return region_at
+
+
 def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
     """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
 
@@ -667,12 +733,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", default="bracket",
                     choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4",
-                             "gauge", "adapter", "shell"])
+                             "gauge", "adapter", "shell", "mixer"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=6.35, help="1/4 inch bamboo (6.35mm)")
     ap.add_argument("--centres", type=float, default=32.0)
     ap.add_argument("--wall", type=float, default=4.0)
-    ap.add_argument("--od", type=float, default=34.0, help="shell outer diameter")
+    ap.add_argument("--od", type=float, default=34.0, help="shell/mixer outer diameter")
+    ap.add_argument("--blades", type=int, default=3)
+    ap.add_argument("--blade-w", type=float, default=10.0)
+    ap.add_argument("--hub-w", type=float, default=4.0)
+    ap.add_argument("--twist", type=float, default=180.0, help="total blade twist over the height")
     ap.add_argument("--vents", type=int, default=0,
                     help="vertical vent slots — REQUIRED for expanding foam, 0 for gypsum+sand")
     ap.add_argument("--vent-w", type=float, default=4.0, help="vent slot width mm")
@@ -757,6 +827,9 @@ def build_part(part, a):
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
+    elif part == "mixer":
+        return mixer(a.axle, a.od, a.blades, a.blade_w, a.hub_w, a.twist,
+                     a.height, a.layer_h, clearance=a.clearance)
     elif part == "shell":
         return spacer_shell(a.stick, a.od, a.wall, a.height, a.floor, a.layer_h,
                             vents=a.vents, vent_w=a.vent_w, vent_from=a.vent_from,

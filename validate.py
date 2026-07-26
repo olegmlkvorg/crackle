@@ -556,6 +556,7 @@ def check(path):
     _f = 0.0
     _pp = None
     _worst_rate = (0.0, 0)
+    _win = []
     _body = False
     for _i, _ln in enumerate(open(path)):
         if 'BODY_START' in _ln:
@@ -573,9 +574,19 @@ def check(path):
         if _pp and _f > 0:
             _d = math.dist(_p, _pp)
             if _d > 1e-9:
-                _r = _f / _d
-                if _r > _worst_rate[0]:
-                    _worst_rate = (_r, _i + 1)
+                # A SUSTAINED RATE, NOT A SINGLE SEGMENT. Klipper freezes because the host cannot
+                # REFILL the lookahead buffer, which takes many short moves in a row — one short
+                # segment is absorbed and harmless. Measuring per-segment flagged a helical mixer
+                # 132 times for its 132 layer-start steps (one 0.174mm move each), which no machine
+                # would ever notice. The window is the buffer's own scale.
+                _win.append((_d, _f))
+                if len(_win) > 24:
+                    _win.pop(0)
+                if len(_win) == 24:
+                    _t = sum(d / f for d, f in _win)
+                    _r = len(_win) / _t if _t > 0 else 0
+                    if _r > _worst_rate[0]:
+                        _worst_rate = (_r, _i + 1)
         _pp = _p
     if _worst_rate[0] > machine.MAX_MOVES_PER_SEC:
         problems.append(f"line {_worst_rate[1]} needs {_worst_rate[0]:.0f} moves/s — the host stalls "
