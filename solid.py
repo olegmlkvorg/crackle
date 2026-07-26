@@ -266,10 +266,14 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
         _ts = sorted({min(1.0, i / max(1, _n_layers - 1)) for i in range(0, _n_layers, _step)} | {1.0})
     else:
         _ts = [0.0]
+    # Computed ONCE and reused: the fill guard, the off-plate bounds check, and the size/contour
+    # report all need the same per-layer contours, and contours() is the expensive call here.
+    _layer_rings = {}
     _fills = []
     for _t in _ts:
         _r = region(_t) if _is_fn else region
         _rr = contours(_r, bead_w) if _is_fn else rings
+        _layer_rings[_t] = _rr
         _fills.append((sum(LineString(r).length for r in _rr) * bead_w / max(_r.area, 1e-9), _t))
     _fill, _fill_t = max(_fills)
     _over = sum(1 for _f, _ in _fills if _f > 1.02)
@@ -316,7 +320,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     _allr = rings + base_extra
     if _is_fn:
         for _t in _ts:
-            _allr = _allr + contours(region(_t), bead_w)
+            _allr = _allr + _layer_rings[_t]
     xs = [p[0] for r in _allr for p in r]
     ys = [p[1] for r in _allr for p in r]
     # CENTRING IS FOR A SINGLE PART ONLY.
@@ -349,7 +353,12 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     L = []
     w = L.append
     w(f"; {name} — solid part as concentric contours, one continuous path per layer")
-    w(f"; {len(rings)} contours, bead {bead_w}x{layer_h}, {layers} layers = {height}mm tall")
+    # CONTOUR COUNT VARIES WITH HEIGHT on any part whose region does. A vented shell announced
+    # "11 contours" while its layers actually run 6 / 9 / 11 — a header describing 4% of the
+    # file. State the RANGE when it varies, one number only when it genuinely is one number.
+    _rc = sorted({len(_rr) for _rr in _layer_rings.values()})
+    _rcs = f"{_rc[0]}" if len(_rc) == 1 else f"{_rc[0]}-{_rc[-1]}"
+    w(f"; {_rcs} contours, bead {bead_w}x{layer_h}, {layers} layers = {height}mm tall")
     w(f"; {speed:.0f} mm/s at flow {flow:.1f} mm3/s (cap {machine.MAX_SPEED:.0f} mm/s)")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
@@ -540,8 +549,13 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + height + 30:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
-    _prx = [p[0] for r in rings for p in r]
-    _pry = [p[1] for r in rings for p in r]
+    # SIZE IS THE WHOLE PART, NOT ITS FIRST LAYER. Taken from `rings` alone this described layer 0
+    # and nothing else, so any part whose region changes with height mis-reported itself: the mixer
+    # printed 59.5x59.5mm while announcing 49x57. Same root as the fill and off-plate guards — a
+    # part that changes shape as it climbs cannot be summarised by its base. The brim is still
+    # excluded (base_extra is scaffolding, not the object); this is every sampled LAYER of the part.
+    _prx = [p[0] for _rr in _layer_rings.values() for r in _rr for p in r]
+    _pry = [p[1] for _rr in _layer_rings.values() for r in _rr for p in r]
     _pxs = (max(_prx) - min(_prx) + bead_w) if _prx else 0.0
     _pys = (max(_pry) - min(_pry) + bead_w) if _pry else 0.0
     grams = e * area * 1.24 / 1000
