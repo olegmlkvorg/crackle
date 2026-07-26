@@ -177,9 +177,16 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
         if not _is_fn:
             return rings
         t = kk / max(1, layers - 1)
-        key = round(t, 3) < 0.5 if True else t
+        # CACHE ON THE REGION ITSELF, not on a guessed split point. This used to be
+        # `key = round(t,3) < 0.5` — a BOOLEAN — so every per-layer part split at exactly half
+        # height no matter what it asked for. Correct for the adapter by luck, wrong for a cavity
+        # whose floor is 2.4mm of a 14mm part (t=0.17): the cavity started at layer 17 instead of 6.
+        # The region's WKB is an exact identity, so distinct geometry gets computed once and
+        # identical geometry is shared.
+        reg = region(t)
+        key = reg.wkb
         if key not in _cache:
-            _cache[key] = contours(region(t), bead_w)
+            _cache[key] = contours(reg, bead_w)
         return _cache[key]
 
     # BRIM — Oleg: "k1 did not bind well to bed". These parts press their base layer to 0.1mm and
@@ -370,6 +377,38 @@ def adapter(shaft_d, flat_depth, stick_d, wall, split=0.5):
     return region_at
 
 
+def shelled(region, shell, floor_h, height, layer_h):
+    """Turn a solid region into a SHELL WITH A FLOOR, open at the top, to be filled with sand +
+    gypsum after printing.
+
+    Oleg: "for weight add a cavity, i will put sand + gipsum ... we have plan to use that in
+    general for strugural prints".
+
+    Why this beats both solid and hollow:
+      · a shell is ~30% of the material, so it prints in ~a third of the time
+      · filled it is HEAVIER than solid PLA (sand+gypsum ~1.8 g/cm3 against PLA's 1.24)
+      · loose sand is an excellent damper — grains rub and eat energy — and the gypsum sets it so
+        it stops migrating and becomes structural
+      · mass lowers a structure's natural frequency, which is what you want in a base or a foot
+
+    Open at the TOP on purpose: closing it would need the roof to bridge over the cavity, and this
+    toolchain has no support and no bridging. Print it mouth-up, fill, let it set.
+
+    Returns a CALLABLE of layer fraction, which emit() already understands (see adapter()).
+    """
+    floor_frac = min(0.9, max(0.0, floor_h / max(height, 1e-9)))
+
+    def region_at(t):
+        if t <= floor_frac:
+            return region
+        inner = region.buffer(-shell)
+        if inner.is_empty:
+            return region
+        return region.difference(inner)
+
+    return region_at
+
+
 def plate(bores, wall, thickness=None, clearance=0.0, hollow=0.0):
     """A plate with N vertical bores — the general bamboo joint.
 
@@ -469,6 +508,11 @@ if __name__ == "__main__":
     #   grip  0.00  -> prints at nominal, holds position   (bracket, foot)
     #   slip  0.25  -> slides by hand                      (spacer)
     #   loose 0.50  -> drops on                            (guides, sleeves over a taper)
+    ap.add_argument("--cavity", type=float, default=0.0,
+                    help="shell wall mm for a sand+gypsum cavity — MUST be a bead "
+                         "multiple (1.2/2.4/3.6); 0 = solid")
+    ap.add_argument("--floor", type=float, default=2.4,
+                    help="solid floor under the cavity, mm")
     ap.add_argument("--hollow", type=float, default=0.0,
                     help="I-beam the spine: flange thickness mm (0 = solid)")
     ap.add_argument("--clearance", type=float, default=0.0,
@@ -495,6 +539,8 @@ if __name__ == "__main__":
         n = int(a.part[-1])
         region = plate([(i * a.centres, 0, a.stick) for i in range(n)], a.wall,
                        clearance=a.clearance, hollow=a.hollow)
+    if a.cavity > 0:
+        region = shelled(region, a.cavity, a.floor, a.height, a.layer_h)
     g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                  a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,

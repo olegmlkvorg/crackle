@@ -128,6 +128,31 @@ def printer_of(path):
     return None
 
 
+def remote_differs(ip, path):
+    """True if a file of this name on the printer differs from the local one.
+
+    Regenerating a part with the same parameters produces the same FILENAME with different
+    CONTENT — a hollowed spacer and a solid one are both spacer2_k1c_s6.35_c100_h14_T210.gcode.
+    The printer then runs whichever was uploaded, and nothing on screen says which. Compare the
+    ARGV stamp, which every generator now writes.
+    """
+    name = os.path.basename(path)
+    try:
+        req = urllib.request.Request(f"http://{ip}:7125/server/files/gcodes/{name}")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            head = r.read(4096).decode("utf-8", "replace")
+    except Exception:
+        return False
+    def argv_of(text):
+        for ln in text.splitlines():
+            if ln.startswith("; ARGV:"):
+                return ln.strip()
+            if "BODY_START" in ln:
+                break
+        return None
+    return argv_of(head) != argv_of(open(path).read(4096))
+
+
 def upload(ip, path, force=False, skip_validate=False):
     if not skip_validate and not _validated(path):
         return False
@@ -179,6 +204,9 @@ if __name__ == "__main__":
     # THE FILE MUST MATCH THE MACHINE. push knows both facts and never compared them: a K2 file
     # started on the K1C runs 130mm past the plate. The stamp is written by every generator.
     for _f in a.files:
+        if remote_differs(ip, _f):
+            print(f"   note: {os.path.basename(_f)} on {a.printer} has a DIFFERENT command stamp "
+                  f"than the local file — overwriting with the local one.")
         _built = printer_of(_f)
         if _built and _built != a.printer:
             raise SystemExit(f"{os.path.basename(_f)} was built for {_built}, but you are sending "
