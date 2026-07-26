@@ -443,7 +443,7 @@ if __name__ == "__main__":
     # cell would eat into each other and the grid stops reading as a grid.
     pitch = span / ((2 ** (a.order + 1) if not a.open else 2 ** a.order) - 1)
     fillet = a.fillet or max(0.8, pitch * 0.45)
-    g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed or machine.BED_TEMP[a.material], 1.75, bxy,
+    g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed or machine.bed_for(a.material, a.printer), 1.75, bxy,
                  not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer, a.aux, a.material,
                  a.tile, a.gap, (), a.first_h, a.first_w, a.layer_z, a.fuse_ok)
     os.makedirs(a.out, exist_ok=True)

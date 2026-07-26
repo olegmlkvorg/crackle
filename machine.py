@@ -114,7 +114,26 @@ def speed_for(flow, bead_area, label=""):
                            # 2026-07-25 as a ~3s stutter at 990 moves/s
 MAX_Z_V = 30.0
 MAX_Z_A = 1000.0
-BED_MAX = 120.0        # config claims 135; the machine silently clamps to 120
+# BED CEILING IS PER MACHINE, MEASURED, NOT PER CONFIG.
+# Oleg's rule is "max out the bed temp for pla always". The K2 holds 120.0 rock steady. The K1C
+# CANNOT: measured 2026-07-26 with target 120 and heater power pinned at 1.00, it climbed to 117.4
+# before the print started and then FELL — 116.3, 113.5, 110.9 — losing about 2.5C every 30s once
+# motion and airflow began. Its config claims max_temp 135; what it can hold under load is another
+# thing entirely, and only the second number is real.
+# Consequences of ignoring this: ~15 minutes of pre-print heating that never satisfies M190, then a
+# bed sagging through the whole print.
+BED_MAX = {"k2plus": 120.0, "k1c": 100.0, "f022": 100.0}
+BED_MAX_DEFAULT = 100.0
+
+
+def bed_for(material, printer):
+    """The bed target this material wants, clamped to what this machine can actually hold."""
+    want = BED_TEMP.get(material, 60)
+    cap = BED_MAX.get(printer, BED_MAX_DEFAULT)
+    if want > cap:
+        print(f"  ! bed {want}C for {material} exceeds what the {printer} can hold under load "
+              f"({cap:.0f}C measured) — using {cap:.0f}. Its config claims more; it cannot keep it.")
+    return min(want, cap)
 
 # ---------------------------------------------------------------------------------------------
 # NO TRAVEL IS A RULE. Oleg, 2026-07-25: "always our prints are continuous extrusion. no travel

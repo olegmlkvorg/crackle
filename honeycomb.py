@@ -382,7 +382,7 @@ if __name__ == "__main__":
     machine.check_flow(a.flow, f' for honeycomb.py')
     bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
            else machine.BED[a.printer])
-    g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed or machine.BED_TEMP[a.material], 1.75,
+    g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed or machine.bed_for(a.material, a.printer), 1.75,
                  bxy, not a.no_home, a.press, a.fan, a.fillet, a.layers, a.material, a.printer)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer

@@ -346,7 +346,7 @@ if __name__ == "__main__":
     machine.check_flow(a.flow, f' for pulley.py')
     bxy = machine.BED[a.printer]
     g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,
-                 a.flow, a.temp, a.bed or machine.BED_TEMP[a.material], 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
+                 a.flow, a.temp, a.bed or machine.bed_for(a.material, a.printer), 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
                  a.sleeve, a.first_w, a.aux, a.brim, a.printer,
                  a.material)
     os.makedirs(a.out, exist_ok=True)
