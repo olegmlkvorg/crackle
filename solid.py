@@ -306,7 +306,17 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     if not rings:
         raise SystemExit(f"{name}: the region is smaller than one {bead_w}mm bead — nothing to print.")
 
-    _allr = rings + base_extra + (contours(region(1.0), bead_w) if _is_fn else [])
+    # THE EXTENT MUST COME FROM EVERY LAYER, for the same reason the fill ratio does. This sampled
+    # the two ENDPOINT layers, t=0 and t=1 — and a 120-degree twist maps t=1 straight back onto
+    # t=0, so the two samples agree with each other and both miss the widest part of the object.
+    # Measured: 14274 extruding moves off the plate, the first at layer 16, on a file that emitted
+    # clean. validate.py caught it afterwards; solid.py never calls validate.py, so the only thing
+    # between that file and the machine was this line. Re-uses the per-layer samples built for the
+    # fill guard above, so it costs nothing extra.
+    _allr = rings + base_extra
+    if _is_fn:
+        for _t in _ts:
+            _allr = _allr + contours(region(_t), bead_w)
     xs = [p[0] for r in _allr for p in r]
     ys = [p[1] for r in _allr for p in r]
     # CENTRING IS FOR A SINGLE PART ONLY.
