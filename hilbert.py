@@ -184,7 +184,7 @@ def joint_layers(pts, layers, bead_w, tenon_n, mortise_n, slot_gap, wall_n):
 
 def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          fillet, layers, closed, printer='k1c', aux=0.2, material='pla',
-         tile=1, gap=6.0, mix=()):
+         tile=1, gap=6.0, mix=(), first_h=0.0, first_w=0.0):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
     # LAYER 1 IS NOT AS TALL AS THE OTHERS, SO IT MUST NOT BE FED LIKE THEM.
@@ -193,7 +193,6 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # that has to bond: 0.72mm2 of plastic commanded into a 0.30mm gap. The surplus has nowhere to
     # go but under the nozzle, which ploughs the print off the plate — reported as "bonding failed",
     # and the same mechanism that detached the foot on 2026-07-25.
-    e_first_mm = (bead_w * press) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
     flow = speed * bead_w * bead_h
     f = round(speed * 60)
@@ -210,6 +209,19 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
                 f"order or raise --span (need pitch >= {bead_w*1.6:.2f}mm).")
     n = (2 ** (order + 1)) if closed else (2 ** order)
     pitch = span / (n - 1)
+    # LAYER 1: THIN AND VERY WIDE. Oleg, 2026-07-26, after the tray broke contact at 30%:
+    # "adhese to plate better (first layer height 0.1 but keep the flow as high as before by
+    # instructing an insane width)". Squashing to 0.1mm maximises bed contact; holding the flow
+    # means the bead must spread to first_w = body_area / 0.1. For a 1.2x0.6 body that is 7.2mm —
+    # deliberately far past the nozzle, because at 0.1mm the plastic has nowhere to go but sideways.
+    first_h = first_h or press
+    if first_w <= 0:
+        first_w = (bead_w * bead_h) / first_h          # same volume per mm as the body
+    # ...but a bead wider than the lattice pitch welds neighbouring cells into a solid sheet.
+    _pitch_cap = 0.62 * pitch
+    if first_w > _pitch_cap:
+        first_w = _pitch_cap
+    e_first_mm = (first_w * first_h) / area
 
     shapes = [round_corners(curve(o, span, closed), fillet) for o in orders]
     pts = shapes[0]
@@ -247,7 +259,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     kind = "MOORE (closed)" if closed else "HILBERT (open)"
     w(f"; {kind} curve order {order} — one continuous extrusion, {n}x{n} grid = {n*n} cells")
     w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow} mm3/s")
-    w(f"; {span:.0f}mm square, {pitch:.2f}mm pitch, {layers} layers, pressed to {press}mm")
+    w(f"; {span:.0f}mm square, {pitch:.2f}mm pitch, {layers} layers, layer1 {first_h}mm x {first_w:.2f}mm wide, body bead {bead_w}x{bead_h}")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
     w("; HEADER_BLOCK_END")
@@ -269,7 +281,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     w("M82")
     w("G92 E0")
     x0, y0 = pts[0][0]
-    w(f"G1 Z{press:.3f} F600")
+    w(f"G1 Z{first_h:.3f} F600")   # prime at the first-layer height, not the body press
     _apx = max(6.0, x0 - 55.0)
     _apy = max(6.0, y0 - 12.0)
     w(f"G0 F9000 X{_apx:.3f} Y{_apy:.3f}")
@@ -290,7 +302,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
 
     e = 0.0
     for k in range(layers):
-        z = press + k * bead_h
+        z = first_h + k * bead_h
         if k:
             # A closed curve ends where it starts, so the next layer needs nothing but a vertical
             # step -- no repositioning, no reversal, no seam artifact. This is the whole reason the
@@ -327,7 +339,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
                 px, py = x, y
 
     L += ["M107", "M104 S0", "M140 S0",
-          f"G1 Z{press + (layers-1)*bead_h + 40:.1f} F900",
+          f"G1 Z{first_h + (layers-1)*bead_h + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
     return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed),
@@ -346,6 +358,11 @@ if __name__ == "__main__":
     ap.add_argument("--temp", type=int, default=machine.TEMP)
     ap.add_argument("--bed", type=int, default=80)
     ap.add_argument("--press", type=float, default=0.55)
+    ap.add_argument("--first-h", type=float, default=0.10,
+                    help="layer-1 height — thin squashes it into the plate (default 0.10)")
+    ap.add_argument("--first-w", type=float, default=0.0,
+                    help="layer-1 bead WIDTH; 0 = auto, wide enough to hold the body flow at "
+                         "--first-h, capped at 0.62x the lattice pitch so cells stay open")
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--aux", type=float, default=0.2,
                     help="chamber/side fans 0-1")
@@ -372,7 +389,7 @@ if __name__ == "__main__":
     fillet = a.fillet or max(0.8, pitch * 0.45)
     g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75, bxy,
                  not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer, a.aux, a.material,
-                 a.tile, a.gap)
+                 a.tile, a.gap, (), a.first_h, a.first_w)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     kind = "hilbert" if a.open else "moore"
@@ -381,4 +398,4 @@ if __name__ == "__main__":
     print(f"{fn}\n  order {a.order} -> {st['cells']} cells, {st['pitch']}mm pitch, "
           f"{span:.0f}mm square, fillet {fillet:.2f}mm, {st['pts']} points")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, "
-          f"{a.layers} layers pressed to {a.press}mm")
+          f"{a.layers} layers, layer 1 {a.first_h}mm tall")
