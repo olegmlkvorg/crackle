@@ -327,8 +327,10 @@ if __name__ == "__main__":
     ap.add_argument("--spoke-adv", type=float, default=0.09, help="radians the web advances/layer")
     ap.add_argument("--bead-w", type=float, default=1.2)
     ap.add_argument("--layer-h", type=float, default=0.4)
-    ap.add_argument("--flow", type=float, default=machine.FLOW)
-    ap.add_argument("--temp", type=int, default=machine.TEMP)
+    ap.add_argument("--flow", type=float, default=0,
+                    help="0 = the material's measured ceiling (PLA keeps the max-flow rule)")
+    ap.add_argument("--temp", type=int, default=0,
+                    help="0 = machine.temp_for(material). A PLA 210 default reached TPU in every generator.")
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = machine.BED_TEMP for the material; 120 WELDS TPU")
     ap.add_argument("--press", type=float, default=0.10, help="base-layer gap — pressed")
@@ -345,6 +347,9 @@ if __name__ == "__main__":
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    # MATERIAL ROUTES THE NOZZLE AND THE FLOW TOO — see machine.MATERIAL_TEMP.
+    a.temp = a.temp or machine.temp_for(a.material)
+    a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for pulley.py')
     machine.check_flow(a.flow, f' for pulley.py')
     bxy = machine.BED[a.printer]
     g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,

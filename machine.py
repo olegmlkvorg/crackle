@@ -190,6 +190,43 @@ BED_MAX = {"k2plus": 120.0, "k1c": 90.0, "f022": 90.0}
 BED_MAX_DEFAULT = 100.0
 
 
+# MATERIAL MUST ROUTE THE NOZZLE AND THE FLOW, NOT JUST THE BED AND THE FANS.
+# Audited 2026-07-26 across all six generators: `--material tpu` set the bed to 45 and the fans to
+# full — correctly — and then emitted `M104 S210` and 43.2 mm3/s in EVERY ONE OF THEM, against a
+# MEASURED TPU working flow of 15.2 and a rated 200C. That is 2.8x the material's flow at 10C over
+# its temperature, on every TPU file this project has ever produced.
+#
+# This is almost certainly the TPU CLOG that has been blamed on the hardware for two days. The note
+# under TPU_FLOW already records that 220-230 "jammed the extruder ~35 s into a print"; nobody
+# connected it to the fact that asking for TPU never actually asked for TPU. The failure was
+# consistently read as a nozzle problem because the file looked like it was requesting TPU settings
+# — the bed and the fans, the two visible things, were right.
+#
+# Filed in the audit as a single-file defect (belt.py routing "the bed only"). It was universal.
+# (the tables themselves live at the END of this file — they reference TEMP/TPU_TEMP/TPU_FLOW,
+#  which are defined further down, and a dict literal resolves its values immediately.)
+
+
+def temp_for(material):
+    """Nozzle temperature this material is rated for."""
+    return MATERIAL_TEMP.get(material, TEMP)
+
+
+def flow_for(material, requested, label=""):
+    """Clamp a flow to the material's MEASURED ceiling.
+
+    Directional on purpose: PLA's ceiling is the standing max-flow rule, so this never lowers a PLA
+    print. It exists to stop a PLA-shaped default reaching a material that cannot swallow it.
+    """
+    cap = MATERIAL_FLOW.get(material, FLOW)
+    if requested > cap + 1e-9:
+        print(f"  ! flow {requested:g} mm3/s is a {'PLA' if abs(requested-FLOW) < 1e-6 else 'carried-over'} "
+              f"number on {material}{label} — its measured ceiling is {cap:g}. Using {cap:g}. "
+              f"{'TPU jams the extruder within a minute above this.' if material == 'tpu' else ''}")
+        return cap
+    return requested
+
+
 def bed_for(material, printer):
     """The bed target this material wants, clamped to what this machine can actually hold."""
     want = BED_TEMP.get(material, 60)
@@ -453,3 +490,9 @@ TPU_FLOW = 15.2
 # The hotend heatsink fan was verified running (speed 1.0) before blaming temperature. The K2's
 # separate `output_pin extruder_fan` reads 0.0 and is the next lever if 200 ever proves marginal.
 TPU_TEMP = 200
+
+
+# Routing tables for temp_for()/flow_for() above. Defined here because they read TEMP, TPU_TEMP
+# and TPU_FLOW, all of which appear further up only after their measurement notes.
+MATERIAL_TEMP = {"pla": TEMP, "petg": 240, "tpu": TPU_TEMP, "abs": 250}
+MATERIAL_FLOW = {"pla": FLOW, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}

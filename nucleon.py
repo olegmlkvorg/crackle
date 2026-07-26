@@ -112,6 +112,15 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_
             pts.append((cx + x * c - y * s, cy + x * s + y * c))
             R = _ellipse_R(a, b, t)
             seg = max(2.0 * R * h, 0.15)              # arc length we may travel before turning
+            # SHAPE FIDELITY MUST NOT DEPEND ON SPEED. The budget above is a MOTION budget — how far
+            # the head may run before it has to turn — and it grows as speed falls. So a slow print
+            # sampled the ellipse COARSELY: at TPU's 21 mm/s the chords cut visibly inside the true
+            # curve, layers stopped landing on each other, and validate.py failed the same geometry
+            # for OVERHANG (13% of a layer unsupported) that passes clean in PLA. The material had
+            # silently changed the shape. Bound the chord's own sagitta as well: for deviation `tol`
+            # at local radius R the chord is 2*sqrt(2*R*tol). Motion dominates when fast, geometry
+            # when slow, and the emitted curve is the same object either way.
+            seg = min(seg, 2.0 * math.sqrt(2.0 * R * 0.05))
             if max_seg:
                 # A Z ARCH IS A FEATURE ON THE PATH, and a feature cannot be finer than the
                 # sampling that carries it. Curvature-adaptive sampling gives ~1.8mm segments; a
@@ -139,7 +148,8 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_
 def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_win,
          temp, bed, fan, fil_d, home, n_per, first_slow=0, first_speed_frac=1.0,
          first_squish=0.85, vase=False, z_step=None, wave_amp=0.0, wave_len=8.0,
-         cage_N=0, cage_a=0.0, cage_ratio=0.55, cage_w=0.0):
+         cage_N=0, cage_a=0.0, cage_ratio=0.55, cage_w=0.0,
+         material="pla", printer="k2plus"):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
     # LAYER 1 IS A DIFFERENT CROSS-SECTION AND MUST BE METERED AS ONE. It is laid at
@@ -209,6 +219,13 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     start_xy = nucleon_path(N, a, b, cx, cy, n_per, 0.0, speed=speed)[0]
     L = []; w = L.append
     w(f"; NUCLEON — {N} ellipses a={a} b={b:.1f}, weld={weld}, {layers} layers")
+    # THE FLAGSHIP WAS THE ONE FILE EXEMPT FROM BOTH GUARDS. Without `; PRINTER=` validate.py
+    # bounds-checks against the K2 plate whatever the target, and push.py's wrong-printer refusal
+    # never fires; without `; MATERIAL=` the TPU fan guard cannot see the file at all. The two
+    # omissions covered for each other, which is why neither showed up as a failure.
+    w(f"; PRINTER={printer}")
+    w(f"; MATERIAL={material}")
+    w("; ARGV: " + " ".join(sys.argv))
     w(f"; flow={actual_flow:.1f} mm3/s at {speed:.0f} mm/s (capped), bead {strand_w}x{layer_h} = {strand_w*layer_h:.2f}mm2")
     w(f"; predicted junctions/layer = 2*N*(N-1) = {2*N*(N-1)}")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
@@ -224,15 +241,29 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # detached the wave print at 46% on 2026-07-25 — max cooling was enabled from the first
     # millimetre because it was needed for the ARCHES, and the layer that has to stick was never
     # exempted. Cooling helps everything above layer 1 and hurts layer 1 specifically.
-    w("M107")
-    if fan >= 255:
-        # MAX COOLING means all THREE fans, not just the part fan. Oleg: "to push z to the limits
-        # you shall freeze stuff in the air so max air flow on all fans" — an arch that does not
-        # freeze mid-flight sags into a droop, so cooling is what makes the geometry possible at all.
-        # M106 drives fan0 only. fan1 (auxiliary side blower) and fan2 (chamber) are output_pins and
-        # need SET_PIN — and they are scaled 0-255, NOT 0-1: SET_PIN VALUE=1.0 sets 1/255, which
-        # reports "ok" and leaves the fan effectively off. Verified live on the machine.
-        w("; fans stay OFF through layer 1; switched on below once it has bonded")
+    # EVERY BRANCH USED TO TEST `fan >= 255`, so --fan 128 emitted NO M106 and NO SET_PIN at all —
+    # zero cooling, on the one geometry whose docstring says cooling is what makes it possible —
+    # while --fan 255 wrote a raw 255 straight past FAN_MAX['pla']=0.20. A fan argument was either
+    # ignored or obeyed absolutely, with nothing in between and no material ever consulted.
+    # MAX COOLING means all THREE fans, not just the part fan. Oleg: "to push z to the limits you
+    # shall freeze stuff in the air so max air flow on all fans" — an arch that does not freeze
+    # mid-flight sags into a droop. M106 drives fan0 only; fan1/fan2 need the per-machine syntax in
+    # machine.aux_fans() (SET_PIN 0-255 on the K2, SET_FAN_SPEED 0-1 on the K1C).
+    _fan_frac = machine.fan_for(material, (fan or 0) / 255.0)
+    _fan_body = int(round(_fan_frac * 255))
+    _fan_l1 = int(round(machine.fan_first_layer(material) * 255))
+    _aux_body = machine.aux_for(material, _fan_frac)
+    # FANS OFF FOR LAYER 1 unless the material demands otherwise (TPU does, and validate.py fails a
+    # TPU file whose part fan is off). Cooling the first layer chills the bead before it can wet the
+    # plate; on a tall open structure the nozzle drag then peels the whole part — that is what
+    # detached the wave print at 46% on 2026-07-25.
+    if _fan_l1:
+        w(f"M106 S{_fan_l1}      ; {material} needs cooling from the first millimetre")
+        for _ln in machine.aux_fans(printer, machine.aux_for(material, _fan_l1 / 255.0)):
+            w(_ln)
+    else:
+        w("M107")
+        w(f"; fans OFF through layer 1 ({material}); switched on below once it has bonded")
     w("M82"); w("G92 E0")
     # NO TRAVEL IS A RULE (Oleg, 2026-07-25: "always our prints are continuous extrusion").
     # The prime line therefore ENDS exactly where the object BEGINS, so there is no reposition
@@ -332,10 +363,9 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                     d = s_here - sv
                     if abs(d) < lift_win:
                         dz = max(dz, lift * math.cos(math.pi * d / (2 * lift_win)) ** 2)
-            if fan >= 255 and cum[i - 1] / total < fans_on_at <= frac:
-                L.append(f"M106 S{fan}")
-                L.append("SET_PIN PIN=fan1 VALUE=255      ; blowers on — layer 1 has bonded")
-                L.append("SET_PIN PIN=fan2 VALUE=255")
+            if _fan_body > _fan_l1 and cum[i - 1] / total < fans_on_at <= frac:
+                L.append(f"M106 S{_fan_body}      ; blowers on — layer 1 has bonded")
+                L += machine.aux_fans(printer, _aux_body)
             _epm = e_first_mm if frac < 1.0 / layers else e_per_mm
             if cage_N:
                 for cs, ce in cage_marks:
@@ -347,7 +377,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                      f"X{full[i][0]:.3f} Y{full[i][1]:.3f} Z{z+dz:.4f} E{e:.5f}")
         L += ["M107", "SET_PIN PIN=fan1 VALUE=0", "SET_PIN PIN=fan2 VALUE=0",
               "M104 S0", "M140 S0", f"G1 Z{z_hi+40:.1f} F900",   # Z-only lift, no XY
-              "G0 X10 Y340 F9000"]   # park, after the object is complete
+              f"G0 X10 Y{machine.BED[printer][1]-10:.0f} F9000"]   # park at the plate's OWN back edge
         grams = e * area * 1.24 / 1000
         return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed),
                                           flow=round(actual_flow, 1), lines=len(L),
@@ -368,7 +398,18 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             lf = f_mm_min
         # rotate each layer off the last so crossings distribute through the volume instead of
         # stacking into welded vertical columns
-        phase = (math.pi / N) * (layer * 0.5)
+        # LAYERS MUST START WHERE THE LAST ONE ENDED, or the "one continuous path" claim is false.
+        # The phase used to advance by pi/(2N), chosen for crossing distribution alone and with no
+        # regard for the head's actual position. A layer's path ENDS at (a,0) rotated by
+        # phase + pi(N-1)/N; the next began at (a,0) rotated by its OWN phase, somewhere else
+        # entirely. The gap was never emitted as a move — so the first G1 of each layer flew
+        # diagonally across the finished part carrying only the E of its own short segment:
+        # validate.py, 11 STARVED moves, worst 47.4mm at 0.017mm2 against a 0.722mm2 bead. A thread
+        # dragged over the layer below, once per layer, in the flagship.
+        # Advancing by exactly pi(N-1)/N makes each layer's start coincide with the previous end —
+        # zero gap, nothing to travel, and still a large inter-layer rotation (157.5 deg at N=8)
+        # so crossings keep distributing through the volume instead of stacking into columns.
+        phase = (math.pi * (N - 1) / N) * layer
         _ms = [x for x in ((lift_win/6.0) if weld < 1.0 else None,
                            (wave_len/8.0) if wave_amp else None) if x]
         pts = nucleon_path(N, a, b, cx, cy, n_per, phase, speed=speed,
@@ -393,9 +434,9 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             if ((k * 0.6180339887498949) % 1.0) >= weld:
                 second.append(cum[max(i, j)]); total_lift += 1
         L.append(f"; layer {layer+1}  z{z0:.2f}  junctions {len(hits)}  lifts {len(second)}")
-        if fan >= 255 and layer == 1:
-            L.append(f"M106 S{fan}"); L.append("SET_PIN PIN=fan1 VALUE=255")
-            L.append("SET_PIN PIN=fan2 VALUE=255")
+        if _fan_body > _fan_l1 and layer == 1:
+            L.append(f"M106 S{_fan_body}      ; blowers on — layer 1 has bonded")
+            L += machine.aux_fans(printer, _aux_body)
         L.append(f"G1 F1800 Z{z0:.3f}")   # Z only — no XY reposition   # layer-change Z move: 10 -> 30 mm/s
         for i in range(1, len(pts)):
             dz = 0.0
@@ -409,7 +450,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             L.append(f"G1 {'F%d ' % lf if i == 1 else ''}X{pts[i][0]:.3f} "
                      f"Y{pts[i][1]:.3f} Z{z0+dz:.4f} E{e:.5f}")
 
-    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h*layers+40:.1f} F900", "G0 X10 Y340 F9000"]
+    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h*layers+40:.1f} F900", f"G0 X10 Y{machine.BED[printer][1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
     return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed), flow=round(actual_flow,1), lines=len(L),
                                      junctions=total_x, lifts=total_lift,
@@ -430,18 +471,22 @@ if __name__ == "__main__":
                     # instead of 235. Oleg wanted 5x slower at constant flow; 2.1x is the
                     # physical limit for stacked geometry, and going further would land the
                     # bead taller than the Z step and plough the part off the plate.
-    ap.add_argument("--flow", type=float, default=machine.FLOW)
+    ap.add_argument("--flow", type=float, default=0,
+                    help="0 = the material's measured ceiling (PLA keeps the max-flow rule)")
     ap.add_argument("--weld", type=float, default=1.0, help="1=fuse all (Phase 1 winner), 0=weave")
     ap.add_argument("--lift", type=float, default=0.5)
     ap.add_argument("--lift-win", type=float, default=12.0)
-    ap.add_argument("--temp", type=int, default=machine.TEMP)   # material-rated, not a guess
-    ap.add_argument("--bed", type=int, default=120,
-                    help="120 = the K2's real max (it silently clamps anything higher). Chosen for\n"
-                         "ADHESION: the wave/arch geometry is tall, open and lightly anchored, and\n"
-                         "it detached at 46%% on a 60C bed. A hot plate keeps the first layer soft\n"
-                         "and gripping; the cost is a softer base, which this geometry can afford.")
+    ap.add_argument("--temp", type=int, default=0)
+    ap.add_argument("--material", choices=["pla","petg","tpu","abs"], default="pla")
+    ap.add_argument("--printer", choices=sorted(machine.BED), default="k2plus")
+    ap.add_argument("--bed", type=int, default=0,
+                    help="0 = ask machine.bed_for(material, printer). A hardcoded 120 is what gave\n"
+                         "the K1C two klippy_shutdowns: it cannot HOLD 120 under load (90 measured),\n"
+                         "and a heater at full power losing temperature is a verify_heater abort.")
     ap.add_argument("--fan", type=int, default=0,
-                    help="0 = off (crossings weld). 255 = ALL THREE fans, for arches")
+                    help="part-cooling fan 0-255, CLAMPED to what the material tolerates "
+                         "(FAN_MAX: pla 20%%, petg 40%%, tpu 100%%, abs 10%%). Layer 1 is exempt "
+                         "unless the material demands cooling from the first millimetre.")
     ap.add_argument("--n-per", type=int, default=600, help="samples per ellipse")
     ap.add_argument("--first-slow", type=int, default=1,
                     help="layers slowed for adhesion — 0 by default: the whole print now runs\n                          at 50 mm/s, which IS a first-layer speed, so nothing needs slowing.\n                          Oleg: thick and irregular lines are good, always.")
@@ -461,10 +506,15 @@ if __name__ == "__main__":
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    # MATERIAL ROUTES THE NOZZLE AND THE FLOW TOO — see machine.MATERIAL_TEMP.
+    a.temp = a.temp or machine.temp_for(a.material)
+    a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for nucleon.py')
     g, st = emit(a.N, a.a, a.ratio, a.origin, a.layers, a.layer_h, a.strand_w, a.flow, a.weld,
-                 a.lift, a.lift_win, a.temp, a.bed, a.fan, 1.75, not a.no_home, a.n_per,
+                 a.lift, a.lift_win, a.temp, a.bed or int(machine.bed_for(a.material, a.printer)),
+                 a.fan, 1.75, not a.no_home, a.n_per,
                  a.first_slow, a.first_frac, a.first_squish, a.vase, a.z_step,
-                 a.wave_amp, a.wave_len, a.cage_N, a.cage_a, a.cage_ratio, a.cage_w)
+                 a.wave_amp, a.wave_len, a.cage_N, a.cage_a, a.cage_ratio, a.cage_w,
+                 a.material, a.printer)
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/nucleon_{'nohome_' if a.no_home else ''}{'vase_' if a.vase else ''}"
           f"N{a.N}_weld{a.weld:g}_T{a.temp}.gcode")

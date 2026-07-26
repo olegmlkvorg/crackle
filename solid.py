@@ -1039,8 +1039,10 @@ def main():
     ap.add_argument("--height", type=float, default=12.0)
     ap.add_argument("--bead-w", type=float, default=1.2)
     ap.add_argument("--layer-h", type=float, default=0.4)
-    ap.add_argument("--flow", type=float, default=machine.FLOW)
-    ap.add_argument("--temp", type=int, default=machine.TEMP)
+    ap.add_argument("--flow", type=float, default=0,
+                    help="0 = the material's measured ceiling (PLA keeps the max-flow rule)")
+    ap.add_argument("--temp", type=int, default=0,
+                    help="0 = machine.temp_for(material). A PLA 210 default reached TPU in every generator.")
     ap.add_argument("--bed", type=int, default=0, help="0 = machine.BED_TEMP['pla']")
     ap.add_argument("--press", type=float, default=0.10)
     ap.add_argument("--first-w", type=float, default=3.0)
@@ -1085,6 +1087,9 @@ def main():
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    # MATERIAL ROUTES THE NOZZLE AND THE FLOW TOO — see machine.MATERIAL_TEMP.
+    a.temp = a.temp or machine.temp_for(a.material)
+    a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for solid.py')
     machine.check_flow(a.flow, f' for solid.py')
     if a.parts:
         return run_plate(a)

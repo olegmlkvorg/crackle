@@ -237,8 +237,10 @@ if __name__ == "__main__":
     ap.add_argument("--rows", type=int, default=12)
     ap.add_argument("--bead-w", type=float, default=machine.BEAD_W)
     ap.add_argument("--bead-h", type=float, default=machine.BEAD_H)
-    ap.add_argument("--flow", type=float, default=machine.FLOW)
-    ap.add_argument("--temp", type=int, default=machine.TEMP)
+    ap.add_argument("--flow", type=float, default=0,
+                    help="0 = the material's measured ceiling (PLA keeps the max-flow rule)")
+    ap.add_argument("--temp", type=int, default=0,
+                    help="0 = machine.temp_for(material). A PLA 210 default reached TPU in every generator.")
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = machine.BED_TEMP[material] — PLA is maxed to the plate ceiling by standing rule")
     ap.add_argument("--press", type=float, default=machine.PRESS_HARD)
@@ -255,6 +257,9 @@ if __name__ == "__main__":
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    # MATERIAL ROUTES THE NOZZLE AND THE FLOW TOO — see machine.MATERIAL_TEMP.
+    a.temp = a.temp or machine.temp_for(a.material)
+    a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for waves.py')
     machine.check_flow(a.flow, f' for waves.py')
     bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
            else machine.BED[a.printer])
