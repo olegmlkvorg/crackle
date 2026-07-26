@@ -27,6 +27,64 @@ import sys as _sys
 import machine
 
 
+def _wall_graph(cell, cols, rows, ox, oy):
+    """Every hex edge in the lattice, as an adjacency map on snapped vertices.
+
+    Oleg, 2026-07-26: "we still get lines inside cells, cant you move it next to existing honeycomb
+    lines instead of over shape?" — exactly right. A hex lattice has no Eulerian circuit, so the walk
+    must step between cells; the question is whether that step crosses OPEN CELL or follows a wall
+    that is already there. Crossing costs a visible line through the cell and blocks it. Following
+    an existing wall costs a second pass over plastic that already exists, which this project
+    already accepts ("overprint or whatever but no sharp turning").
+    """
+    R = cell
+    w = math.sqrt(3) * R
+    vsp = 1.5 * R
+    verts = [(math.cos(math.radians(90 + 60 * k)) * R,
+              math.sin(math.radians(90 + 60 * k)) * R) for k in range(6)]
+    adj = {}
+    def key(p):
+        return (round(p[0], 2), round(p[1], 2))
+    for r in range(rows):
+        cy = oy + R + r * vsp
+        xoff = (w / 2.0) if (r % 2) else 0.0
+        for c in range(cols):
+            cx = ox + w / 2.0 + xoff + c * w
+            hexa = [(cx + vx, cy + vy) for vx, vy in verts]
+            for i in range(6):
+                a, b = key(hexa[i]), key(hexa[(i + 1) % 6])
+                adj.setdefault(a, set()).add(b)
+                adj.setdefault(b, set()).add(a)
+    return adj
+
+
+def _route(adj, a, b):
+    """Shortest walk from a to b along existing walls. [] if they are not connected."""
+    from collections import deque
+    ka = (round(a[0], 2), round(a[1], 2))
+    kb = (round(b[0], 2), round(b[1], 2))
+    if ka not in adj or kb not in adj:
+        return []
+    prev = {ka: None}
+    q = deque([ka])
+    while q:
+        cur = q.popleft()
+        if cur == kb:
+            break
+        for nxt in adj.get(cur, ()):
+            if nxt not in prev:
+                prev[nxt] = cur
+                q.append(nxt)
+    if kb not in prev:
+        return []
+    out = []
+    cur = kb
+    while cur is not None:
+        out.append(cur)
+        cur = prev[cur]
+    return list(reversed(out))[1:-1]      # interior vertices only
+
+
 def comb_path(cell, cols, rows, ox, oy):
     """A real hex lattice as one continuous polyline. `cell` is the hexagon circumradius.
 
@@ -46,6 +104,8 @@ def comb_path(cell, cols, rows, ox, oy):
     R = cell
     w = math.sqrt(3) * R                 # across the flats
     vsp = 1.5 * R                        # row-to-row centre spacing
+    adj = _wall_graph(cell, cols, rows, ox, oy)
+    wall_len = R                          # a hex edge is exactly the circumradius
     verts = [(math.cos(math.radians(90 + 60 * k)) * R,
               math.sin(math.radians(90 + 60 * k)) * R) for k in range(6)]
     pts = []
@@ -102,8 +162,20 @@ def comb_path(cell, cols, rows, ox, oy):
                         return math.degrees(math.acos(
                             max(-1.0, min(1.0, (hx * vx + hy * vy) / (hl * vl)))))
                     loops.sort(key=_turn)
+            # FOLLOW THE WALLS, DO NOT CUT THE CELL.
+            # If the step into this cell is longer than one hex edge it is crossing open cell, so
+            # walk there along edges that already exist instead. Measured before this: 18.1% of the
+            # first layer was chords through cell interiors.
+            nxt0 = loops[0][0]
+            if pts and math.dist(pts[-1], nxt0) > wall_len * 1.05:
+                pts.extend(_route(adj, pts[-1], nxt0))
             pts.extend(loops[0])
+    # CLOSE ALONG THE WALLS TOO. This used to be a bare `pts.append(pts[0])` — a single straight
+    # line from wherever the walk ended back to the origin, 192.5mm across the whole part on a
+    # 7x9 lattice, extruded, once per layer. It is the "straight light artifact" Oleg spotted in the
+    # very first honeycomb print, and it was never fixed — the Moore curve was adopted instead.
     if math.dist(pts[0], pts[-1]) > 1e-6:
+        pts.extend(_route(adj, pts[-1], pts[0]))
         pts.append(pts[0])
     return pts
 
@@ -244,7 +316,9 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # Layer 1 sits at `press` (squashed into the plate so it BONDS). Every layer above steps by the
     # full bead height, because it is landing on plastic rather than glass and does not need to be
     # crushed -- pressing an upper layer just ploughs the one beneath it.
+    _seen = {}
     for k in range(layers):
+        _seen = {}
         seq = pts        # closed loop -- same direction every layer, so no seam reversal
         z = press + k * bead_h
         if k:
@@ -258,7 +332,17 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
             d = math.dist((px, py), (x, y))
             if d < 1e-9:
                 continue
-            e += d * (e_first_mm if k == 0 else e_per_mm)
+            # DO NOT DEPOSIT A THIRD COAT ON A WALL THAT ALREADY HAS TWO.
+            # Routing between cells along existing walls (rather than cutting across open cells)
+            # means some walls are traversed 3 or 4 times. Two passes is DESIGNED — shared walls get
+            # double thickness and the lattice is sized for it — but a third and fourth pass at full
+            # rate is 3-4x the plastic in one line, which is the exact mechanism that detached the
+            # foot, the tray and the wave sheet today. Repeat visits beyond the second lay a token
+            # thread: the wall is already there, the path only needs continuity.
+            _k = tuple(sorted([(round(px, 1), round(py, 1)), (round(x, 1), round(y, 1))]))
+            _seen[_k] = _seen.get(_k, 0) + 1
+            _mult = 1.0 if _seen[_k] <= 2 else 0.15
+            e += d * (e_first_mm if k == 0 else e_per_mm) * _mult
             L.append(f"G1 {'F%d ' % f if (px, py) == seq[0] and k == 0 else ''}"
                      f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = x, y
