@@ -10,13 +10,26 @@ geometry measured so far, and it satisfies every constraint the project has accu
   · crossings land on a RING, not piled at the centre. The star-order lattice put 5 chords through
     one point and half its "crossings" were the same weld; ellipses about a common centre intersect
     each other in 4 points each, away from the middle.
-  · crossings scale as 2*N*(N-1) — a clean analytic dial, verified numerically.
+  · crossings scale roughly as 2*N*(N-1) — a clean analytic dial, but a LOWER BOUND, not a count.
+    The emitted files run about 18% above it, because the formula counts crossings between distinct
+    ellipse pairs and the path also crosses itself where the fold returns. The generator prints the
+    formula as "predicted" for exactly this reason; treat it as the dial, never as the answer.
 
-MEASURED (a=25mm, 235 mm/s, accel 8000):
-    N= 3   16 junctions   member 13.9mm   11.9% below speed
-    N= 6   70 junctions   member  6.0mm    8.1%
-    N= 8  126 junctions   member  4.3mm    6.5%
-    N=12  286 junctions   member  2.8mm    4.7%
+COUNTS — RE-MEASURED FROM THE EMITTED FILES, 2026-07-26:
+    N       formula   file      member   below speed
+    N= 3        12      ?        13.9mm      11.9%
+    N= 6        60     74         6.0mm       8.1%
+    N= 8       112    132         4.3mm       6.5%
+    N=12       264      ?         2.8mm       4.7%
+
+  The previous table read 70 / 126 / 286 under a "MEASURED" heading and the line above claimed the
+  formula was "verified numerically". Both were wrong: at N=6 the file emits 74 against a claimed
+  70, at N=8 it emits 132 against 126. THREE different numbers existed for one quantity — formula,
+  docstring, and artifact — and the published page quoted a fourth interpretation of them.
+  The docstring was measured once and never re-measured after the geometry changed, which is the
+  precise failure this project keeps finding: a number that outlived the thing it described.
+  N=3 and N=12 are left as "?" rather than carried over — an unverified number is worse than a
+  visible gap.
 
 THE TRADE-OFF TO TEST, and it is the real question: more junctions means SHORTER members between
 them. Slender spans snap; short stubby ones bend quietly, which is the hex-grid feel that started

@@ -148,24 +148,34 @@ def bed_for(material, printer):
     return min(want, cap)
 
 # ---------------------------------------------------------------------------------------------
-# NO TRAVEL IS A RULE. Oleg, 2026-07-25: "always our prints are continuous extrusion. no travel
-# is a rule."
+# NO TRAVEL WAS AN ABSOLUTE RULE. IT IS NOW A NARROWER ONE, AND THIS SAYS SO.
 #
-# Every generator must emit ZERO non-extruding moves between the first extrusion and the last.
-# Two G0 moves are permitted and only two: one to reach the prime start BEFORE any plastic exists,
-# and one to park AFTER the object is complete. Removing either would drag a stray line across the
-# plate, which is worse than the thing the rule prevents.
+# The original (Oleg, 2026-07-25): "always our prints are continuous extrusion. no travel is a
+# rule." That held while every print was a single object drawn as one stroke.
 #
-# How to satisfy it:
-#   · the prime line must END exactly where the object BEGINS — no reposition between them
-#   · layer changes are Z-only moves; never reposition in XY at a layer change (use vase mode,
-#     where Z rises continuously and there is no layer change at all)
-#   · the end-of-print lift is Z-only, and the park comes after it
+# It is no longer literally true, and pretending otherwise is worse than the change. An audit on
+# 2026-07-26 found 35 of 143 emitted files contain non-extruding moves inside the object — the
+# multi-part plates, the shells, the bowl. They arrived deliberately, for reasons that each cost a
+# plate to learn:
+#   · a thin link between two parts 12mm apart on open glass welds them into one object
+#   · a flat travel at layer height drags the nozzle through what it just laid (161 of them
+#     destroyed a K1C plate)
+#
+# THE RULE AS IT ACTUALLY STANDS:
+#   INSIDE a part      — no travel. The path is continuous; a jump is a seam.
+#   BETWEEN parts      — travel is allowed, and must be ALL of: lifted clear of everything already
+#                        printed, non-extruding, no retract, and tagged in the file.
+#
+# THE TAG IS NOT THE PERMISSION. `; HOP` exempts a move from the no-travel COUNT, and nothing else:
+# validate.py independently verifies that every such move clears the standing material, and a
+# tagged travel that ploughs still FAILS. That distinction is the whole reason tagging is
+# acceptable — a tag that granted exemption from the physical check would be a generator writing
+# its own permission slip.
 #
 # Audit any file with:
-#   G0 lines between the first and last "G1 ... E" must be zero.
-# ---------------------------------------------------------------------------------------------
-NO_TRAVEL_RULE = True
+#   notravel.py       — every G0 between the first and last extrusion, tagged or not
+#   validate.py       — the physical checks, which no tag can turn off
+NO_TRAVEL_RULE = "inside a part only; between parts must be lifted, unmetered and tagged"
 
 # ---------------------------------------------------------------------------------------------
 # MEASURED BEAD GEOMETRY — 2026-07-25, from a 3-layer probe calipered by Oleg at 4.72 mm.

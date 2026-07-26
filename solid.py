@@ -933,6 +933,50 @@ def bowl_lid(bowl_id, shaft_d, height, spigot_h, wall, shaft_clear=2.0, fill_por
     return region_at
 
 
+def shelf_plate(width, depth, thickness, post_d, post_inset, layer_h, style="solid",
+                rib=6.0, cell=26.0, clearance=0.30):
+    """A shelf that threads onto the four posts. Two styles, because the choice is a real trade.
+
+    SOLID  — every layer a full rectangle. Holds anything, including small objects and dust.
+             Heavy and slow: a 300x200 plate is the biggest single part in the shelf.
+    RIBBED — a border plus a grid of ribs, so it is mostly holes. Far less material and time,
+             stiffer per gram (material at the edges resists bending, material at the neutral
+             axis does almost nothing), but small things fall through.
+
+    Both are flat plates of constant cross-section, so both print with no support. The bores are
+    plain clearance holes, NOT pressure points: a shelf must SLIDE down the posts to its spacer and
+    then rest there. Gripping is the collet's job at the top; a shelf that grips cannot be adjusted.
+    That distinction is the reason these are different parts and not one part with a flag.
+    """
+    w, d = width / 2.0, depth / 2.0
+    body = box(-w, -d, w, d)
+
+    if style == "ribbed":
+        inner = box(-w + rib, -d + rib, w - rib, d - rib)
+        holes = []
+        nx = max(1, int((width - 2 * rib) // cell))
+        ny = max(1, int((depth - 2 * rib) // cell))
+        cx = (width - 2 * rib) / nx
+        cy = (depth - 2 * rib) / ny
+        for i in range(nx):
+            for j in range(ny):
+                x0 = -w + rib + i * cx + rib / 2.0
+                y0 = -d + rib + j * cy + rib / 2.0
+                h = box(x0, y0, x0 + cx - rib, y0 + cy - rib)
+                if inner.contains(h):
+                    holes.append(h)
+        if holes:
+            body = body.difference(unary_union(holes))
+
+    # post holes: clearance, so the shelf slides and rests rather than grips
+    r = (post_d + SHRINK + clearance) / 2.0
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            body = body.difference(translate(circle(r),
+                                             sx * (w - post_inset), sy * (d - post_inset)))
+    return body
+
+
 def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
     """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
 
@@ -962,7 +1006,7 @@ def main():
     ap.add_argument("--part", default="bracket",
                     choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4",
                              "gauge", "adapter", "shell", "mixer", "collet", "seat",
-                             "postfoot", "bowl", "lid"])
+                             "postfoot", "bowl", "lid", "shelf"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=6.35, help="1/4 inch bamboo (6.35mm)")
     ap.add_argument("--centres", type=float, default=32.0)
@@ -972,6 +1016,12 @@ def main():
     ap.add_argument("--od-large", type=float, default=22.0, help="collet wide end")
     ap.add_argument("--slots", type=int, default=3, help="collet splits")
     ap.add_argument("--slot-w", type=float, default=2.0)
+    ap.add_argument("--width", type=float, default=300.0)
+    ap.add_argument("--depth", type=float, default=200.0)
+    ap.add_argument("--inset", type=float, default=14.0, help="post centre from the shelf edge")
+    ap.add_argument("--style", default="solid", choices=["solid", "ribbed"])
+    ap.add_argument("--rib", type=float, default=6.0)
+    ap.add_argument("--cellsize", type=float, default=26.0)
     ap.add_argument("--spigot-h", type=float, default=6.0, help="lid spigot depth")
     ap.add_argument("--fill-port", type=float, default=0.0, help="lid top-up hole diameter")
     ap.add_argument("--baffles", type=int, default=4)
@@ -1044,7 +1094,13 @@ def main():
     # THE FILENAME MUST DISTINGUISH THE PARTS. A vented foam shell and a sealed gypsum shell differ
     # only in --vents, and both wrote to the same name — so the second silently replaced the first
     # and either could be printed believing it was the other.
-    _tag = f"_v{a.vents}" if a.part == "shell" else ""
+    # ANY ARGUMENT THAT CHANGES THE PART MUST CHANGE THE FILENAME.
+    # Fixed once tonight for --vents, then immediately repeated for --style: a solid and a ribbed
+    # shelf differ by 193g and an hour and were writing to the same name, so the second silently
+    # replaced the first. Encoding the discriminating argument is not optional.
+    _tag = (f"_v{a.vents}" if a.part == "shell"
+            else f"_{a.style}" if a.part == "shelf"
+            else "")
     return finish(region, a, a.part,
                   f"{a.out}/{a.part}_{a.printer}_s{a.stick:g}_c{a.centres:g}"
                   f"_h{a.height:g}{_tag}_T{a.temp}.gcode")
@@ -1064,6 +1120,9 @@ def build_part(part, a):
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
+    elif part == "shelf":
+        return shelf_plate(a.width, a.depth, a.height, a.stick, a.inset, a.layer_h,
+                           style=a.style, rib=a.rib, cell=a.cellsize)
     elif part == "lid":
         return bowl_lid(a.od, a.axle, a.height, a.spigot_h, a.wall, fill_port=a.fill_port)
     elif part == "bowl":
