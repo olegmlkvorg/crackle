@@ -211,6 +211,19 @@ BED_TEMP = {"pla": 60, "petg": 80, "tpu": 45, "abs": 100}
 # The 13.3 "ceiling" measured before this was a partial clog, cleared by Oleg — a limit that moves
 # when you push it is the symptom, not the limit.
 TPU_FLOW = 15.2
+# ...BUT 15.2 IS NOT A VALIDATED WORKING FLOW, AND NEITHER IS 13. As of 2026-07-26 midday TPU has
+# printed exactly two things reliably (both belts, 24.5 m and 46 m of filament, no stops) and has
+# failed on almost every solid pad since, at BOTH 15.2 and the 13 Oleg then asked for. So the
+# number below is "a ramp survived 33 layers at this rate", not "parts print at this rate".
+#
+# What the 2026-07-26 trace RULES OUT — recorded because each was a live hypothesis that died:
+#   · not heat creep / not hotend power — nozzle held 199.4-200.6 C to the moment it stopped, bed
+#     steady, chamber flat at 25.4 C, hotend fan 1.0 throughout
+#   · not geometry — moore_o1_40mm_L17 COMPLETED at 11:06 and stopped at 11:38. Same file.
+#   · not corner density — the belt runs 5.38 deg/mm and completed 46 m; a pad at 5.21 deg/mm did
+#     not. Measured from the emitted files, and it killed the hypothesis before it was acted on.
+# Oleg's standing correction applies here: do not pattern-match on data this thin. The spool went
+# to the dryer on his call; /tmp/k2trace.py records thermals every 5 s so the next stop has a trace.
 # TPU_TEMP: 200, NOT the 225-235 the generic TPU guidance says. Measured 2026-07-25 on the K2 Plus.
 #
 # At 230 and at 220 the extruder jammed roughly 35 SECONDS into a print -- and critically, it did so
