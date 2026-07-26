@@ -158,7 +158,8 @@ def order_rings(rings, here):
 
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, material='pla'):
+         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, brim_gap=0.18,
+         material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
@@ -223,7 +224,11 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
             # bead inside its boundary, so buffering by a full bead left the first brim
             # ring 1.8mm away with a 1.2mm bead — a 0.6mm void. The brim was never
             # touching the part, which is why adding one changed nothing.
-            g = src.buffer(bead_w * (i - 0.5))
+            # A BRIM MUST DETACH. Oleg: "when you print brim it should be asily detachable,
+            # no its not". Centrelines exactly one bead apart look like 'just touching' on paper,
+            # but squish spreads each bead and they fuse. A small extra gap gives a light kiss:
+            # enough to hold the part down while printing, weak enough to snap off by hand.
+            g = src.buffer(bead_w * (i - 0.5) + brim_gap)
             for geo in (list(g.geoms) if g.geom_type == "MultiPolygon" else [g]):
                 base_extra.append(list(geo.exterior.coords))
     if not rings:
@@ -502,6 +507,8 @@ if __name__ == "__main__":
     ap.add_argument("--fan", type=int, default=80)
     ap.add_argument("--aux", type=float, default=0.2)
     ap.add_argument("--brim", type=int, default=4, help="brim rings on layer 1")
+    ap.add_argument("--brim-gap", type=float, default=0.18,
+                    help="mm of extra gap so the brim snaps off (0 = fused)")
     # BORE FIT. printed = model - 0.25 is CONFIRMED at ~6mm (the pulley bore is a perfect fit on a
     # 6.0mm shaft). So bore = stick + SHRINK gives ZERO clearance — a grip fit, which is what a
     # bracket wants: you slide it up the stick to tension the belt and friction holds it there.

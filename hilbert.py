@@ -183,7 +183,8 @@ def joint_layers(pts, layers, bead_w, tenon_n, mortise_n, slot_gap, wall_n):
 
 
 def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         fillet, layers, closed, printer='k1c', aux=0.2, material='pla'):
+         fillet, layers, closed, printer='k1c', aux=0.2, material='pla',
+         tile=1, gap=6.0):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
@@ -199,11 +200,31 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
             f"raise --span (need pitch >= {bead_w*1.6:.2f}mm).")
 
     pts = round_corners(curve(order, span, closed), fillet)
-    ox = (bed_xy[0] - span) / 2.0
-    oy = (bed_xy[1] - span) / 2.0
-    pts = [(p[0] + ox, p[1] + oy) for p in pts]
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
+
+    # TILE THE WHOLE PLATE. Oleg: "use entire area to print everything needed not a tiny thing".
+    # Copies are joined by a THIN LINK at reduced flow rather than a travel — the same trick
+    # solid.py uses between contours. It keeps the no-travel rule, and the link snaps off.
+    if tile > 1:
+        step = span + gap
+        need = tile * step - gap
+        if need + 2 * 6 > min(bed_xy):
+            raise SystemExit(f"{tile}x{tile} tiles of {span:.0f}mm need {need:.0f}mm — "
+                             f"a {min(bed_xy):.0f}mm plate holds "
+                             f"{int((min(bed_xy)-12+gap)//step)}.")
+        grid = []
+        for r in range(tile):
+            cols = range(tile) if r % 2 == 0 else range(tile - 1, -1, -1)
+            for c in cols:
+                grid.append([(p[0] + c * step, p[1] + r * step) for p in pts])
+        pts = grid          # a LIST OF LOOPS from here on
+    else:
+        pts = [pts]
+    _allx = [p[0] for lp in pts for p in lp]; _ally = [p[1] for lp in pts for p in lp]
+    ox = (bed_xy[0] - (max(_allx) + min(_allx))) / 2.0
+    oy = (bed_xy[1] - (max(_ally) + min(_ally))) / 2.0
+    pts = [[(p[0] + ox, p[1] + oy) for p in lp] for lp in pts]
+    xs = [p[0] for lp in pts for p in lp]
+    ys = [p[1] for lp in pts for p in lp]
     if min(xs) < 4 or min(ys) < 4 or max(xs) > bed_xy[0] - 4 or max(ys) > bed_xy[1] - 4:
         raise SystemExit(f"curve spans X {min(xs):.0f}..{max(xs):.0f} Y {min(ys):.0f}..{max(ys):.0f} "
                          f"on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed — off the plate.")
@@ -234,7 +255,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
         w(_ln)
     w("M82")
     w("G92 E0")
-    x0, y0 = pts[0]
+    x0, y0 = pts[0][0]
     w(f"G1 Z{press:.3f} F600")
     _apx = max(6.0, x0 - 55.0)
     _apy = max(6.0, y0 - 12.0)
@@ -265,15 +286,18 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
             L.append(f"; --- layer {k+1} at Z{z:.2f} — closed loop, straight up, same direction")
             L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
-        px, py = pts[0]
-        for (x, y) in pts[1:]:
-            d = math.dist((px, py), (x, y))
-            if d < 1e-9:
-                continue
-            e += d * e_per_mm
-            L.append(f"G1 {'F%d ' % f if (px, py) == pts[0] and k == 0 else ''}"
-                     f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
-            px, py = x, y
+        px, py = pts[0][0]
+        for li, loop in enumerate(pts):
+            for pi, (x, y) in enumerate(loop):
+                d = math.dist((px, py), (x, y))
+                if d < 1e-9:
+                    continue
+                # the hop between tiles extrudes THIN — continuous, but it snaps off
+                thin = 0.3 if (pi == 0 and li > 0) else 1.0
+                e += d * e_per_mm * thin
+                L.append(f"G1 {'F%d ' % f if (px, py) == pts[0][0] and k == 0 else ''}"
+                         f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
+                px, py = x, y
 
     L += ["M107", "M104 S0", "M140 S0",
           f"G1 Z{press + (layers-1)*bead_h + 40:.1f} F900",
@@ -301,6 +325,8 @@ if __name__ == "__main__":
     ap.add_argument("--fillet", type=float, default=0)
     ap.add_argument("--layers", type=int, default=1)
     ap.add_argument("--open", action="store_true", help="open Hilbert instead of closed Moore")
+    ap.add_argument("--tile", type=int, default=1, help="NxN copies across the plate")
+    ap.add_argument("--gap", type=float, default=6.0, help="mm between tiles")
     ap.add_argument("--material", default="pla",
                     choices=["pla","petg","tpu","abs"],
                     help="stamped into the file; TPU is fan-guarded")
@@ -318,7 +344,8 @@ if __name__ == "__main__":
     pitch = span / ((2 ** (a.order + 1) if not a.open else 2 ** a.order) - 1)
     fillet = a.fillet or max(0.8, pitch * 0.45)
     g, st = emit(a.order, span, a.bead_w, a.bead_h, a.flow, a.temp, a.bed, 1.75, bxy,
-                 not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer, a.aux, a.material)
+                 not a.no_home, a.press, a.fan, fillet, a.layers, not a.open, a.printer, a.aux, a.material,
+                 a.tile, a.gap)
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     kind = "hilbert" if a.open else "moore"
