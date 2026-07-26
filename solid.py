@@ -41,7 +41,28 @@ import machine
 # reports "the holes in puleys are perfect fit". So printed = model - 0.25 holds here, and a 1/4"
 # stick (6.35) takes a 6.60 modelled bore. The spiral-vase README had flagged this figure as
 # calibrated on a 4mm hole and unverified at larger sizes — it is now verified at 6.
-SHRINK = 0.25
+SHRINK = 0.25          # METAL SHAFTS ONLY — a 6mm motor shaft, round or D. Validated by the sleeve
+                       # Oleg pressed on hot and called a perfect fit; do not widen it on their
+                       # account. See STICK_FIT below for why bamboo needed its own number.
+
+# BAMBOO STICK FIT — MEASURED 2026-07-27, not inherited.
+# The fit gauge (three bores, 0.25mm apart, printed on the K1C) went onto a real 6.35mm rod and
+# Oleg picked the middle one: "use middle". Measured from the emitted gauge file, the three holes
+# are 6.80 / 7.05 / 7.30mm in geometry, so the fit he chose is 7.05 — rod + 0.70.
+# (plate() was already adding SHRINK on top of the diameters the gauge passes in, which is easy
+#  to miss and which I got wrong once here: the first version of this constant said 0.45, from
+#  reading the gauge's argument instead of the hole it actually emits. Measure the artifact.)
+#
+# Every bamboo bore in this file was using `stick_d + SHRINK` = 6.60mm, which is 0.45mm TIGHTER
+# than the fit that works and sits nearer the gauge's press-fit bore than its sliding one. That is
+# ~21 already-printed parts — shelf bores, couplers, spacers — bored too tight. The gauge existed
+# precisely to settle this and had been sitting unprinted on the list.
+#
+# It gets its OWN constant because SHRINK was calibrated on a 4mm hole for a METAL shaft, and a
+# number that belongs to one material and one diameter must not be spent on another: bamboo rods
+# are not round, not consistent, and are gripped rather than pressed. Sharing one constant between
+# them is the same defect that made the bowl lid unable to close.
+STICK_FIT = 0.70
 
 
 def circle(r, seg=0.5):
@@ -603,7 +624,7 @@ def adapter(shaft_d, flat_depth, stick_d, wall, split=0.5):
     def region_at(t):
         if t < split:
             return outer.difference(d_profile(shaft_d + SHRINK, flat_depth, 96))
-        return outer.difference(Point(0, 0).buffer((stick_d + SHRINK) / 2.0, 96))
+        return outer.difference(Point(0, 0).buffer((stick_d + STICK_FIT) / 2.0, 96))
 
     return region_at
 
@@ -640,7 +661,7 @@ def shelled(region, shell, floor_h, height, layer_h):
     return region_at
 
 
-def plate(bores, wall, thickness=None, clearance=0.0, hollow=0.0):
+def plate(bores, wall, thickness=None, clearance=0.0, hollow=0.0, fit=None):
     """A plate with N vertical bores — the general bamboo joint.
 
     Why vertical bores and not angled sockets: this generator extrudes a 2D region up the Z axis, so
@@ -684,7 +705,10 @@ def plate(bores, wall, thickness=None, clearance=0.0, hollow=0.0):
         if void.is_valid and not void.is_empty and void.area > 4 * hollow ** 2:
             body = body.difference(void)
     for (x, y, d) in bores:
-        body = body.difference(Point(x, y).buffer((d + SHRINK + clearance) / 2.0, 96))
+        # `fit` is the BAMBOO allowance (STICK_FIT, measured), not the metal-shaft SHRINK.
+        # The gauge passes fit=0 and sweeps raw diameters, so its reading stays valid.
+        _fit = STICK_FIT if fit is None else fit
+        body = body.difference(Point(x, y).buffer((d + _fit + clearance) / 2.0, 96))
     return body
 
 
@@ -720,7 +744,7 @@ def spacer_shell(bore_d, od, wall, height, floor_h, layer_h, vents=0, vent_w=4.0
     the tube can still be stood up and filled from the top.
     """
     r_out = od / 2.0
-    r_bore = (bore_d + SHRINK + clearance) / 2.0
+    r_bore = (bore_d + STICK_FIT + clearance) / 2.0   # a bamboo post passes through
     base = Point(0, 0).buffer(r_out, 96).difference(Point(0, 0).buffer(r_bore, 96))
 
     floor_frac = min(0.9, max(0.0, floor_h / max(height, 1e-9)))
@@ -1217,8 +1241,11 @@ def build_part(part, a):
         # FIT GAUGE — three bores, one print. The shrink figure (printed = model - 0.25) was
         # calibrated on a 4mm hole and is unverified at 12.7mm, and a coupler bored for ZERO
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
-        region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
-                        for i in range(3)], 3.0)
+        # Sweeps RAW diameters (fit=0) so the emitted holes are exactly what is measured:
+        # 6.55 / 6.80 / 7.05 on a 6.35 stick. Oleg picked the middle 2026-07-27, which is
+        # what STICK_FIT=0.45 now encodes. Re-run this on any new stick or filament batch.
+        region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.45 + 0.25 * i)
+                        for i in range(3)], 3.0, fit=0.0)
     elif part == "shelf":
         return shelf_plate(a.width, a.depth, a.height, a.stick, a.inset, a.layer_h,
                            style=a.style, rib=a.rib, cell=a.cellsize)
