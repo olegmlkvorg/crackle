@@ -161,7 +161,7 @@ def order_rings(rings, here):
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, brim_gap=0.18,
-         material='pla', hop_min=8.0, centre=True):
+         material='pla', hop_min=8.0, centre=True, hop_clear=1.5):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = machine.speed_for(flow, bead_w * layer_h, f" for {name}")
@@ -256,6 +256,17 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
         raise SystemExit(f"{name} spans {max(xs)-min(xs):.0f}x{max(ys)-min(ys):.0f}mm — "
                          f"off a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} plate.")
 
+    # THE CORRIDOR — a Y line with no part on it, used as the through-route for every inter-object
+    # travel. Placed clear of the lowest part and its brim; if that would fall off the front of the
+    # plate, it goes behind the highest part instead.
+    _lo = min(ys) + oy
+    _hi = max(ys) + oy
+    _clear = brim * bead_w + brim_gap + 4.0
+    corridor = _lo - _clear
+    if corridor < 4.0:
+        corridor = _hi + _clear
+    if corridor > bed_xy[1] - 4.0:
+        corridor = _lo - _clear          # nowhere clear; validate will catch any crossing
     L = []
     w = L.append
     w(f"; {name} — solid part as concentric contours, one continuous path per layer")
@@ -356,8 +367,25 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                     # nozzle through the material just laid. One layer of lift clears it, and in
                     # layer-by-layer printing nothing on the plate is ever taller than the current
                     # layer, so one layer is provably enough.
-                    L.append(f"G0 Z{z + layer_h:.3f} F900 ; HOP up")
-                    L.append(f"G0 X{X:.3f} Y{Y:.3f} F{travel_f} ; HOP over")
+                    # ROUTE AROUND THE PARTS, DO NOT FLY OVER THEM.
+                    # Oleg: "another thing about moving from part to part - lines should [not] be
+                    # crossing the parts". A straight hop clears a part it crosses by exactly one
+                    # layer (0.6mm) — enough on paper, nothing at all against a curled edge or a
+                    # blob, and every part on the plate is the same height in layer-by-layer mode.
+                    # So the travel leaves the part band entirely, runs along a clear corridor, and
+                    # comes back in. Non-extruding moves at machine max are nearly free, so the
+                    # longer route costs almost no time and removes the whole failure mode.
+                    # CLEARANCE IS PROVABLE, ROUTING IS NOT. Corridor routing cut crossings but
+                    # could not eliminate them: leaving a part means crossing its own footprint, and
+                    # with shelf-packed rows the run out to the corridor can cross the row in front.
+                    # In layer-by-layer printing EVERY part is at the current layer height, so a
+                    # fixed lift clears all of them whatever route is taken. 1.5mm against a 0.6mm
+                    # layer is real margin for a curled edge or a blob, where one layer (0.6mm) was
+                    # only clearance on paper.
+                    L.append(f"G0 Z{z + hop_clear:.3f} F900 ; HOP up")
+                    L.append(f"G0 Y{corridor:.3f} F{travel_f} ; HOP out to corridor")
+                    L.append(f"G0 X{X:.3f} F{travel_f} ; HOP along corridor")
+                    L.append(f"G0 Y{Y:.3f} F{travel_f} ; HOP over")
                     L.append(f"G0 Z{z:.3f} F900 ; HOP down")
                     # RESTORE THE PRINT FEEDRATE. F is STICKY in gcode: without this line the next
                     # extruding move inherits the travel's 120 mm/s and lays the bead at 106 mm3/s
