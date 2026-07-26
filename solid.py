@@ -248,7 +248,44 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     _is_fn = callable(region)
     _cache = {}
 
+    def _widen_holes(reg, d):
+        """Enlarge every HOLE by d, leaving the outline alone.
+
+        LAYER 1 IS A WIDE RIBBON LAID ON THE BODY'S PATHS, and that closes every bore.
+        The first layer is metered as a `first_w` ribbon (3.0mm) for adhesion while walking the
+        SAME contours as the 1.2mm body, so its bead reaches 0.9mm further in every direction.
+        Outward that is free — more plate contact, which is the point. INWARD it eats the holes:
+            gauge middle bore  7.05 -> 5.25mm at layer 1
+            lid shaft hole     8.00 -> 6.20mm   (the audit's raycast measured 6.18 independently)
+        A 6.35mm stick cannot pass a 5.25mm restriction, so every plate the posts thread through
+        was unusable at its first layer — and nothing reported it, because every layer above was
+        the right size and the part looks correct.
+
+        Widening the holes on layer 1 only puts the ribbon's inner edge back where the body's is.
+        The outline is deliberately NOT shrunk: outward spread is what makes the first layer stick.
+        """
+        from shapely.geometry import Polygon, MultiPolygon
+        def one(poly):
+            if not poly.interiors:
+                return poly
+            keep = []
+            for ring in poly.interiors:
+                shrunk = Polygon(ring).buffer(-d)      # hole grows == its polygon shrinks
+                if shrunk.is_empty:
+                    continue                            # hole swallowed by the ribbon: drop it
+                for g in (shrunk.geoms if shrunk.geom_type == 'MultiPolygon' else [shrunk]):
+                    keep.append(g.exterior.coords)
+            return Polygon(poly.exterior.coords, keep)
+        if reg.geom_type == 'MultiPolygon':
+            return MultiPolygon([one(g) for g in reg.geoms])
+        return one(reg)
+
+    _first_widen = max(0.0, (first_w - bead_w) / 2.0)
+
     def rings_at(kk):
+        if kk == 0 and _first_widen > 1e-9:
+            base = region(0.0) if _is_fn else region
+            return contours(_widen_holes(base, _first_widen), bead_w)
         if not _is_fn:
             return rings
         t = kk / max(1, layers - 1)
@@ -1116,8 +1153,11 @@ def shelf_plate(width, depth, thickness, post_d, post_inset, layer_h, style="sol
         if holes:
             body = body.difference(unary_union(holes))
 
-    # post holes: clearance, so the shelf slides and rests rather than grips
-    r = (post_d + SHRINK + clearance) / 2.0
+    # post holes: clearance, so the shelf slides and rests rather than grips.
+    # STICK_FIT, NOT SHRINK — these are BAMBOO posts. Missed when the two constants were split
+    # apart, in the one function whose docstring says the plate must SLIDE down the posts: at
+    # SHRINK it modelled 6.60mm, which prints to roughly the rod's own 6.35 and grips instead.
+    r = (post_d + STICK_FIT + clearance) / 2.0
     for sx in (-1, 1):
         for sy in (-1, 1):
             body = body.difference(translate(circle(r),
@@ -1278,13 +1318,20 @@ def build_part(part, a):
         # calibrated on a 4mm hole and is unverified at 12.7mm, and a coupler bored for ZERO
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         # Sweeps RAW diameters (fit=0) so the emitted holes are exactly what is measured:
-        # 6.55 / 6.80 / 7.05 on a 6.35 stick. Oleg picked the middle 2026-07-27, which is
-        # what STICK_FIT=0.45 now encodes. Re-run this on any new stick or filament batch.
+        # 6.80 / 7.05 / 7.30 on a 6.35 stick. Oleg picked the middle 2026-07-27, which is
+        # what STICK_FIT=0.70 now encodes. Re-run this on any new stick or filament batch.
+        # (This comment carried 6.55/6.80/7.05 and 0.45 — the numbers from my FIRST, WRONG reading,
+        #  which had been corrected in the constant and left standing here. A stale comment beside
+        #  a corrected constant is how a wrong number gets adopted twice.)
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.45 + 0.25 * i)
                         for i in range(3)], 3.0, fit=0.0)
     elif part == "shelf":
+        # --clearance never reached this part: it kept its own default 0.30 whatever was passed,
+        # so the ONE part that must slide freely was the one you could not loosen. The 0.30 stays
+        # as the default (a shelf slides; it does not grip), but it is now overridable.
         return shelf_plate(a.width, a.depth, a.height, a.stick, a.inset, a.layer_h,
-                           style=a.style, rib=a.rib, cell=a.cellsize)
+                           style=a.style, rib=a.rib, cell=a.cellsize,
+                           clearance=0.30 if a.clearance == 0.0 else a.clearance)
     elif part == "lid":
         # THE LID TAKES THE BOWL'S OWN BAFFLE ARGUMENTS. Same --baffles/--baffle-d the bowl was
         # built with, so the notches are derived from the ribs rather than guessed alongside them.
