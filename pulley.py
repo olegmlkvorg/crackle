@@ -213,7 +213,13 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         # spoke_adv. My earlier attempts advanced the angle by hand at each stage and left a 36mm
         # chord and a 170-degree hole in the bore -- the fix is to make every segment start where
         # the previous one ended, by construction, rather than to keep correcting the arithmetic.
-        r_b = r_bore + bead_w
+        # THE WALL'S PATH SITS HALF A BEAD OUT FROM THE HOLE, NOT A WHOLE ONE.
+        # This was `r_bore + bead_w`, which puts the bead's INNER FACE a full bead from centre and
+        # opens the hole to 7.45mm while the header keeps reporting 6.25 — 1.2mm of slop on a 6mm
+        # axle, and with --flat the D never touches the shaft's flat so no torque is transmitted.
+        # The sleeve path in this same file has always used bead_w/2 and is the part Oleg pressed
+        # onto the motor and called a perfect fit; the two disagreed and only one was ever tested.
+        r_b = r_bore + bead_w / 2
         pts = [(r_rim * math.cos(cur_ang + 2 * math.pi * t / 240),
                 r_rim * math.sin(cur_ang + 2 * math.pi * t / 240)) for t in range(241)]
         a_in = cur_ang + 0.12 * 2 * math.pi
