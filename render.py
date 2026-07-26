@@ -43,8 +43,24 @@ def read_path(path):
     return segs
 
 
-def svg(segs, out, w=1500, h=820, zmax_cut=60.0):
+def svg(segs, out, w=1500, h=820, zmax_cut=60.0, layers=0, min_seg=0.0):
     body = [s for s in segs if s[2] < zmax_cut and s[5] < zmax_cut]   # ignore the park lift
+
+    # A DIAGRAM IS NOT A DUMP. A 15-part plate is 392k segments; drawn in full that is a 71MB SVG
+    # no browser will open, so "publish as we go" quietly stops publishing. Every part in this
+    # family has a CONSTANT cross-section, so the first N layers carry the whole shape and the rest
+    # repeat it. That makes cutting layers honest here in a way it would not be for a varying part
+    # — so the caller must ask, and the cut is stamped into the footer rather than dropped silently.
+    cut = ""
+    if layers:
+        zs_all = sorted({round(s[2], 3) for s in body})
+        keep = set(zs_all[:layers])
+        n_before = len(body)
+        body = [s for s in body if round(s[2], 3) in keep]
+        cut = f" — first {layers} of {len(zs_all)} layers ({n_before} segs total)"
+    if min_seg:
+        body = [s for s in body
+                if math.dist((s[0], s[1]), (s[3], s[4])) >= min_seg or s[2] != s[5]]
     if not body:
         body = segs
     xs = [s[0] for s in body] + [s[3] for s in body]
@@ -68,19 +84,44 @@ def svg(segs, out, w=1500, h=820, zmax_cut=60.0):
              f'PLAN — from above</text>')
     L.append(f'<text x="{w/2+pad}" y="26" fill="#7fe3d4" font-family="monospace" font-size="15">'
              f'FRONT — from the side</text>')
-    for (ax, ay, az, bx, by, bz, ext) in body:
-        px0 = pad + (ax - x0) * sc; py0 = h - pad - (ay - y0) * sc
-        px1 = pad + (bx - x0) * sc; py1 = h - pad - (by - y0) * sc
-        d = '' if ext else ' stroke-dasharray="4,4"'
-        L.append(f'<line x1="{px0:.1f}" y1="{py0:.1f}" x2="{px1:.1f}" y2="{py1:.1f}" '
-                 f'stroke="{col((az+bz)/2)}" stroke-width="{1.1 if ext else 0.7}"{d}/>')
-        qx0 = w/2 + pad + (ax - x0) * scf; qy0 = h - pad - (az - z0) * scf
-        qx1 = w/2 + pad + (bx - x0) * scf; qy1 = h - pad - (bz - z0) * scf
-        L.append(f'<line x1="{qx0:.1f}" y1="{qy0:.1f}" x2="{qx1:.1f}" y2="{qy1:.1f}" '
-                 f'stroke="{col((az+bz)/2)}" stroke-width="{1.1 if ext else 0.7}"{d}/>')
+    # ONE <path> PER RUN, NOT ONE <line> PER SEGMENT.
+    # Per-segment elements cost ~130 bytes of markup each, so a 13k-segment plate rendered to 2.4MB
+    # — a file that is technically correct and practically unpublishable. Consecutive segments that
+    # share a colour and a pen are one polyline, which is what they already are on the machine.
+    def runs(project):
+        out = []
+        cur = None
+        for s in body:
+            ax, ay, az, bx, by, bz, ext = s
+            c = col((az + bz) / 2)
+            a2 = project(ax, ay, az)
+            b2 = project(bx, by, bz)
+            if cur and cur[0] == c and cur[1] == ext and \
+                    abs(cur[2][-1][0] - a2[0]) < 0.05 and abs(cur[2][-1][1] - a2[1]) < 0.05:
+                # DECIMATE IN PIXELS, DO NOT DROP SEGMENTS. Filtering short segments out of `body`
+                # punches holes in the path, which SPLITS runs and makes the file bigger, not
+                # smaller. Skipping a point inside a run keeps it one continuous polyline, and a
+                # point under a pixel from its predecessor cannot be seen anyway.
+                if math.dist(cur[2][-1], b2) < 0.9 and len(cur[2]) > 1:
+                    cur[2][-1] = b2
+                else:
+                    cur[2].append(b2)
+            else:
+                cur = (c, ext, [a2, b2])
+                out.append(cur)
+        return out
+
+    for project in (lambda ax, ay, az: (pad + (ax - x0) * sc, h - pad - (ay - y0) * sc),
+                    lambda ax, ay, az: (w / 2 + pad + (ax - x0) * scf,
+                                        h - pad - (az - z0) * scf)):
+        for c, ext, pts in runs(project):
+            d = '' if ext else ' stroke-dasharray="4,4"'
+            pt = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
+            L.append(f'<polyline points="{pt}" fill="none" stroke="{c}" '
+                     f'stroke-width="{1.1 if ext else 0.7}"{d}/>')
     L.append(f'<text x="{pad}" y="{h-6}" fill="#5b6572" font-family="monospace" font-size="12">'
              f'{os.path.basename(sys.argv[1])} — {len(body)} segments, '
-             f'X {x0:.0f}..{x1:.0f}  Y {y0:.0f}..{y1:.0f}  Z {z0:.2f}..{z1:.1f}</text>')
+             f'X {x0:.0f}..{x1:.0f}  Y {y0:.0f}..{y1:.0f}  Z {z0:.2f}..{z1:.1f}{cut}</text>')
     L.append('</svg>')
     open(out, 'w').write('\n'.join(L))
     return dict(segs=len(body), x=(x0, x1), y=(y0, y1), z=(z0, z1))
@@ -88,7 +129,15 @@ def svg(segs, out, w=1500, h=820, zmax_cut=60.0):
 
 if __name__ == "__main__":
     src = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else src.rsplit('.', 1)[0] + '.svg'
-    st = svg(read_path(src), out)
+    args = [a for a in sys.argv[2:] if not a.startswith('--')]
+    out = args[0] if args else src.rsplit('.', 1)[0] + '.svg'
+    layers = 0
+    min_seg = 0.0
+    for a in sys.argv[2:]:
+        if a.startswith('--layers='):
+            layers = int(a.split('=', 1)[1])
+        if a.startswith('--min-seg='):
+            min_seg = float(a.split('=', 1)[1])
+    st = svg(read_path(src), out, layers=layers, min_seg=min_seg)
     print(f"{out}\n  {st['segs']} segments  X {st['x'][0]:.0f}..{st['x'][1]:.0f}  "
           f"Y {st['y'][0]:.0f}..{st['y'][1]:.0f}  Z {st['z'][0]:.2f}..{st['z'][1]:.1f}")
