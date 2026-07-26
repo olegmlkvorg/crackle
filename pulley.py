@@ -149,8 +149,20 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     cx, cy = bed_xy[0] / 2.0, bed_xy[1] / 2.0
     L = []
     w = L.append
-    w(f"; CROWNED PULLEY — OD {od}mm, {width}mm wide, {bore_d}mm D-bore, {spokes} spokes")
-    w(f"; crown +{crown}mm at mid-height (self-centres a flat belt), flange +{flange}mm at the ends")
+    # THE HEADER USED TO DESCRIBE A DIFFERENT PART. It reported "{spokes} spokes" while the web is
+    # TWO spokes per layer BY CONSTRUCTION — one spiral in, one spiral out, per the unbroken
+    # rim->in->bore->out circuit below. --spokes 3 and --spokes 12 emitted byte-identical files
+    # differing only in that line. And in --sleeve mode it went on to describe a crown, a flange and
+    # spokes on a plain tube that has none of them: four false statements in the artifact's own
+    # header, which is exactly the class of thing this project keeps finding on public pages.
+    if sleeve:
+        w(f"; BAMBOO SLEEVE — OD {od}mm, {width}mm long, {bore_d}mm bore, {sleeve} concentric walls")
+        w("; no crown, no flange, no web — a plain tube; those are pulley features and this is not one")
+    else:
+        w(f"; CROWNED PULLEY — OD {od}mm, {width}mm wide, {bore_d}mm D-bore")
+        w(f"; web: 2 spokes per layer (rim -> spiral in -> bore -> spiral out), "
+          f"rotating {spoke_adv:.4f} rad/layer")
+        w(f"; crown +{crown}mm at mid-height (self-centres a flat belt), flange +{flange}mm at the ends")
     w(f"; bead {bead_w}x{layer_h} at {speed:.0f} mm/s -> flow={flow} mm3/s, {layers} layers")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
@@ -341,7 +353,10 @@ if __name__ == "__main__":
     ap.add_argument("--flat", type=float, default=0.5, help="depth of the D flat")
     ap.add_argument("--crown", type=float, default=0.6)
     ap.add_argument("--flange", type=float, default=2.5)
-    ap.add_argument("--spokes", type=int, default=3)
+    ap.add_argument("--spokes", type=int, default=2,
+                    help="NOT IMPLEMENTED as a free parameter: the web is 2 spokes per layer by\n"
+                         "construction (one spiral in, one out, forming a single unbroken circuit).\n"
+                         "Passing anything else warns rather than silently emitting the same file.")
     ap.add_argument("--sleeve", type=int, default=0,
                     help="plain tube of N concentric walls (a stick coupler), no web")
     ap.add_argument("--spoke-adv", type=float, default=0.09, help="radians the web advances/layer")
@@ -372,6 +387,9 @@ if __name__ == "__main__":
     a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for pulley.py')
     machine.check_flow(a.flow, f' for pulley.py')
     bxy = machine.BED[a.printer]
+    if a.spokes != 2:
+        print(f"  ! --spokes {a.spokes} ignored: this generator draws 2 spokes per layer by "
+              f"construction. The file is identical to --spokes 2; only the header used to differ.")
     g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,
                  a.flow, a.temp, a.bed or machine.bed_for(a.material, a.printer), 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
                  a.sleeve, a.first_w, a.aux, a.brim, a.printer,
