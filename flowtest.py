@@ -55,6 +55,8 @@ Usage:
   python3 flowtest.py --no-home --flows 60,100
 """
 import argparse, math, os
+import sys as _sys
+
 import machine
 import pathstats
 
@@ -135,6 +137,7 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     w(f"G0 F9000 X{_sx - 60:.3f} Y{_sy:.3f}")
     w(f"G1 F1200 X{_sx:.3f} Y{_sy:.3f} E12"); w("G92 E0")
 
+    L.append("; ARGV: " + " ".join(_sys.argv))
     L.append(f"; PRINTER={printer}")
     L.append("; BODY_START")
     e = 0.0

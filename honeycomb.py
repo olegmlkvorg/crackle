@@ -22,6 +22,8 @@ deriving speed from the bead, no travel between first and last extrusion.
 """
 import argparse, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sys as _sys
+
 import machine
 
 
@@ -209,6 +211,12 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E37   ; prime ends where the comb begins")
     w("G92 E0"); # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
     # knowing which plate, and a filename is not a contract.
+    # THE FILE MUST RECORD THE COMMAND THAT MADE IT. The belt that fixed the cleats
+    # recorded neither --dish nor --rail, so which fix version was on the plate could
+    # not be established from the artifact — in a project whose doctrine is measuring
+    # the emitted file, that is a provenance hole. Now every file is reproducible from
+    # its own header.
+    w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
 

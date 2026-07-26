@@ -31,6 +31,8 @@ import os
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
+import sys as _sys
+
 import machine
 
 # CONFIRMED 2026-07-25 at ~6mm: the pulley's D-bore was modelled 6.25 for a 6.0mm shaft and Oleg
@@ -250,6 +252,12 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     w("G92 E0")
     # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
     # knowing which plate, and a filename is not a contract.
+    # THE FILE MUST RECORD THE COMMAND THAT MADE IT. The belt that fixed the cleats
+    # recorded neither --dish nor --rail, so which fix version was on the plate could
+    # not be established from the artifact — in a project whose doctrine is measuring
+    # the emitted file, that is a provenance hole. Now every file is reproducible from
+    # its own header.
+    w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
 

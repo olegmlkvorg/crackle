@@ -30,6 +30,8 @@ import argparse
 import math
 import os
 
+import sys as _sys
+
 import machine
 import hilbert
 
@@ -246,6 +248,12 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     w("G92 E0")
     # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
     # knowing which plate, and a filename is not a contract.
+    # THE FILE MUST RECORD THE COMMAND THAT MADE IT. The belt that fixed the cleats
+    # recorded neither --dish nor --rail, so which fix version was on the plate could
+    # not be established from the artifact — in a project whose doctrine is measuring
+    # the emitted file, that is a provenance hole. Now every file is reproducible from
+    # its own header.
+    w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
 
