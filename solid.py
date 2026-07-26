@@ -728,6 +728,7 @@ def main():
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    machine.check_flow(a.flow, f' for solid.py')
     if a.parts:
         return run_plate(a)
     region = build_part(a.part, a)

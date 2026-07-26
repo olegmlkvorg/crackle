@@ -361,6 +361,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    machine.check_flow(a.flow, f' for belt.py')
     bxy = machine.BED[a.printer]
 
     # The loop must wrap two pulleys: two straights plus one full pulley circumference.

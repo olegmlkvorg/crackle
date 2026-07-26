@@ -80,6 +80,21 @@ MAX_SPEED = 60.0
 MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the head stalls; measured
 
 
+def check_flow(flow, label=""):
+    """Say so when a command asks for LESS than the standing flow rule.
+
+    Oleg: "it is rule here we always run max flow". The generators already default to FLOW; the
+    failure mode is a human (or me) passing --flow with a number carried over from an earlier
+    command and nobody noticing. A shell printed at 36 because that figure was in the previous
+    line of shell history. Under-running is invisible in the output — the part looks fine, it just
+    took half again as long — so it has to announce itself.
+    """
+    if flow < FLOW * 0.999:
+        print(f"  ! flow {flow:g} mm3/s is {flow/FLOW*100:.0f}% of the {FLOW:g} rule{label}. "
+              f"Deliberate? The default is FLOW; passing --flow lower only costs time.")
+    return flow
+
+
 def speed_for(flow, bead_area, label=""):
     """Derive speed from a flow target, and SAY SO when the cap overrides it.
 

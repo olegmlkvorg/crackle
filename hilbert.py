@@ -435,6 +435,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    machine.check_flow(a.flow, f' for hilbert.py')
     bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
            else machine.BED[a.printer])
     span = a.span or (min(bxy) - 2 * a.margin)
