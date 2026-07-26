@@ -292,6 +292,24 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
         raise SystemExit(f"curve spans X {min(xs):.0f}..{max(xs):.0f} Y {min(ys):.0f}..{max(ys):.0f} "
                          f"on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed — off the plate.")
 
+    # A FLOW CEILING BELONGS TO A DURATION — and this generator is the one that proved it.
+    # The order-5 Moore lattice stalled the K2's extruder driver 16 minutes into layer 1 on
+    # 2026-07-26 (machine.SUSTAINED_FLOW carries the firmware log). Path length is known EXACTLY
+    # here, so the duration comes off the real geometry rather than being back-solved from
+    # filament the way the `mins` estimate does it. Lowering speed at a FIXED cross-section lowers
+    # the rate and nothing else: E is per mm, so the part is unchanged to the microgram.
+    _len1 = sum(math.dist(lp[i - 1], lp[i]) for lp in pts for i in range(1, len(lp)))
+    _f1 = machine.flow_for_duration(first_area * first_speed,
+                                    _len1 / first_speed / 60.0, " on layer 1")
+    if _f1 < first_area * first_speed - 1e-9:
+        first_speed = _f1 / first_area
+    _fb = machine.flow_for_duration(flow, _len1 / speed / 60.0 * max(0, layers - 1),
+                                    " on the body layers")
+    if _fb < flow - 1e-9:
+        speed = _fb / (bead_w * bead_h)
+        flow = round(_fb, 1)
+        f = round(speed * 60)
+
     L = []
     w = L.append
     kind = "MOORE (closed)" if closed else "HILBERT (open)"
@@ -393,9 +411,16 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
           f"G1 Z{first_h + (layers-1)*bead_h + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed),
+    # `pts` was rebound from a point list to a LIST OF LOOPS 150 lines above, so len() had been
+    # reporting the tile count: "1 points" for a 14,957-point curve.
+    # And `mins` used to back-solve path length out of filament (e / e_per_mm), which is blind to
+    # travels and to a differently-metered layer 1 — it reported the whole print at the body speed.
+    # Both quantities are now summed from the geometry that was actually emitted.
+    _npts = sum(len(lp) for lp in pts)
+    _mins = (_len1 / first_speed + _len1 / speed * max(0, layers - 1)) / 60.0
+    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=_npts, grams=round(grams, 1), speed=round(speed),
                                      cells=n * n, pitch=round(pitch, 2),
-                                     mins=round(e / e_per_mm / speed / 60, 1))
+                                     mins=round(_mins, 1))
 
 
 if __name__ == "__main__":

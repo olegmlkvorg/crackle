@@ -79,6 +79,58 @@ MACHINE_MAX_SPEED = 120.0   # what the MACHINE can do — headroom above the 111
 MAX_SPEED = 60.0
 MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the head stalls; measured
 
+# ---------------------------------------------------------------------------------------------
+# A FLOW CEILING BELONGS TO A DURATION. Measured on the K2 Plus, 2026-07-26, 02:xx.
+#
+# The order-5 Moore lattice (320mm plate, 4096 cells, one unbroken extrusion) ran layer 1 at a
+# commanded 55 mm3/s and a MEASURED 48.6 (19690mm of filament in 975s = 20.2 mm/s of filament).
+# At 975 seconds of continuous extrusion the K2 firmware logged, twice:
+#     // extruder stall state:1
+#     !! {"code":"key797","msg":"warning_code MCU温度过高","values":["e"]}
+# — the EXTRUDER DRIVER over-heated and lost steps, and the firmware auto-paused the print at 19%.
+# Not a clog: filament_detected was true, the main MCU sat at 45C, the bed held 120.07/120, and the
+# same file had printed 16 minutes clean before it let go. What was constant was the flow; what
+# changed was only TIME. A failure at a fixed time under constant load is a soak, not a rate limit.
+#
+# THIS IS THE SAME NUMBER FAILING THE SAME WAY A THIRD TIME. 81.2 came off a spiral ramp that
+# holds each flow for seconds; 55 was set from it; the comment above FLOW already says a ramp
+# "measures the INSTANTANEOUS ceiling" and that sustained printing "reveals a lower practical
+# ceiling" — and then nothing acted on it. Creality's own profile for this machine advertises
+# max_volumetric_speed: 14, which the firmware prints in its log every time it loads a file.
+#
+# WHY THIS PART AND NOT THE OTHERS. Two rules multiply, and only here:
+#   · the wide-first-layer adhesion hack (Oleg: "first layer maintain same 55 flow but put nozzle
+#     0.1 to the plate, compensate with line width, set it to 10 if needed") makes layer 1 the
+#     THICKEST cross-section in the file — 27.5 x 0.1 = 2.75mm2, 1.14mm of filament per mm of
+#     path, 1.5x the body's 0.765;
+#   · "always max flow" then runs that worst case at the ceiling;
+#   · and a 320mm plate makes layer 1 alone last ~20 minutes with no travel to rest the motor.
+# Every smaller part survives because it finishes before the driver saturates. The K1C printing
+# the bowl lid at the same moment drew 6.1 mm3/s — geometry-limited, never near this.
+#
+# THE FIX PRESERVES THE PART EXACTLY. E is per MILLIMETRE, not per second, so halving the feedrate
+# halves the extruder's duty cycle and changes not one deposited microgram. M220 S50 mid-print took
+# the measured draw from 48.6 to 27.4 mm3/s and the print carried on from 19%.
+SUSTAINED_FLOW = 27.0      # mm3/s the extruder holds INDEFINITELY. Measured as "did not stall",
+                           # which is a floor on the true value, not the value itself.
+SUSTAINED_MINS = 8.0       # unbroken extrusion beyond this is a soak, not a burst. The observed
+                           # stall came at 16 min; half that is the margin, not a second reading.
+
+
+def flow_for_duration(flow, minutes, label=""):
+    """Clamp a flow to what the extruder can hold for `minutes` of UNBROKEN extrusion.
+
+    Oleg's rule is "always max flow" and this does not weaken it — it measures `max` correctly.
+    The ceiling is a function of how long you hold it, and every number this project had was taken
+    from a burst. A generator that knows its own print time must ask this before emitting.
+    """
+    if minutes >= SUSTAINED_MINS and flow > SUSTAINED_FLOW:
+        print(f"  ! flow {flow:g} mm3/s for {minutes:.0f} min of unbroken extrusion{label} — the "
+              f"K2 extruder driver over-heated and stalled at 48.6 mm3/s after 16 min (2026-07-26). "
+              f"Using {SUSTAINED_FLOW:g}. Deposit per mm is unchanged; only the clock moves.")
+        return SUSTAINED_FLOW
+    return flow
+
 
 def check_flow(flow, label=""):
     """Say so when a command asks for LESS than the standing flow rule.

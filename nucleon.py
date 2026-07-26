@@ -142,6 +142,12 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
          cage_N=0, cage_a=0.0, cage_ratio=0.55, cage_w=0.0):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (strand_w * layer_h) / area
+    # LAYER 1 IS A DIFFERENT CROSS-SECTION AND MUST BE METERED AS ONE. It is laid at
+    # layer_h*first_squish (0.51mm), not layer_h (0.6) — feeding it the body's 0.72mm2 over-fills
+    # it 1.18x on the one layer whose only job is to bond. Surplus on layer 1 does not build a
+    # thicker layer, it ploughs the part off the plate (the postfoot failure, +10.4%).
+    # Already fixed in hilbert, waves, honeycomb and solid; this is the fifth site.
+    e_first_mm = (strand_w * layer_h * first_squish) / area
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
     # a calm head beat chasing volumetric throughput; and on stacked geometry the two cannot both
     # be satisfied anyway (see machine.MACHINE_MAX_SPEED).
@@ -298,7 +304,13 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         for i in range(1, len(full)):
             frac = cum[i] / total
             z = z_lo + (z_hi - z_lo) * frac
-            lf = round(min(machine.FIRST_LAYER_SPEED, speed) * 60)   # never faster than the body if frac < 1.0 / layers else f_mm_min
+            # THE COMMENT ATE THE CONDITIONAL. Commit 5fa4d88 appended `# never faster than the
+            # body` in FRONT of `if frac < 1.0 / layers else f_mm_min`, so the ternary became part
+            # of the comment and EVERY move in the file ran at FIRST_LAYER_SPEED — 3323 of 3323
+            # below half the declared flow, under a header still claiming 43.2 mm3/s. Inert while
+            # FIRST_LAYER_SPEED was 50; a 50->20 change activated a typo nothing was watching.
+            lf = (round(min(machine.FIRST_LAYER_SPEED, speed) * 60)
+                  if frac < 1.0 / layers else f_mm_min)
             dz = 0.0
             if wave_amp:
                 # CONTINUOUS Z WAVE, independent of crossings. Arches triggered at crossings can
@@ -324,7 +336,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                 L.append(f"M106 S{fan}")
                 L.append("SET_PIN PIN=fan1 VALUE=255      ; blowers on — layer 1 has bonded")
                 L.append("SET_PIN PIN=fan2 VALUE=255")
-            _epm = e_per_mm
+            _epm = e_first_mm if frac < 1.0 / layers else e_per_mm
             if cage_N:
                 for cs, ce in cage_marks:
                     if cs <= i < ce:
@@ -393,7 +405,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                     d = s - sv
                     if abs(d) < lift_win:
                         dz = max(dz, lift * math.cos(math.pi * d / (2 * lift_win)) ** 2)
-            e += math.dist(pts[i - 1], pts[i]) * e_per_mm
+            e += math.dist(pts[i - 1], pts[i]) * (e_first_mm if layer < first_slow else e_per_mm)
             L.append(f"G1 {'F%d ' % lf if i == 1 else ''}X{pts[i][0]:.3f} "
                      f"Y{pts[i][1]:.3f} Z{z0+dz:.4f} E{e:.5f}")
 
