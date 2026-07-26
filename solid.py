@@ -1006,14 +1006,17 @@ def bowl_lid(bowl_id, shaft_d, height, spigot_h, wall, shaft_clear=2.0, fill_por
     taper_frac = min(0.3, step / max(height, 1e-9))
 
     def region_at(t):
+        _in_bowl = False
         if t <= face_frac:
             body = circle(r_skirt)                       # the lid face: solid, on the plate
         elif t <= face_frac + taper_frac:
             k = (t - face_frac) / max(taper_frac, 1e-9)
             r = r_skirt - step * k                       # 45 deg inward — self-supporting
             body = circle(r).difference(circle(max(r - wall, r_hole + 0.6)))
+            _in_bowl = False
         else:
             body = circle(r_spig).difference(circle(r_spig - wall))   # spigot ring
+            _in_bowl = True
         # THE BOWL HAS RIBS AND THE SPIGOT HAS TO GET PAST THEM. (Oleg, 2026-07-26: "it does not
         # close, remember the ribs".) mixer_bowl() grows `baffles` ribs INWARD from the inner wall
         # by baffle_d — 8mm by default — and this function used to size its spigot from bowl_id
@@ -1035,7 +1038,14 @@ def bowl_lid(bowl_id, shaft_d, height, spigot_h, wall, shaft_clear=2.0, fill_por
         # The notch is built from the SAME box mixer_bowl() uses for the rib, dilated by clearance,
         # so the two parts cannot drift apart: the shared constraint is now shared in code rather
         # than duplicated as a number in two places, which is what broke it the first time.
-        if baffles > 0:
+        # ...AND ONLY THE SPIGOT. The first version of this notched EVERY band, because the cut sat
+        # after the if/elif instead of inside it — so the lid FACE came out with four 12.5-degree
+        # slots straight through it and the lid no longer sealed. Measured on the printed part:
+        # 527 of 720 angle bins had face material, with four real gaps at 0/90/180/270. A cover with
+        # holes in it is a worse failure than a cover that does not fit, because it looks fine.
+        # The face and the rim taper sit ON or ABOVE the bowl rim and never pass a rib; only the
+        # spigot descends into the bore, so only the spigot is cut.
+        if baffles > 0 and _in_bowl:
             r_i = bowl_id / 2.0
             c = baffle_clear
             for i in range(baffles):
