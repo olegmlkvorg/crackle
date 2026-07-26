@@ -831,6 +831,21 @@ def collet_seat(od_small, od_large, od, height, wall, seat_gap=0.30):
     seat_gap widens the bore over the collet's own profile so the two are not an interference fit
     before any load is applied — the collet must be able to enter the seat and THEN be drawn in.
     """
+    # ...AND THE ANGLE ABOVE IS NOW CHECKED RATHER THAN ASSERTED. The paragraph above states the
+    # bound — "far inside the ~45 degrees this toolchain can hold unsupported" — and nothing
+    # enforced it, so the one part in this file that prints an overhang BY DESIGN was the only one
+    # with no angle check. Its structural twin post_foot() has refused above 40 degrees all along.
+    # Measured: `--part seat --height 6 --od 60 --od-small 14 --od-large 34` is 59 degrees from
+    # vertical and emitted clean, and validate.py cannot catch it either — its overhang check is
+    # blind below 71.6 degrees. A number recorded in a docstring is not a guard.
+    _ang = math.degrees(math.atan2(abs(od_large - od_small) / 2.0, max(height, 1e-9)))
+    if _ang > 40:
+        raise SystemExit(
+            f"collet_seat: the bore tapers {od_large:g}->{od_small:g}mm over {height:g}mm, which is "
+            f"{_ang:.0f} degrees from vertical. Over ~40 the bore wall grows inward onto air.\n"
+            f"  Raise --height (to {abs(od_large-od_small)/2.0/math.tan(math.radians(40)):.1f}mm or "
+            f"more), or narrow the taper.")
+
     def region_at(t):
         r_bore = (od_large + (od_small - od_large) * t) / 2.0 + seat_gap
         r_out = od / 2.0
