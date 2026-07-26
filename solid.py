@@ -705,6 +705,47 @@ def mixer(shaft_d, od, blades, blade_w, hub_w, twist_deg, height, layer_h, clear
     return region_at
 
 
+def collet(stick_d, od_small, od_large, slots, slot_w, height, wall, clearance=0.0):
+    """A split tapered sleeve that grips a stick harder the more you pull on it.
+
+    This is the part the shelf is missing. Everything else — shelves, spacers, feet — is a
+    compression member and works by simply sitting on the one below. Putting the POSTS in tension
+    needs something that grips a smooth bamboo rod hard enough to pull against, and friction from a
+    plain collar is not it.
+
+    HOW IT WORKS. The sleeve is a cone, wide at the bottom, split by vertical slots into fingers. It
+    sits inside a matching conical seat in the cap above. Pulling the post upward drags the cone
+    into the narrowing seat, which squeezes the fingers onto the stick. The harder it is pulled, the
+    harder it grips — the load does the clamping, so nothing needs tightening by feel and it cannot
+    shake loose.
+
+    WHY IT IS PRINTABLE. The taper is a radius that varies with layer, which this generator already
+    supports (a region that is a function of height). The splits are VERTICAL slots — a gap in the
+    2D region, not an overhang. Nothing bridges anywhere.
+
+    THE FINGERS MUST BE ABLE TO CLOSE. The bore is modelled at the stick's own size plus shrink,
+    with no clearance: the fingers only need to travel the shrink allowance to bite. Slots run the
+    full height so each finger is a cantilever from the top rather than a hoop that must stretch.
+    """
+    r_bore = (stick_d + SHRINK + clearance) / 2.0
+    if od_small <= 2 * r_bore + 2 * wall:
+        raise SystemExit(
+            f"collet: a {od_small:g}mm narrow end cannot hold a {stick_d:g}mm stick with {wall:g}mm "
+            f"walls — needs at least {2*r_bore + 2*wall:.1f}mm.")
+
+    def region_at(t):
+        # t=0 at the plate (WIDE end down, so the cone is self-supporting as it prints)
+        r_out = (od_large + (od_small - od_large) * t) / 2.0
+        body = circle(r_out).difference(circle(r_bore))
+        for i in range(slots):
+            a = 2 * math.pi * i / slots
+            sl = box(0, -slot_w / 2.0, r_out + wall, slot_w / 2.0)
+            body = body.difference(rotate(sl, math.degrees(a), origin=(0, 0)))
+        return body
+
+    return region_at
+
+
 def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
     """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
 
@@ -733,12 +774,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", default="bracket",
                     choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4",
-                             "gauge", "adapter", "shell", "mixer"])
+                             "gauge", "adapter", "shell", "mixer", "collet"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=6.35, help="1/4 inch bamboo (6.35mm)")
     ap.add_argument("--centres", type=float, default=32.0)
     ap.add_argument("--wall", type=float, default=4.0)
     ap.add_argument("--od", type=float, default=34.0, help="shell/mixer outer diameter")
+    ap.add_argument("--od-small", type=float, default=14.0, help="collet narrow end")
+    ap.add_argument("--slots", type=int, default=3, help="collet splits")
+    ap.add_argument("--slot-w", type=float, default=2.0)
     ap.add_argument("--blades", type=int, default=3)
     ap.add_argument("--blade-w", type=float, default=10.0)
     ap.add_argument("--hub-w", type=float, default=4.0)
@@ -827,6 +871,9 @@ def build_part(part, a):
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
+    elif part == "collet":
+        return collet(a.stick, a.od_small, a.od, a.slots, a.slot_w, a.height, a.wall,
+                      clearance=a.clearance)
     elif part == "mixer":
         return mixer(a.axle, a.od, a.blades, a.blade_w, a.hub_w, a.twist,
                      a.height, a.layer_h, clearance=a.clearance)
