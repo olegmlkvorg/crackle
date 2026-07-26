@@ -184,22 +184,28 @@ def joint_layers(pts, layers, bead_w, tenon_n, mortise_n, slot_gap, wall_n):
 
 def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          fillet, layers, closed, printer='k1c', aux=0.2, material='pla',
-         tile=1, gap=6.0):
+         tile=1, gap=6.0, mix=()):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
     speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
     flow = speed * bead_w * bead_h
     f = round(speed * 60)
 
+    # Every order that will appear on the plate must clear the fuse check, not just the default.
+    orders = list(mix) if mix else [order]
+    for o in orders:
+        n_o = (2 ** (o + 1)) if closed else (2 ** o)
+        p_o = span / (n_o - 1)
+        if p_o < bead_w * 1.6:
+            raise SystemExit(
+                f"order {o} over {span:.0f}mm gives a {p_o:.2f}mm pitch, but the bead is "
+                f"{bead_w}mm wide — neighbouring passes would fuse into a solid slab. Lower the "
+                f"order or raise --span (need pitch >= {bead_w*1.6:.2f}mm).")
     n = (2 ** (order + 1)) if closed else (2 ** order)
     pitch = span / (n - 1)
-    if pitch < bead_w * 1.6:
-        raise SystemExit(
-            f"order {order} over {span:.0f}mm gives a {pitch:.2f}mm pitch, but the bead is "
-            f"{bead_w}mm wide — neighbouring passes would fuse into a solid slab. Lower --order or "
-            f"raise --span (need pitch >= {bead_w*1.6:.2f}mm).")
 
-    pts = round_corners(curve(order, span, closed), fillet)
+    shapes = [round_corners(curve(o, span, closed), fillet) for o in orders]
+    pts = shapes[0]
 
     # TILE THE WHOLE PLATE. Oleg: "use entire area to print everything needed not a tiny thing".
     # Copies are joined by a THIN LINK at reduced flow rather than a travel — the same trick

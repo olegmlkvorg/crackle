@@ -30,6 +30,7 @@ import os
 
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
+from shapely.affinity import translate
 
 import sys as _sys
 
@@ -487,7 +488,7 @@ def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
                .difference(Point(centres, 0).buffer(r_s, 96))
 
 
-if __name__ == "__main__":
+def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", default="bracket",
                     choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4", "gauge", "adapter"])
@@ -529,37 +530,129 @@ if __name__ == "__main__":
                     choices=["pla","petg","tpu","abs"],
                     help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
+    ap.add_argument("--parts", default="",
+                    help="ONE PLATE, many parts: 'coupler*3,bracket*2,foot'. Overrides --part.")
+    ap.add_argument("--part-gap", type=float, default=8.0,
+                    help="mm between parts on a multi-part plate")
+    ap.add_argument("--margin", type=float, default=12.0, help="mm kept clear at the bed edge")
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
-    if a.part == "bracket":
+    if a.parts:
+        return run_plate(a)
+    region = build_part(a.part, a)
+    if a.cavity > 0:
+        region = shelled(region, a.cavity, a.floor, a.height, a.layer_h)
+    return finish(region, a, a.part,
+                  f"{a.out}/{a.part}_{a.printer}_s{a.stick:g}_c{a.centres:g}"
+                  f"_h{a.height:g}_T{a.temp}.gcode")
+
+
+def build_part(part, a):
+    """Construct one part's 2D region from the shared parameter set."""
+    if part == "bracket":
         region = bracket(a.axle, a.stick, a.centres, a.wall, clearance=a.clearance)
-    elif a.part == "foot":
+    elif part == "foot":
         region = plate([(0, 0, a.stick)], a.wall * 3, clearance=a.clearance)
-    elif a.part == "adapter":
+    elif part == "adapter":
         region = adapter(a.axle, a.flat, a.stick, a.wall)
-    elif a.part == "gauge":
+    elif part == "gauge":
         # FIT GAUGE — three bores, one print. The shrink figure (printed = model - 0.25) was
         # calibrated on a 4mm hole and is unverified at 12.7mm, and a coupler bored for ZERO
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
-    elif a.part == "coupler":
+    elif part == "coupler":
         region = plate([(0, 0, a.stick)], a.wall, clearance=a.clearance)
     else:
-        n = int(a.part[-1])
+        n = int(part[-1])
         region = plate([(i * a.centres, 0, a.stick) for i in range(n)], a.wall,
                        clearance=a.clearance, hollow=a.hollow)
-    if a.cavity > 0:
-        region = shelled(region, a.cavity, a.floor, a.height, a.layer_h)
+    return region
+
+
+def finish(region, a, label, fn):
     g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                  a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
-                 f"{a.part.upper()} stick{a.stick:g} wall{a.wall:g}")
+                 f"{label.upper()} stick{a.stick:g} wall{a.wall:g}")
     os.makedirs(a.out, exist_ok=True)
-    fn = f"{a.out}/{a.part}_{a.printer}_s{a.stick:g}_c{a.centres:g}_h{a.height:g}_T{a.temp}.gcode"
     open(fn, "w").write(g)
     print(f"{fn}")
     print(f"  {st['size'][0]}x{st['size'][1]}mm, {st['rings']} concentric contours, "
           f"{st['layers']} layers = {a.height}mm tall")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g")
+    return st
+
+
+def run_plate(a):
+    """ONE PLATE, EVERY PART THAT IS STILL NEEDED.
+
+    Oleg: "use entire area to print everything needed not a tiny thing". A plate of 49 identical
+    pads satisfies the letter of that and misses the point — the frame needs SIX DIFFERENT parts,
+    and printing them one file at a time is six heat-ups, six homings, and six chances to collide
+    with a plate that was not cleared.
+
+    Parts are packed by bounding box into shelves and unioned into one region. They are disjoint,
+    so contours() already treats each as its own ring family; nothing about the per-part geometry
+    changes. The only real constraint is that every part on a plate shares ONE height, because the
+    layer loop is shared — which is true of the whole joint family here (all 14mm).
+    """
+    spec = []
+    for chunk in a.parts.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        name, _, n = chunk.partition("*")
+        spec.append((name.strip(), int(n) if n else 1))
+
+    built = []
+    for name, n in spec:
+        r = build_part(name, a)
+        if a.cavity > 0 and name in ("foot",):
+            raise SystemExit("cavity parts are callables; keep them on their own plate")
+        for _ in range(n):
+            built.append((name, r))
+
+    # THE BRIM DECIDES THE GAP, NOT TASTE.
+    # Each part's brim reaches brim_gap + brim*bead_w beyond its outline. Two neighbours therefore
+    # need TWICE that plus a bead of clear air between the outermost brim rings, or the brims merge
+    # and the "parts" come off the plate as one welded lump — with the join hidden under a brim
+    # that is supposed to snap away. Caught here rather than on the bed.
+    reach = a.brim_gap + a.brim * a.bead_w
+    need_gap = 2 * reach + a.bead_w
+    if a.part_gap < need_gap:
+        raise SystemExit(
+            f"--part-gap {a.part_gap:g}mm is too tight: {a.brim} brim rings at {a.bead_w:g}mm reach "
+            f"{reach:.2f}mm past each part, so neighbours need >= {need_gap:.2f}mm or their brims "
+            f"fuse. Raise --part-gap to {math.ceil(need_gap)} or drop --brim.")
+
+    # SHELF PACK. Sorted tallest-first so shelves stay tight; a plain grid on the largest part
+    # would waste most of a 350mm bed on the small ones.
+    gap = a.part_gap
+    bed_x, bed_y = machine.BED[a.printer]
+    usable_x = bed_x - 2 * a.margin
+    built.sort(key=lambda it: -(it[1].bounds[3] - it[1].bounds[1]))
+    placed, x, y, shelf_h = [], 0.0, 0.0, 0.0
+    for name, r in built:
+        minx, miny, maxx, maxy = r.bounds
+        w, h = maxx - minx, maxy - miny
+        if x > 0 and x + w > usable_x:
+            x, y, shelf_h = 0.0, y + shelf_h + gap, 0.0
+        placed.append((name, translate(r, x - minx, y - miny)))
+        x += w + gap
+        shelf_h = max(shelf_h, h)
+    total_h = y + shelf_h
+    if total_h > bed_y - 2 * a.margin:
+        raise SystemExit(f"{len(built)} parts need {total_h:.0f}mm of Y on a "
+                         f"{bed_y:.0f}mm plate — drop some or raise --margin.")
+
+    region = unary_union([r for _, r in placed])
+    counts = ", ".join(f"{n}x {name}" for name, n in spec)
+    print(f"  plate: {counts} — {len(built)} parts, {x if y == 0 else usable_x:.0f}x{total_h:.0f}mm")
+    fn = f"{a.out}/plate_{a.printer}_{len(built)}parts_h{a.height:g}_T{a.temp}.gcode"
+    return finish(region, a, "PLATE " + counts, fn)
+
+
+if __name__ == "__main__":
+    main()
