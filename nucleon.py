@@ -223,6 +223,14 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # bounds-checks against the K2 plate whatever the target, and push.py's wrong-printer refusal
     # never fires; without `; MATERIAL=` the TPU fan guard cannot see the file at all. The two
     # omissions covered for each other, which is why neither showed up as a failure.
+    # DECLARE ARCH GEOMETRY. Z varies WITHIN a layer here by design (the weld lift, the wave), so
+    # the layer-pair overhang check cannot read this file: it bins layers by Z, and a continuum of Z
+    # values shatters into thousands of pseudo-layers that obviously do not support one another —
+    # it reported 100% of "layer Z0.544" unsupported by "layer Z0.540", 4 microns below it. That
+    # false FAIL is part of why the hero file was published while failing validate. Saying so in the
+    # file is honest; silently skipping the check would not be.
+    if weld < 1.0 or wave_amp:
+        w(f"; ARCH_LIFT={max(lift if weld < 1.0 else 0.0, 2*wave_amp):.3f}")
     w(f"; PRINTER={printer}")
     w(f"; MATERIAL={material}")
     w("; ARGV: " + " ".join(sys.argv))

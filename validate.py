@@ -238,25 +238,61 @@ def check(path):
     # carries Z on every extruding G1, so layer_floor never left its initial value and the check
     # could not fire. Verified by forcing it: a file climbing to Z5.1 and then extruding at Z1.5
     # passed clean. Track the highest Z at which material has actually been deposited instead.
-    _pm = 0.0
+    # ...and then it cried wolf on the flagship, which is how the hero file came to be PUBLISHED
+    # while failing five checks. The fixed version tracked the highest Z at which material had been
+    # deposited ANYWHERE, with no XY at all. That is right for stacked layers and completely wrong
+    # for ARCH geometry, where Z varies WITHIN a layer by design: nucleon --weld 0.5 lifts over each
+    # crossing and comes back down, so every later base-level move looked like a dive into the part.
+    # Measured on nucleon_N6_weld0.5: this reported 1620 offending moves implying a 7mm plunge; the
+    # same file checked per-XY-cell in EMISSION ORDER has 168 offending samples, worst 0.349mm.
+    # An order of magnitude of over-report — and a guard that loud on the flagship is one nobody reads.
+    #
+    # Material is now tracked per XY CELL and strictly in time order: a move is a dive only if the
+    # nozzle passes under material already laid in the cell it is actually crossing.
+    _CELL = 0.6
+    _topo = {}
     _pz = 0.0
+    _px = _py = None
     _dives = []
     for _i, _l in enumerate(_lines):
         if _l.startswith('; ---- part'):
-            _pm = 0.0          # a new part stands on bare plate; the last part's height is irrelevant
+            _topo = {}         # a new part stands on bare plate; the last part's height is irrelevant
         _b = _l.split(';')[0]
+        if not _b.startswith(('G0 ', 'G1 ')):
+            continue
         _m = re.search(r'Z([\d.]+)', _b)
-        if _b.startswith(('G0 ', 'G1 ')) and _m: _pz = float(_m.group(1))
-        if re.match(r'^G1 .*E[\d.]', _b):
-            if _pm > 0.3 and _pz < _pm - 0.35:
-                _dives.append((_i + 1, _pz, _pm))
-            _pm = max(_pm, _pz)
+        _mx = re.search(r'X([-\d.]+)', _b)
+        _my = re.search(r'Y([-\d.]+)', _b)
+        _nz = float(_m.group(1)) if _m else _pz
+        _nx = float(_mx.group(1)) if _mx else _px
+        _ny = float(_my.group(1)) if _my else _py
+        if _nx is None or _ny is None:
+            _pz = _nz
+            continue
+        _ext = bool(re.match(r'^G1 .*E[\d.]', _b))
+        if _px is not None:
+            _n = min(64, max(1, int(math.hypot(_nx - _px, _ny - _py) / _CELL)))  # bounded
+            _worst = None
+            for _k in range(_n + 1):
+                _t = _k / _n
+                _cx = int((_px + (_nx - _px) * _t) / _CELL)
+                _cy = int((_py + (_ny - _py) * _t) / _CELL)
+                _cz = _pz + (_nz - _pz) * _t
+                _prev = _topo.get((_cx, _cy))
+                if _prev is not None and _prev > 0.3 and _prev - _cz > 0.35:
+                    if _worst is None or _prev - _cz > _worst[2] - _worst[1]:
+                        _worst = (_i + 1, round(_cz, 3), round(_prev, 3))
+                if _ext and (_prev is None or _cz > _prev):
+                    _topo[(_cx, _cy)] = _cz
+            if _worst and _ext:
+                _dives.append(_worst)
+        _px, _py, _pz = _nx, _ny, _nz
     if _dives:
-        _d0 = _dives[0]
+        _d0 = max(_dives, key=lambda d: d[2] - d[1])    # report the WORST, not merely the first
         problems.append(
-            f"{len(_dives)} EXTRUDING move(s) below already-printed material — e.g. line {_d0[0]} "
-            f"extrudes at Z{_d0[1]} with material standing at Z{_d0[2]}. The nozzle is inside the "
-            f"part it already made.")
+            f"{len(_dives)} EXTRUDING move(s) below already-printed material — worst at line "
+            f"{_d0[0]}, extruding at Z{_d0[1]} where material already stands at Z{_d0[2]} in that "
+            f"same XY cell ({_d0[2]-_d0[1]:.2f}mm into the part it already made).")
 
     # PER-MOVE STARVATION — classify by physics, not by opcode.
     # The existing starved-move check is an AGGREGATE (>5% of moves), which suppressed 244 genuinely
@@ -324,7 +360,21 @@ def check(path):
         if _b.startswith(('G0 ', 'G1 ')) and _m: _zz = round(float(_m.group(1)), 3)
         _mm = re.match(r'^G1 .*X([-\d.]+) Y([-\d.]+).*E[\d.]', _b)
         if _mm: _ly.setdefault(_zz, []).append((float(_mm.group(1)), float(_mm.group(2))))
-    _zs = sorted(_ly)
+    # ARCH GEOMETRY CANNOT BE READ BY A LAYER-PAIR CHECK, and pretending otherwise is what taught
+    # everyone to ignore this validator. Binning layers by Z assumes Z is piecewise constant. Where
+    # the generator varies Z WITHIN a layer on purpose (nucleon's weld lift, the wave), the file has
+    # thousands of distinct Z values, each holding a handful of points, and consecutive pseudo-layers
+    # 4 MICRONS apart naturally fail to support one another: measured "100% of layer Z0.544
+    # unsupported by layer Z0.540". Generators that do this now stamp `; ARCH_LIFT=`. Skipping is
+    # stated out loud, never silent — an unrun check reported as a pass is the worse failure.
+    _arch = re.search(r'^; ARCH_LIFT=([\d.]+)', open(path).read()[:4000], re.M)
+    if _arch and float(_arch.group(1)) > 0:
+        print(f"  overhang check SKIPPED — file declares ARCH_LIFT={_arch.group(1)}mm, so Z varies "
+              f"within a layer by design and layer-pair support is not measurable this way. "
+              f"The per-XY-cell dive check still applies and did run.")
+        _zs = []
+    else:
+        _zs = sorted(_ly)
     if len(_zs) > 2:
         _bead = 1.2
         _mb = re.search(r'bead ([\d.]+)x', open(path).read()[:4000])
