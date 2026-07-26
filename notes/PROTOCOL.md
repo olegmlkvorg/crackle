@@ -1,5 +1,12 @@
 # Phase 1 run protocol — is the crackle controllable?
 
+> **CORRECTION (2026-07-26).** This document is a historical record and names generators that no
+> longer exist: `crackle.py`, `weave.py` and `zwave.py` were superseded. The weld-fraction ladder is
+> now `./make-ladder.sh <measured max flow>`, which drives `nucleon.py`; solid parts moved to
+> `solid.py` and area fill to `hilbert.py`. The measurements below stand — the commands do not.
+> Kept rather than deleted, because how a number was obtained is part of the number.
+
+
 ## ⚠️ Before you print anything (2 minutes, saves hours)
 1. **Turn OFF AI detection: Settings → Camera → AI function → uncheck "fault pause" / disable AI
    detection.** (Creality's own wiki, code AC0101, applies to K2 Plus.) This print is *deliberately*

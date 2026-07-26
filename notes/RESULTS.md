@@ -1,5 +1,12 @@
 # Phase 1 results — fill in while standing on them
 
+> **CORRECTION (2026-07-26).** This document is a historical record and names generators that no
+> longer exist: `crackle.py`, `weave.py` and `zwave.py` were superseded. The weld-fraction ladder is
+> now `./make-ladder.sh <measured max flow>`, which drives `nucleon.py`; solid parts moved to
+> `solid.py` and area fill to `hilbert.py`. The measurements below stand — the commands do not.
+> Kept rather than deleted, because how a number was obtained is part of the number.
+
+
 Score barefoot, same floor. Identify coupons by the **raised tally bars on the base**.
 
 ## Round 1 — is there an effect at all? (9 minutes)

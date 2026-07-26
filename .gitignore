@@ -1,1 +1,4 @@
-out/*.gcode
+out/
+__pycache__/
+*.pyc
+.DS_Store

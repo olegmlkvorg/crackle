@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Build the weld-fraction ladder at a MEASURED flow. One argument: max flow in mm3/s.
 #
+# SIDE EFFECT, READ THIS FIRST: this script REWRITES the FLOW constant inside machine.py.
+# machine.py is the single source of truth every generator reads, so running this changes
+# the flow used by every other tool in the repo until you change it back. That is deliberate
+# (the ladder must run at YOUR measured flow) but it is not obvious, and it will silently
+# alter unrelated prints. Commit machine.py first, or note its current FLOW value.
+#
 #   ./make-ladder.sh 52
 #
 # Five rungs, identical in every respect except how many crossings are left unwelded. Laid out
