@@ -344,7 +344,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
             _mult = 1.0 if _seen[_k] <= 2 else 0.15
             e += d * (e_first_mm if k == 0 else e_per_mm) * _mult
             L.append(f"G1 {'F%d ' % f if (px, py) == seq[0] and k == 0 else ''}"
-                     f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
+                     f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}{' ; RETRACE thin' if _mult < 1.0 else ''}")
             px, py = x, y
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press+(layers-1)*bead_h+40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]

@@ -301,7 +301,8 @@ def check(path):
     # Deliberate thin links are TAGGED in the source that emits them; anything untagged that is
     # starved is a bug. Tagging beats loosening the threshold — a looser threshold would have let
     # the 18mm prime thread through, which is the exact defect this guard exists to catch.
-    _starved = [t for t in _starved if '; LINK' not in _lines[t[0] - 1]]
+    _starved = [t for t in _starved
+                if '; LINK' not in _lines[t[0] - 1] and '; RETRACE' not in _lines[t[0] - 1]]
     if _starved:
         _w = max(_starved, key=lambda t: t[1])
         problems.append(
