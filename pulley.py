@@ -181,6 +181,26 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     w("M82")
     w("G92 E0")
 
+    # THE RAMP HEIGHT MUST COME FROM THE BEAD, NOT FROM A CONSTANT.
+    # This was a hardcoded 2.0mm window, 48 lines below a correctly derived overhang bound. The
+    # flange is spread over that window whatever its size, so the LATERAL step per layer is
+    # flange * layer_h / 2.0 — which grows with the flange and with the layer height, and was
+    # compared against nothing. Measured at layer_h 0.6, bead 1.2:
+    #     --flange 2.5 (the default)  0.75mm/layer   62% of the bead   fine
+    #     --flange 5                  1.50mm/layer  125% of the bead   overhangs, and passes clean
+    #     --flange 6                  1.80mm/layer  150% of the bead
+    # Each layer of the ramp hangs that far past the one below it; beyond a bead width there is
+    # nothing underneath to land on. The silent window is the dangerous part — validate.py's
+    # overhang check is blind below 71.6 degrees, so --flange 5 emitted and validated clean.
+    # Solving flange*layer_h/ramp <= bead_w for ramp gives the bound below. The 2.0 floor keeps
+    # every previously-safe pulley byte-identical.
+    _ramp_h = max(2.0, flange * layer_h / max(bead_w, 1e-6))
+    if _ramp_h > width / 2.0:
+        raise SystemExit(
+            f"flange {flange}mm needs a {_ramp_h:.1f}mm ramp at layer_h {layer_h} to keep each "
+            f"layer within one {bead_w}mm bead of the one below, but the pulley is only {width}mm "
+            f"wide — the two end ramps would overlap and there would be no straight rim left.\n"
+            f"  Reduce --flange (to {width/2.0*bead_w/layer_h:.1f}mm or less), or widen the pulley.")
     path_layers = []
     cur_ang = 0.0
     for k in range(layers):
@@ -189,9 +209,9 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         r_rim = od / 2 + crown * math.sin(math.pi * t)
         # flanges: the outer few layers step out to keep the belt on
         edge = min(k, layers - 1 - k) * layer_h
-        if edge < 2.0:
+        if edge < _ramp_h:
             # ramp, not a step: a sudden +2.5mm between two layers is a 2.5mm jump in the path
-            r_rim += flange * (1.0 - edge / 2.0)
+            r_rim += flange * (1.0 - edge / _ramp_h)
         a0 = spoke_adv * k
         # START THE RIM WHERE THE LAST SPOKE LEFT OFF. Restarting it at a fixed angle left a chord
         # across the pulley face -- a 31mm straight extruded move, the same class of artifact as the
