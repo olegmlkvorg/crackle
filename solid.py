@@ -31,7 +31,7 @@ import re
 
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
-from shapely.affinity import translate
+from shapely.affinity import translate, rotate
 
 import sys as _sys
 
@@ -582,6 +582,63 @@ def plate(bores, wall, thickness=None, clearance=0.0, hollow=0.0):
     return body
 
 
+def spacer_shell(bore_d, od, wall, height, floor_h, layer_h, vents=0, vent_w=4.0,
+                 vent_from=0.55, clearance=0.0):
+    """A fillable tube that threads onto a post: two concentric walls with a void between them.
+
+    Oleg, 2026-07-26: a 24-inch bamboo shelf, "wise distribution of empty internals to be filled
+    with gipsum mix and some with expanding foam (upper parts)", and "make sure the shells for foam
+    has holes for vent and over growth".
+
+    WHY THIS SHAPE. The frame is four 610mm sticks standing as posts, with shelves threaded on and
+    these tubes stacked between them as the spacers that set shelf height. The posts are pulled into
+    TENSION by tightening at the top; every tube is therefore a COMPRESSION member, which is the one
+    load a hollow tube is best at and the one filling helps most.
+
+    The cavity is not modelled — it falls out of the geometry. Shelling a disc-with-a-bore erodes
+    the outer edge inward AND the bore outward, leaving two concentric walls with a void between.
+    Nothing bridges: every surface is a constant cross-section extruded straight up.
+
+    FILL, BY POSITION IN THE STACK:
+      · low tubes  → gypsum + sand. ~1.8 g/cm3 against PLA's 1.24, so a filled tube outweighs a
+        solid printed one while using a third of the plastic. Mass low down is what stops a tall
+        shelf walking.
+      · high tubes → expanding foam. Stiffens the wall against buckling for almost no weight, which
+        is the opposite of what you want at the bottom.
+
+    VENTS ARE NOT OPTIONAL ON THE FOAM ONES. Expanding foam in a sealed tube has nowhere to go: it
+    either splits the wall or cures compressed and never sets properly. The slots run VERTICALLY
+    through the wall — a gap in the 2D region, so still no bridging — and they do two jobs at once:
+    air leaves as foam rises, and surplus foam is allowed to escape and be trimmed rather than
+    building pressure. They start above `vent_from` of the height so the lower wall stays closed and
+    the tube can still be stood up and filled from the top.
+    """
+    r_out = od / 2.0
+    r_bore = (bore_d + SHRINK + clearance) / 2.0
+    base = Point(0, 0).buffer(r_out, 96).difference(Point(0, 0).buffer(r_bore, 96))
+
+    floor_frac = min(0.9, max(0.0, floor_h / max(height, 1e-9)))
+    slots = []
+    if vents:
+        for i in range(vents):
+            a = 2 * math.pi * i / vents
+            # a radial slot cut clean through the outer wall
+            slot = box(r_out - wall * 1.6, -vent_w / 2.0, r_out + wall, vent_w / 2.0)
+            slots.append(rotate(slot, math.degrees(a), origin=(0, 0)))
+
+    def region_at(t):
+        if t <= floor_frac:
+            return base                      # solid floor: the fill cannot fall out
+        inner = base.buffer(-wall)
+        r = base if inner.is_empty else base.difference(inner)
+        if slots and t >= vent_from:
+            for sl in slots:
+                r = r.difference(sl)
+        return r
+
+    return region_at
+
+
 def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
     """Bearing block: an axle bore and a bamboo-stick bore, joined by a waisted body.
 
@@ -609,11 +666,18 @@ def bracket(axle_d, stick_d, centres, wall, shrink=0.25, clearance=0.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", default="bracket",
-                    choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4", "gauge", "adapter"])
+                    choices=["bracket", "foot", "coupler", "spacer2", "spacer3", "spacer4",
+                             "gauge", "adapter", "shell"])
     ap.add_argument("--axle", type=float, default=6.0)
     ap.add_argument("--stick", type=float, default=6.35, help="1/4 inch bamboo (6.35mm)")
     ap.add_argument("--centres", type=float, default=32.0)
     ap.add_argument("--wall", type=float, default=4.0)
+    ap.add_argument("--od", type=float, default=34.0, help="shell outer diameter")
+    ap.add_argument("--vents", type=int, default=0,
+                    help="vertical vent slots — REQUIRED for expanding foam, 0 for gypsum+sand")
+    ap.add_argument("--vent-w", type=float, default=4.0, help="vent slot width mm")
+    ap.add_argument("--vent-from", type=float, default=0.55,
+                    help="fraction of height above which vents open (lower wall stays closed)")
     ap.add_argument("--flat", type=float, default=0.5, help="D-shaft flat depth mm")
     ap.add_argument("--height", type=float, default=12.0)
     ap.add_argument("--bead-w", type=float, default=1.2)
@@ -669,9 +733,13 @@ def main():
     region = build_part(a.part, a)
     if a.cavity > 0:
         region = shelled(region, a.cavity, a.floor, a.height, a.layer_h)
+    # THE FILENAME MUST DISTINGUISH THE PARTS. A vented foam shell and a sealed gypsum shell differ
+    # only in --vents, and both wrote to the same name — so the second silently replaced the first
+    # and either could be printed believing it was the other.
+    _tag = f"_v{a.vents}" if a.part == "shell" else ""
     return finish(region, a, a.part,
                   f"{a.out}/{a.part}_{a.printer}_s{a.stick:g}_c{a.centres:g}"
-                  f"_h{a.height:g}_T{a.temp}.gcode")
+                  f"_h{a.height:g}{_tag}_T{a.temp}.gcode")
 
 
 def build_part(part, a):
@@ -688,6 +756,10 @@ def build_part(part, a):
         # clearance will not accept a stick at all. Measure once instead of printing a set wrong.
         region = plate([(i * (a.stick * 2.6 + 8), 0, a.stick + 0.2 + 0.25 * i)
                         for i in range(3)], 3.0)
+    elif part == "shell":
+        return spacer_shell(a.stick, a.od, a.wall, a.height, a.floor, a.layer_h,
+                            vents=a.vents, vent_w=a.vent_w, vent_from=a.vent_from,
+                            clearance=a.clearance)
     elif part == "coupler":
         region = plate([(0, 0, a.stick)], a.wall, clearance=a.clearance)
     else:
