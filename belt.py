@@ -36,10 +36,28 @@ import machine
 import hilbert
 
 
-def stadium(length, width, n=720):
-    """Centreline of a stadium: two straights of `length`, two semicircles of radius width/2."""
+def stadium(length, width, n=0, min_seg=0.4):
+    """Centreline of a stadium: two straights of `length`, two semicircles of radius width/2.
+
+    POINT COUNT FOLLOWS THE PERIMETER, NOT A CONSTANT. This was a fixed n=720 whatever the part,
+    so segment length — and therefore MOVE RATE — scaled inversely with size. Measured at 60 mm/s:
+
+        centres 150  perimeter 378.5mm  seg 0.525mm  ->  114 moves/s
+        centres  30  perimeter 138.5mm  seg 0.192mm  ->  312 moves/s
+        centres  20  perimeter  77.7mm  seg 0.108mm  ->  557 moves/s
+        centres   5  perimeter  28.8mm  seg 0.040mm  -> 1500 moves/s
+
+    Above ~300 (machine.MAX_MOVES_PER_SEC) Klipper drains its lookahead faster than it can refill
+    and the head stalls — with NO error, which is what makes it expensive. The big belt this file
+    was written for sits at 114 and never showed it; every smaller one was a trap waiting.
+    pulley.py already solved this by decimating, in the same repo; it was never carried across.
+
+    The 720 ceiling is kept, so belts large enough to have been safe emit BYTE-IDENTICAL files.
+    """
     r = width / 2.0
     per = 2 * length + 2 * math.pi * r
+    if not n:
+        n = max(64, min(720, int(per / max(min_seg, 1e-6))))
     pts = []
     for i in range(n):
         s = per * i / n
