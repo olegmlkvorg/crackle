@@ -155,6 +155,41 @@ def check(path):
             _drag = [i for i in _far if re.search(r'X[-\d.]+ Y[-\d.]+', _lines[i])
                      and not re.search(r'Z', _lines[i])]
             print(f"  sequential: {len(_inside)} travels, {len(_bad_e)} extruding (must be 0)")
+    # PARTS MUST NOT OVERLAP. This is the check that was missing when a sequential plate stacked
+    # all 15 parts on the centre of the bed and the head drove into a finished part — audible, and
+    # a printer shutdown. EVERY MOVE IN THAT FILE WAS INDIVIDUALLY VALID. The error existed only in
+    # the relationship BETWEEN parts, which is exactly the class of bug a per-move validator misses,
+    # so it has to be checked as geometry: two parts printed one after another may not share ground.
+    if _seq:
+        _bb = []          # (label, minx, maxx, miny, maxy)
+        _cur, _xs, _ys = "part 1", [], []
+        for l in _lines:
+            if l.startswith('; ---- part'):
+                if _xs:
+                    _bb.append((_cur, min(_xs), max(_xs), min(_ys), max(_ys)))
+                _cur = l.strip('; -').split(':')[0].strip(); _xs, _ys = [], []
+            _m = re.match(r'^G[01] .*X([-\d.]+) Y([-\d.]+)', l)
+            if _m:
+                _xs.append(float(_m.group(1))); _ys.append(float(_m.group(2)))
+        if _xs:
+            _bb.append((_cur, min(_xs), max(_xs), min(_ys), max(_ys)))
+        _clash = []
+        for _i in range(len(_bb)):
+            for _j in range(_i + 1, len(_bb)):
+                _a, _b = _bb[_i], _bb[_j]
+                _ox = min(_a[2], _b[2]) - max(_a[1], _b[1])
+                _oy = min(_a[4], _b[4]) - max(_a[3], _b[3])
+                if _ox > 0.5 and _oy > 0.5:
+                    _clash.append((_a[0], _b[0], _ox, _oy))
+        if _clash:
+            _f = _clash[0]
+            problems.append(
+                f"{len(_clash)} pair(s) of sequentially-printed parts OVERLAP on the plate — "
+                f"e.g. '{_f[0]}' and '{_f[1]}' share {_f[2]:.0f}x{_f[3]:.0f}mm. The head would "
+                f"print the second one into the first and crash.")
+        else:
+            print(f"  sequential: {len(_bb)} part footprints, none overlapping")
+
     # STARVED MOVES. Feedrates PERSIST in gcode, so a slow press or a stationary dab leaves every
     # following move crawling until something sets F again — long stretches ran at 24 mm3/s against
     # a 55 target and looked like the extruder had paused. Nothing was paused; it was starved.

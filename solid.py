@@ -161,7 +161,7 @@ def order_rings(rings, here):
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, brim_gap=0.18,
-         material='pla', hop_min=8.0):
+         material='pla', hop_min=8.0, centre=True):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = machine.speed_for(flow, bead_w * layer_h, f" for {name}")
@@ -240,8 +240,17 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     _allr = rings + base_extra + (contours(region(1.0), bead_w) if _is_fn else [])
     xs = [p[0] for r in _allr for p in r]
     ys = [p[1] for r in _allr for p in r]
-    ox = (bed_xy[0] - (max(xs) + min(xs))) / 2.0
-    oy = (bed_xy[1] - (max(ys) + min(ys))) / 2.0
+    # CENTRING IS FOR A SINGLE PART ONLY.
+    # A sequential plate hands emit() parts that are ALREADY positioned by the shelf packer.
+    # Re-centring each one silently discarded that packing and stacked all 15 parts on the middle
+    # of the bed — part 2 drove into finished part 1, which Oleg heard as a hit before the printer
+    # reported abnormal resistance and shut down. Nothing in the file looked wrong: every move was
+    # individually valid, and the coordinates were only obviously wrong when compared BETWEEN parts.
+    if centre:
+        ox = (bed_xy[0] - (max(xs) + min(xs))) / 2.0
+        oy = (bed_xy[1] - (max(ys) + min(ys))) / 2.0
+    else:
+        ox = oy = 0.0
     if min(xs) + ox < 4 or min(ys) + oy < 4 or max(xs) + ox > bed_xy[0] - 4 \
             or max(ys) + oy > bed_xy[1] - 4:
         raise SystemExit(f"{name} spans {max(xs)-min(xs):.0f}x{max(ys)-min(ys):.0f}mm — "
@@ -671,6 +680,16 @@ def run_plate(a):
         raise SystemExit(f"{len(built)} parts need {total_h:.0f}mm of Y on a "
                          f"{bed_y:.0f}mm plate — drop some or raise --margin.")
 
+    # CENTRE THE ARRANGEMENT, NOT THE PARTS. The packer lays parts out from the origin, which is off
+    # the plate; emit() used to rescue that by centring whatever it was handed, and in sequential
+    # mode that rescue is what stacked every part on the middle of the bed. So the offset is applied
+    # ONCE, here, to the whole layout — and emit() is told not to centre (centre=False).
+    _ax = [c for _, r in placed for c in (r.bounds[0], r.bounds[2])]
+    _ay = [c for _, r in placed for c in (r.bounds[1], r.bounds[3])]
+    off_x = (bed_x - (max(_ax) + min(_ax))) / 2.0
+    off_y = (bed_y - (max(_ay) + min(_ay))) / 2.0
+    placed = [(n, translate(r, off_x, off_y)) for n, r in placed]
+
     counts = ", ".join(f"{n}x {name}" for name, n in spec)
     print(f"  plate: {counts} — {len(built)} parts, {x if y == 0 else usable_x:.0f}x{total_h:.0f}mm")
     fn = f"{a.out}/plate_{a.printer}_{len(built)}parts_h{a.height:g}_T{a.temp}.gcode"
@@ -712,7 +731,7 @@ def emit_sequential(placed, a, counts, fn):
         g, st = emit(reg, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                      a.bed or machine.BED_TEMP["pla"], 1.75, machine.BED[a.printer],
                      not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
-                     f"{name.upper()} #{i+1}")
+                     f"{name.upper()} #{i+1}", centre=False)
         pre, _, post = g.partition("; BODY_START\n")
         if head is None:
             head = pre + "; BODY_START\n"
