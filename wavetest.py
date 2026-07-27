@@ -4,21 +4,25 @@
 Oleg, 2026-07-27, after the h60 wall test FAILED and was cleared: "focus on just 2 layers. run
 test with different params to find what you can actually canb reliably bond."
 
-Eight rings, each exactly TWO laps:
-  lap 1  ANCHOR — a plain circle pressed to PRESS_HARD, the weld to the plate
-  lap 2  WAVE   — throw-and-land over the anchor: LAND 20% / RISE 30% / TOP 20% / FALL 30%,
-                  INTEGER waves per lap so the lap starts and ends on a landing (welded ends)
+Round 2 spec, Oleg after reading round 1: "for k2, 3 layers at least since first one is flat.
+and movement has to ve significant. and speed has to drop to 10mm."
 
-The matrix (all at H=1.2, head speed = the 50 north star):
+Eight rings, each THREE laps minimum:
+  lap 1    ANCHOR — a plain circle pressed to PRESS_HARD, the weld to the plate. FLAT — it
+           proves nothing about wave-on-wave, which is why two laps were not enough.
+  lap 2..  WAVE   — throw-and-land: LAND 20% / RISE 30% / TOP 20% / FALL 30%, with the HALF
+           WAVE extra per lap so every landing of lap k+1 sits on a TOP of lap k — the actual
+           bucket mechanism, now present in the test. Ends after an even number of wave laps,
+           on a landing.
+
+The matrix (H=2.4 — "movement has to be significant" — at 10 mm/s):
   columns, left to right (X):  throw 9.4 / 12.6 / 15.1 / 18.8 mm   (waves m = 16/12/10/8 on d60)
-  near row (Y=120):  landing gap 0.6  — a normal layer step onto the anchor
-  far  row (Y=230):  landing gap 0.3  — landing PRESSED into the anchor (half step)
+  near row (Y=120):  landing gap 0.6  — a normal layer step
+  far  row (Y=230):  landing gap 0.3  — landing PRESSED in (half step)
 
-WHY H=1.2 HERE when the bucket used 2.4: the Z budget. The steepest ramp slope is
-H*pi/(0.6*lambda); at 50 mm/s the Z component must stay under ~24 mm/s, and H=2.4 only fits
-lambda >= 23mm — the sweep's short throws would be unreachable. H=1.2 frees throws down to
-9.4mm at full speed. If short throws bond, a follow-up decides whether H climbs back (slower
-head) or the bucket ships at H=1.2 (climb 1.8/lap, 3x saving instead of 5x).
+At 10 mm/s the Z budget that forced round 1 down to H=1.2 is gone (worst slope needs ~9 mm/s
+of Z against the 30 limit), and every mm of thrown strand gets 5x the air time to freeze.
+Delivered flow follows the speed down (12 mm3/s at a 2.0x0.6 bead) — E per mm is unchanged.
 
 Pass/fail is READ OFF THE PLATE by hand: a ring passes if its wave lap is attached at every
 landing and its throws hang as strands (sag onto the anchor is acceptable; drops/curls/combing
@@ -46,7 +50,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dia", type=float, default=60.0, help="test ring diameter, mm")
-    ap.add_argument("--wave-h", type=float, default=1.2, help="wave height H, mm")
+    ap.add_argument("--wave-h", type=float, default=2.4, help="wave height H, mm")
+    ap.add_argument("--wave-laps", type=int, default=2,
+                    help="wave laps per ring (even, so the strand ends on a landing)")
+    ap.add_argument("--speed", type=float, default=10.0,
+                    help="head speed mm/s — ONE speed for the whole print (R3); slow buys the "
+                         "throws air time to freeze and frees the Z budget")
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--layer-h", type=float, default=0.6)
@@ -56,7 +65,10 @@ def main():
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
     flow = machine.flow_cap(a.material, a.printer)
     bw = machine.bead_for_flow(flow, a.layer_h)
-    speed = machine.speed_for_flow(flow, bw, a.layer_h)
+    speed = min(a.speed, machine.speed_for_flow(flow, bw, a.layer_h))
+    if a.wave_laps % 2:
+        raise SystemExit("--wave-laps must be even: an odd count ends the strand on a TOP, "
+                         "hanging in air, instead of welded on a landing")
     temp = machine.temp_for(a.material)
     lh = a.layer_h
     H = a.wave_h
@@ -140,25 +152,46 @@ def main():
                 e += d * e_per_mm
                 w(f"G1 X{X2:.3f} Y{Y2:.3f} Z{machine.PRESS_HARD:.3f} E{e:.5f}")
                 qx, qy = X2, Y2
-            # WAVE lap — starts and ends on a landing (integer m)
-            w("M106 S51                          ; wave lap: 20% fan to freeze the throws")
+            # WAVE laps — m+1/2 waves per lap staggers the phase so every landing of lap k+1
+            # sits on a TOP of lap k (the bucket's actual mechanism). THE FIRST WAVE LAP RAMPS
+            # ITS AMPLITUDE 0->H with its landings PINNED to the anchor: the bucket's constant-
+            # amplitude climb made lap 1's landings lift linearly off the base — welded at the
+            # start, 3mm in the air by the end — a progressive detachment that is the likeliest
+            # mechanism of the h60 wall failure. Construction, exact at every seam and landing:
+            #     z(t) = press + gap + gap*t/C + R(u) + A(t)*prof(x)
+            # A = H*u/C on lap 1 (ramp), H after; R(u) accumulates each finished lap's A at
+            # this ring position (landing of lap k+1 sits exactly `gap` above lap k's top,
+            # INCLUDING over the ramp); the per-lap gap is a continuous tilt, so lap seams are
+            # continuous. Even lap count -> the strand ends on a landing, welded.
+            w("M106 S51                          ; wave laps: 20% fan to freeze the throws")
             zbase = machine.PRESS_HARD + gap
             w(f"G1 F1800 Z{zbase:.3f}")
-            # F IS STICKY: without this the whole wave lap inherits the Z move's F1800 and runs
-            # at 30 mm/s — caught by R4 (6024 moves at 35.8 of 60 declared) on the first cut
+            # F IS STICKY: without this the whole wave lap inherits the Z move's F1800 —
+            # caught by R4 (6024 moves at 60% of declared flow) on the first cut
             w(f"G1 F{f}")
             qz = zbase
             t = 0.0
-            for X2, Y2 in pts[1:]:
-                d = math.hypot(X2 - qx, Y2 - qy)
-                if d < 0.02:
-                    continue
-                t += d
-                Z = zbase + H * prof((m * t / C) % 1.0)
-                d3 = math.hypot(d, Z - qz)     # E on TRUE 3D length: constant flow on ramps
-                e += d3 * e_per_mm
-                w(f"G1 X{X2:.3f} Y{Y2:.3f} Z{Z:.3f} E{e:.5f}")
-                qx, qy, qz = X2, Y2, Z
+            npts = len(pts) - 1
+            Rlift = [0.0] * npts
+            for lap in range(a.wave_laps):
+                u = 0.0
+                Acur = [0.0] * npts
+                for i, (X2, Y2) in enumerate(pts[1:]):
+                    d = math.hypot(X2 - qx, Y2 - qy)
+                    if d < 0.02:
+                        Acur[i] = Acur[i - 1] if i else 0.0
+                        continue
+                    t += d
+                    u += d
+                    A = H * min(u / C, 1.0) if lap == 0 else H
+                    Acur[i] = A
+                    Z = zbase + gap * t / C + Rlift[i] + A * prof(((m + 0.5) * t / C) % 1.0)
+                    d3 = math.hypot(d, Z - qz)   # E on TRUE 3D length: constant flow on ramps
+                    e += d3 * e_per_mm
+                    w(f"G1 X{X2:.3f} Y{Y2:.3f} Z{Z:.3f} E{e:.5f}")
+                    qx, qy, qz = X2, Y2, Z
+                for i in range(npts):
+                    Rlift[i] += Acur[i]
             report.append((m, gap, 0.8 * lam, cx, cy))
 
     w("M107"); w("M104 S0"); w("M140 S0")

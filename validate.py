@@ -286,9 +286,18 @@ def check(path):
                                   float(_mws.group(1)) * _CELL * 1.42 + 0.1))
         print(f"  wave wall declared (slope {_mws.group(1)}): in-cell dive threshold "
               f"{_wave_thr:.2f}mm after WALL_START (0.35 before)")
+    # SELF-DESCENT IS NOT A DIVE, AND DEPTH CANNOT TELL THEM APART — TIME CAN. A steep wave
+    # fall (slope 1.07 at H=2.4) descends ~0.9mm within one cell's reach ALONG ITS OWN STRAND,
+    # past any threshold capped under a layer height; meanwhile a REAL collision at a 0.3mm
+    # landing gap would need a threshold UNDER 0.3 to catch. The discriminator is the path
+    # odometer: self-descent is against material laid millimetres ago, a real collision is
+    # against a lap laid a full circumference ago. Material older than _SELF_MM of path keeps
+    # the full 0.35 sensitivity; younger material is the strand itself.
+    _SELF_MM = 12.0
     _topo = {}
     _pz = 0.0
     _px = _py = None
+    _odo = 0.0
     _dives = []
     for _i, _l in enumerate(_lines):
         if _l.startswith('; ---- part'):
@@ -307,7 +316,8 @@ def check(path):
             continue
         _ext = bool(re.match(r'^G1 .*E[\d.]', _b))
         if _px is not None:
-            _n = min(64, max(1, int(math.hypot(_nx - _px, _ny - _py) / _CELL)))  # bounded
+            _seg = math.hypot(_nx - _px, _ny - _py)
+            _n = min(64, max(1, int(_seg / _CELL)))  # bounded
             _worst = None
             for _k in range(_n + 1):
                 _t = _k / _n
@@ -316,13 +326,16 @@ def check(path):
                 _cz = _pz + (_nz - _pz) * _t
                 _prev = _topo.get((_cx, _cy))
                 _thr = _wave_thr if (_wall_i is not None and _i > _wall_i) else 0.35
-                if _prev is not None and _prev > 0.3 and _prev - _cz > _thr:
-                    if _worst is None or _prev - _cz > _worst[2] - _worst[1]:
-                        _worst = (_i + 1, round(_cz, 3), round(_prev, 3))
-                if _ext and (_prev is None or _cz > _prev):
-                    _topo[(_cx, _cy)] = _cz
+                if _prev is not None and _prev[0] > 0.3 and _prev[0] - _cz > _thr \
+                        and _odo + _seg * _t - _prev[1] > _SELF_MM:
+                    if _worst is None or _prev[0] - _cz > _worst[2] - _worst[1]:
+                        _worst = (_i + 1, round(_cz, 3), round(_prev[0], 3))
+                if _ext and (_prev is None or _cz > _prev[0]):
+                    _topo[(_cx, _cy)] = (_cz, _odo + _seg * _t)
             if _worst and _ext:
                 _dives.append(_worst)
+            if _ext:
+                _odo += _seg
         _px, _py, _pz = _nx, _ny, _nz
     if _dives:
         _d0 = max(_dives, key=lambda d: d[2] - d[1])    # report the WORST, not merely the first
@@ -661,6 +674,7 @@ def check(path):
     if _mf:
         _decl_flow = float(_mf.group(1))
     _xr, _yr, _er, _fr, _zr = None, None, 0.0, None, 0.0
+    _z0 = 0.0
     # HOISTED. These two searches scan the WHOLE file, and they were inside the per-line loop
     # below -- 199,560 re.search calls on an 8,000-line file, 16.9 s of the 17.5 s total, and
     # quadratic in file size. That is why the 372,000-line bucket could not be validated at all.
@@ -677,6 +691,7 @@ def check(path):
         if not _code.startswith(('G0', 'G1')):
             continue
         _g = dict(re.findall(r'\b([XYEFZ])(-?\d+(?:\.\d+)?)', _code))
+        _z0 = _zr
         if 'Z' in _g: _zr = float(_g['Z'])
         if 'F' in _g:
             _fr = float(_g['F'])
@@ -694,7 +709,12 @@ def check(path):
             _isl1 = True
         if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime and not _islink \
                 and not _isl1:
-            _d = math.hypot(float(_g['X']) - _xr, float(_g['Y']) - _yr)
+            # FLOW IS PER MM OF PATH, AND THE PATH IS 3D. F is a 3D feedrate in Klipper, so the
+            # volumetric rate through the nozzle is de*A / (d3/v). Measuring against the XY
+            # projection over-reads any climbing move by d3/dxy — harmless on flat prints
+            # (dz~0) but a steep wave wall (slope 1.07) read +46% and failed R4 while
+            # delivering EXACTLY constant flow through the nozzle.
+            _d = math.hypot(float(_g['X']) - _xr, float(_g['Y']) - _yr, _zr - _z0)
             _de = float(_g['E']) - _er
             if _d > 0.05 and _de > 0:
                 _sp = round(_fr / 60.0, 1)
