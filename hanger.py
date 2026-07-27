@@ -377,6 +377,7 @@ def main():
     # SPREAD width (mm2/press) so layer 1 carries the body's mm2 per mm; the overlap IS the weld.
     ns.first_w = a.bead_w * a.layer_h / machine.PRESS_HARD
     ns.fan = 100
+    ns.brim = a.brim               # 0 unless asked — and now also the function default
     # aux fans at the PLA house norm 0.2 (a positional True here once ran them at 100%)
     ns.aux = 0.2
     st = S.emit_sequential(placed, ns, None, fn)

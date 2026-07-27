@@ -293,7 +293,13 @@ def order_rings(rings, here):
 
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
-         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, brim_gap=0.18,
+         first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3,
+         # NO BRIM UNLESS ASKED — at the ROOT. The argparse default was fixed to 0 earlier
+         # tonight but THIS default stayed 4, so any caller that didn't pass brim (the new
+         # per-object hangers via emit_sequential) silently got one. Oleg caught it ON the
+         # plate: 'why the fuck you printing brim on hanger'. A rule fixed at one entry
+         # point and not at the function is not fixed.
+         brim=0, brim_gap=0.18,
          material=None, hop_min=8.0, centre=True, hop_clear=1.5):
     # NO DEFAULT MATERIAL HERE. A literal 'pla' default stamped "; MATERIAL=pla" into a file
     # printing matte at 230C, and validate.py then checked it against the wrong flow cap. An
@@ -1755,7 +1761,8 @@ def emit_sequential(placed, a, counts, fn):
         g, st = emit(reg, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                      a.bed or machine.bed_for(a.material, a.printer), 1.75, machine.BED[a.printer],
                      not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
-                     f"{name.upper()} #{i+1}", material=a.material, centre=False)
+                     f"{name.upper()} #{i+1}", material=a.material, centre=False,
+                     brim=getattr(a, 'brim', 0))
         pre, _, post = g.partition("; BODY_START\n")
         if head is None:
             head = pre + "; BODY_START\n"

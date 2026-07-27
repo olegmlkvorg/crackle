@@ -477,7 +477,8 @@ if __name__ == "__main__":
                          "constant, layer 1 included), so its width is not a free parameter — the\n"
                          "bead lands at (bead_w * layer_h) / press, ~4.8mm at the defaults.")
     ap.add_argument("--aux", type=float, default=0.2, help="side/chassis fan speed 0-1")
-    ap.add_argument("--brim", type=int, default=5, help="brim rings on layer 1 (0 = none)")
+    ap.add_argument("--brim", type=int, default=0,
+                help="brim rings on layer 1; 0 = none (NO BRIM UNLESS ASKED — the pressed wide first layer IS the adhesion)")
     ap.add_argument("--fan", type=int, default=51,
                     help="0-255. 51 = 20%%, the PLA ceiling (machine.FAN_MAX). "
                          "Layer 1 always prints with the fan OFF regardless.")
