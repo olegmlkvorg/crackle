@@ -63,6 +63,28 @@ SHRINK = 0.25          # METAL SHAFTS ONLY — a 6mm motor shaft, round or D. Va
 # are not round, not consistent, and are gripped rather than pressed. Sharing one constant between
 # them is the same defect that made the bowl lid unable to close.
 STICK_FIT = 0.70
+# ...AND 0.70 IS STILL TIGHT WHEN HOT. Oleg, 2026-07-27, holding the shell that printed with it:
+# "it barely fitted stick ... on hot. you need to take into account that we print and hich temps
+# around for high adhesiv so wals will bulge and it is expected. so give room for it to bulge and
+# yet fit our expected sizes. this is super amplified on round things you create."
+#
+# The number is not the whole problem, and raising it does not fix this: a bigger ROUND bore is
+# loose when cold AND still pinched when hot, because a circle has no relief anywhere — every
+# degree of it sits at the fit diameter, so a bulge in any direction is immediate interference.
+#
+# The fix is SHAPE, not size. A polygon bore whose INSCRIBED circle is the fit touches at its edge
+# midpoints and stands its corners off by 1/cos(pi/n), and that gap is the room the bulge grows
+# into. Measured against a 6.35mm rod at the same 7.05 fit:
+#       3 points -> 3.52mm corner relief      4 -> 1.46mm      6 -> 0.55mm      circle -> 0.00mm
+# Three also locates a rod the way a three-legged stool cannot rock, and a 0.2mm error squeezes
+# three short flats instead of seizing a whole circumference.
+#
+# NOT IMPLEMENTED YET, deliberately. A first attempt at ribbing the shell to carry this shipped
+# three separate geometry defects in a row (ribs through the bore, ribs clipping the very relief
+# they were meant to protect, region left disconnected) and was reverted. The shell builds its wall
+# by eroding its own outline, and that interacts with a polygon hole in ways I did not predict
+# correctly three times running. It wants path-level construction like pulley.py's
+# rim -> spoke -> bore -> spoke circuit, not another buffer patch.
 
 
 def circle(r, seg=0.5):
