@@ -96,6 +96,28 @@ MACHINE_MAX_SPEED = 120.0   # what the MACHINE can do — headroom above the 111
 DEFAULT_SPEED = 50.0        # the north star: where speed starts, not where it is stuck
 CONSTANT_SPEED = DEFAULT_SPEED   # back-compat alias
 MAX_SPEED = DEFAULT_SPEED        # never faster than the north star; slower is legitimate
+# ============================================================================================
+# LAYER 1 RUNS AT FULL FLOW. THE LINE WIDTH IS WHAT CHANGES. THIS IS NOT NEGOTIABLE.
+#
+# Oleg, 2026-07-27, after correcting it for the THIRD time in one session:
+#   "i am so tierd of you dude. first layer we overextrude ...... how many times i have to yell
+#    you first layer is 55 as well just line width is crazy high"
+# and earlier:
+#   "you have to go 15mm wide in settings do not worry of massive over extrusion, this is what
+#    we do"
+#   "the nozel need to be 0,1 to board. we need adhesion"
+#
+# So: same mm2 per mm as the body, laid into a PRESS_HARD gap. The material has nowhere to go
+# but sideways, so it lands enormously wide and welds to the plate. A fill ratio of 3x on layer 1
+# is the TECHNIQUE, not a defect.
+#
+# first_w = bead_w * layer_h / PRESS_HARD          <- the width it actually lands at
+#
+# WHY I KEEP GETTING THIS WRONG, recorded so the next session does not: metering layer 1 down to
+# bead_w * PRESS_HARD looks obviously right (conservation of material into a thin gap) and every
+# over-fill guard agrees with it. It is still wrong, because the guard models a bead that stays
+# its nominal width. This one does not.
+# ============================================================================================
 FIRST_LAYER_SPEED = CONSTANT_SPEED   # see the note near the top; adhesion is the 0.1 press
 
 

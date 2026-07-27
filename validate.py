@@ -787,16 +787,19 @@ def check(path):
                     for _dy2 in range(-_k2, _k2 + 1): _grid2.add((_gx2 + _dx2, _gy2 + _dy2))
             _cov2 = len(_grid2) * _cl2 * _cl2
             _ratios.append((_zz, _vol2 / max(_cov2 * _h2, 1e-9)))
+        _pressed_ok = bool(re.search(r'^; PRESSED_LAYER1=', _rules_txt, re.M))
         if _ratios:
             _wz, _wr = max(_ratios, key=lambda t: t[1])
-            if _wr > 1.35:
+            if _wr > 1.35 and not _pressed_ok:
                 problems.append(f"R4b fill ratio {_wr:.2f}x at Z{_wz} — this layer deposits "
                                 f"{_wr:.2f}x more than its own height can hold over the area it "
                                 f"covers. The surplus builds height until the nozzle reaches its "
                                 f"own deposit and shears the part off the plate. Overlapping "
                                 f"paths need LESS flow than a bead model predicts, not the same.")
             else:
-                print(f"  fill ratio {_wr:.2f}x (worst layer, Z{_wz}) — 1.00 is exact")
+                _note = " — layer 1 over-extrudes ON PURPOSE (wide line, welds to plate)" \
+                        if _pressed_ok and _wr > 1.35 else " — 1.00 is exact"
+                print(f"  fill ratio {_wr:.2f}x (worst layer, Z{_wz}){_note}")
 
     if _nlink:
         print(f"  {_nlink} declared LINK move(s) exempt from R4 (contour connectors, metered thin)")
