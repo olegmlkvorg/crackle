@@ -188,9 +188,12 @@ def round_corners(pts, fillet, seg=0.8):
     what makes the extruder skip.
 
     A quadratic Bezier through each vertex is C1-continuous, so direction never jumps. Holding speed
-    v through a curve needs radius >= v^2/accel; at 49 mm/s and 5000 mm/s^2 that is 0.5mm, so a
-    few-mm fillet keeps FULL speed through every corner. Oleg: "overprint or whatever but no sharp
-    turning" — the cut corners overlap slightly, and that is the accepted trade."""
+    v through a curve needs radius >= v^2/accel; at the 50 mm/s north star and 5000 mm/s^2 that is
+    0.5mm, so a few-mm fillet keeps FULL speed through every corner. The requirement scales with
+    v^2, so a print that resolves BELOW the north star (fat bead, low-flow material) needs less
+    radius, never more — this is safe in the direction speed is allowed to move. Oleg: "overprint or
+    whatever but no sharp turning" — the cut corners overlap slightly, and that is the accepted
+    trade."""
     if fillet <= 0 or len(pts) < 3:
         return pts
     # Near-coincident points clamp the fillet to nothing (d = min(fillet, la/2, lc/2)), leaving a
@@ -250,20 +253,46 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # a nominal width is the one thing that guarantees the comb lifts off the plate.
     # Same flow, same speed, pressed to the plate. Only Z changes on layer 1.
     e_first_mm = e_per_mm
-    # R3 — SPEED IS AN INPUT HELD FIXED, NEVER SOLVED FROM FLOW. Oleg: "50 is our north star for
-    # moving", "keep speed at 50, we want constant movement and material distribution". A head that
-    # solves its speed from a flow target changes speed whenever --flow moves, and a head that
-    # changes speed changes material per mm. So the speed is pinned and the DELIVERED flow is
-    # whatever the bead carries at that speed; machine.speed_for() is still asked, purely so the
-    # gap between the requested figure and the delivered one is printed rather than swallowed.
-    speed = machine.CONSTANT_SPEED
-    _want = machine.speed_for(flow, bead_w * bead_h, ' for honeycomb.py')
-    if _want < speed - 1e-9:
-        print(f"  ! --flow {flow:g} mm3/s would need only {_want:.0f} mm/s, but the head is pinned "
-              f"at {speed:g} (R3). Running {bead_w*bead_h*speed:.1f} mm3/s. To lower flow, narrow "
-              f"the bead (--bead-w) — never the speed.")
-    flow = speed * bead_w * bead_h
-    f = round(speed * 60)
+    # R3 — ONE SPEED PER PRINT. ITS VALUE IS THE NORTH STAR UNLESS A CONSTRAINT PUSHES IT DOWN.
+    # Oleg, 2026-07-27, correcting the previous version of this block: "speed is not fixed - 50 is
+    # north star default unless overruled by other constraints."
+    #
+    # This file used to PIN speed at 50 and then recompute flow from it. That is a different and
+    # worse rule, and it broke the technique it was supposed to protect:
+    #   * THE WIDE-BEAD TRICK INVERTED. A fat commanded bead exists so the head CRAWLS and still
+    #     lands the flow target. Pinned at 50, width IS flow — `--bead-w 6` emitted 180 mm3/s and
+    #     validate.py refused the file outright. The archived 1.5x0.9 comb was re-inflated from its
+    #     own 55 to 67.5, past the material's measured ceiling, AFTER machine.flow_for had already
+    #     clamped it — a generator overwriting the material's limit with arithmetic.
+    #   * LOW-FLOW MATERIALS became "unprintable". TPU's 15.2 mm3/s at a pinned 50 needs a 0.51mm
+    #     bead, narrower than the 0.8 nozzle. At the normal 1.2x0.6 bead it just runs at 21 mm/s.
+    #
+    # What must actually hold is CONSTANCY — one speed for the whole print, so material per mm does
+    # not change where the geometry is tightest. machine.speed_for_flow() gives that one speed:
+    # min(north star, flow / bead area). Never above 50; below it whenever the bead or the material
+    # says so.
+    speed = machine.speed_for_flow(flow, bead_w, bead_h)
+    # DECLARE WHAT THE FILE DELIVERS, NOT WHAT WAS ASKED FOR. The head runs the INTEGER feedrate
+    # written into the gcode, so the flow is derived from THAT — otherwise '; FLOW=' is an
+    # aspiration a few hundredths off every move in the file (R4). Floored, never rounded: the
+    # flow target it was solved from is a material CEILING, and a ceiling must not be rounded past.
+    f = max(1, math.floor(speed * 60))
+    speed = f / 60.0
+    _asked, flow = flow, speed * bead_w * bead_h
+    if speed >= machine.DEFAULT_SPEED - 1e-9 and flow < _asked * 0.999:
+        # The other direction: the bead is too THIN to carry the target at the north star. Speed is
+        # not allowed ABOVE 50, so the honest outcome is less flow, said out loud.
+        print(f"  ! --flow {_asked:g} mm3/s would need {_asked/(bead_w*bead_h):.0f} mm/s at a "
+              f"{bead_w}x{bead_h} bead, above the {machine.DEFAULT_SPEED:g} mm/s north star. "
+              f"Running {flow:.1f} mm3/s ({flow/_asked*100:.0f}% of target). Widen the "
+              f"bead (--bead-w) to close the gap.")
+    elif speed < machine.DEFAULT_SPEED - 1e-9:
+        _why = "the fat bead" if bead_w * bead_h > machine.BEAD_W * machine.BEAD_H + 1e-9 \
+            else f"{material}'s flow ceiling"
+        print(f"  ~ {bead_w}x{bead_h} bead at {_asked:g} mm3/s resolves to {speed:.1f} mm/s, below "
+              f"the {machine.DEFAULT_SPEED:g} mm/s north star — the head crawls so {_why} lands "
+              f"the flow. One speed throughout (R3); deposit per mm of path is unchanged, only "
+              f"the clock moves.")
     s = cell
     w_total = cols * math.sqrt(3) * s + math.sqrt(3) * s / 2.0
     h_total = (rows - 1) * 1.5 * s + 2 * s
@@ -314,9 +343,12 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w(f"; PRINTER={printer}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={bead_h}")     # R2: validate.py checks the Z ladder against this
-    w(f"; FLOW={flow:.1f}")      # R4: validate.py checks every extruding move against this
+    # R4: validate.py checks every extruding move against this, so it is the DELIVERED flow at the
+    # resolved speed (bead_w * bead_h * speed), never the --flow that was asked for.
+    w(f"; FLOW={flow:.1f}")
     w("; ARGV: " + " ".join(_sys.argv))
-    w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow} mm3/s")
+    w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.1f} mm/s -> flow={flow:.1f} mm3/s"
+      f" (north star {machine.DEFAULT_SPEED:g}; lower is the bead crawling, never faster)")
     w(f"; {w_total:.0f} x {h_total:.0f}mm on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed, pressed to {press}mm")
     w(f"; overprint: {overprint:.1f}% of the path is a 3rd/4th pass over a wall already laid twice")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
@@ -372,7 +404,9 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
             L.append(f"; --- layer {k+1} at Z{z:.2f} -- closed loop, starts where layer "
                      f"{k} ended, same direction")
             e += bead_h * e_per_mm          # keep extruding through the vertical step
-            L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
+            # The seam step is never FASTER than the print's one speed (min), so a crawl stays a
+            # crawl all the way up the Z ladder.
+            L.append(f"G1 F{max(1, round(min(speed, 20.0)*60))} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
         px, py = seq[0]
         for (x, y) in seq[1:]:
@@ -397,7 +431,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     L += ["M107", "M104 S0", "M140 S0", f"G0 Z{press+(layers-1)*bead_h+40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed),
+    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed, 1),
                                      mins=round(e / e_per_mm / speed / 60, 1),
                                      overprint=round(overprint, 1),
                                      size=(round(w_total), round(h_total)))

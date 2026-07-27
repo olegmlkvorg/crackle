@@ -99,42 +99,65 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
          fil_d, bed_xy, home, press, fan, spoke_adv, sleeve=0, aux=0.2,
          brim=0, printer='k1c', material='pla'):
     area = math.pi * (fil_d / 2) ** 2
-    # SPEED IS AN INPUT HELD FIXED, NOT AN OUTPUT SOLVED FROM FLOW.
-    # Oleg, 2026-07-27: "keep speed at 50, we want constant movement and material distribution",
-    # and validate.py R3 fails any file whose extruding moves are not at machine.CONSTANT_SPEED.
-    # This used to be min(flow / bead_area, MAX_SPEED), which lands on 50 only by ACCIDENT — it
-    # does so whenever the flow target happens to want more than 50, and silently emits a slower
-    # head (and an unprintable-by-the-rules file) whenever it does not. `--flow 20` produced a
-    # 41.7 mm/s body and nothing said so.
-    speed = machine.CONSTANT_SPEED
-    # THE BEAD IS THE FREE VARIABLE — BUT ONLY DOWNWARD ON A STACKED PART.
-    # machine.BEAD_W is a STACKING ceiling (1.5x nozzle): a wider command does not land wider, it
-    # lands TALLER than the Z step, the part climbs into the nozzle and gets ploughed off the
-    # plate. So a flow target ABOVE what this bead delivers at 50 mm/s is reported and accepted,
-    # never chased by widening — that hack belongs to single-layer work, not to a 72-layer wheel.
+    # THE BEAD IS THE INPUT; SPEED IS SOLVED FROM IT, AND ONLY EVER DOWNWARD FROM 50.
     #
-    # Downward is a different matter, and it was a live defect: the old speed-solve quietly
-    # honoured a low flow target by slowing the head, so pinning the speed without this would have
-    # taken `--material tpu` from 15.2 mm3/s (right flow, wrong speed) to 24 (right speed, 58%
-    # over a material that jams the extruder within a minute). Narrow the bead instead.
-    _want_w = machine.bead_for_flow(flow, layer_h, speed)
-    if _want_w < bead_w - 1e-9:
-        if _want_w < machine.NOZZLE:
-            print(f"  !! {material} wants {flow:g} mm3/s, which at the {speed:g} mm/s north star "
-                  f"needs a {_want_w:.2f}mm bead — narrower than the {machine.NOZZLE}mm orifice, "
-                  f"which no nozzle can lay. Holding the bead at {machine.NOZZLE}mm and delivering "
-                  f"{machine.NOZZLE*layer_h*speed:.1f} mm3/s. To land on {flow:g} exactly, drop "
-                  f"--layer-h to {flow/(speed*machine.NOZZLE):.2f}.")
-        bead_w = max(_want_w, machine.NOZZLE)
+    # Oleg, 2026-07-27, correcting the previous version of this block:
+    #     "speed is not fixed - 50 is north star default unless overruled by other constraints"
+    #
+    # It had been implemented here as an immovable `speed = machine.CONSTANT_SPEED`, with the BEAD
+    # made the free variable instead — the same rule with its two halves swapped. That is not a
+    # stricter reading of the north star, it is a different rule, and it broke the two things the
+    # north star exists to serve:
+    #
+    #   * THE WIDE-BEAD TRICK. Oleg's technique is a FAT commanded bead so the head crawls and the
+    #     flow still lands. At a pinned 50, width multiplies straight into flow — `--bead-w 6` at
+    #     0.6 asks for 180 mm3/s — so this file silently NARROWED the command back to 1.83mm and
+    #     emitted a different part than the one asked for. Not even a refusal; a substitution.
+    #     Freed, the same command runs 6.0 x 0.6 at 15.3 mm/s and delivers the 55 it was given.
+    #
+    #   * TPU, working flow 15.2 mm3/s. Pinned at 50 that needs a 0.51-0.76mm bead, narrower than
+    #     the 0.8 orifice — so this file printed "which no nozzle can lay", clamped to 0.8 and
+    #     emitted 16.0 mm3/s: 5% ABOVE the very ceiling it was trying to respect, on a material
+    #     that jams within a minute. I had turned my own over-strict rule into a claim about the
+    #     material. At the ordinary 1.2 x 0.4 bead TPU is unremarkable: 31.7 mm/s, 15.2 mm3/s.
+    #
+    # R3 requires ONE speed for the whole print, not the number 50. 50 is where speed starts and
+    # the ceiling it may never pass; a fat bead or a low-flow material pushes it DOWN, and that is
+    # the rule working. machine.speed_for_flow is the single place that arithmetic lives.
+    _want_speed = flow / max(bead_w * layer_h, 1e-9)     # what the flow target asks for, uncapped
+    speed = machine.speed_for_flow(flow, bead_w, layer_h)
+    # DECLARE WHAT IS COMMANDED, NOT WHAT WAS ASKED FOR. F is an integer in the file, so the head's
+    # real speed is that integer over 60, and everything downstream is recomputed from it. Deriving
+    # the '; FLOW=' stamp from the pre-rounded number would make the stamp an aspiration, which is
+    # exactly what R4 exists to catch.
+    # FLOOR, NOT ROUND: rounding UP put a 6x0.6 crawl at 55.02 mm3/s against a 55 target. Trivial
+    # here, but on a material sitting AT its measured ceiling (TPU 15.2) an arithmetic artefact
+    # must never be the thing that crosses it. Erring low costs a fraction of a percent of clock.
+    f = max(1, math.floor(speed * 60))
+    speed = f / 60.0
+    if bead_w < machine.NOZZLE:
+        # A bead thinner than the hole it comes out of. This is a statement about the BEAD, not
+        # about speed — no feedrate fixes it, and it is a warning rather than a refusal because
+        # the machine will still lay something; it just will not be this wide.
+        print(f"  ! --bead-w {bead_w:g} is narrower than the {machine.NOZZLE}mm orifice — no "
+              f"nozzle lays a bead thinner than its own hole. Widen the bead instead; the speed "
+              f"comes down on its own to hold the flow.")
     e_per_mm = (bead_w * layer_h) / area
     flow_target, flow = flow, speed * bead_w * layer_h
-    if flow < flow_target * 0.999:
+    # THE CONDITION IS "THE CEILING BOUND", NOT "THE NUMBER CAME OUT LOW". Testing the delivered
+    # flow against the target would also fire on the sub-0.1% shortfall the F floor introduces,
+    # and a warning that cries on rounding noise is a warning people learn to skip.
+    if _want_speed > machine.DEFAULT_SPEED * 1.001:
+        _fix = (f"widen --bead-w (still capped by stacking: {machine.BEAD_W}mm is 1.5x nozzle, "
+                f"and a wider bead lands TALLER than the Z step on a {int(round(width/layer_h))}"
+                f"-layer part and ploughs off the plate)"
+                if bead_w <= machine.BEAD_W + 1e-9 else "narrow --bead-w or raise --layer-h")
         print(f"  ! flow target {flow_target:g} mm3/s would need "
-              f"{flow_target/(bead_w*layer_h):.0f} mm/s, but {speed:g} is the north star — "
-              f"delivering {flow:.1f} mm3/s ({flow/flow_target*100:.0f}% of target). The bead is "
-              f"already at its {bead_w}mm stacking ceiling; widening it further makes the part "
-              f"climb into the nozzle, so this is the correct trade. Only the clock moves.")
-    f = round(speed * 60)
+              f"{_want_speed:.0f} mm/s at a {bead_w:g}x{layer_h:g} bead, and "
+              f"{machine.DEFAULT_SPEED:g} is the north star CEILING — speed moves down from it, "
+              f"never up. Running {speed:g} mm/s, delivering {flow:.1f} mm3/s "
+              f"({flow/flow_target*100:.0f}% of target); to close the gap, {_fix}. "
+              f"Deposit per mm is unchanged — only the clock moves.")
     layers = max(2, int(round(width / layer_h)))
     # BASE LAYER PRESSED TO THE PLATE. Oleg, after a pulley turned into spaghetti: "make sure you
     # are at 0.1 close to bed when you extrude base layer". A 0.25mm first layer is not pressed, it
@@ -150,7 +173,7 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     # thing that guarantees the part lifts — which is the failure the press was added to fix.
     #   "you have to go 15mm wide in settings do not worry of massive over extrusion,
     #    this is what we do"
-    # So layer 1 differs from the body in Z ALONE: same material per mm, same 50 mm/s.
+    # So layer 1 differs from the body in Z ALONE: same material per mm, same resolved speed.
     # There is no first_h, no e_first-of-its-own and no f_first any more, and that absence IS the
     # rule: the only thing layer 1 does differently is sit at `press`.
     e_first = e_per_mm
@@ -202,8 +225,12 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         w(f"; web: 2 spokes per layer (rim -> spiral in -> bore -> spiral out), "
           f"rotating {spoke_adv:.4f} rad/layer")
         w(f"; crown +{crown}mm at mid-height (self-centres a flat belt), flange +{flange}mm at the ends")
-    w(f"; bead {bead_w}x{layer_h} at {speed:.0f} mm/s -> flow={flow:.1f} mm3/s, {layers} layers")
-    w(f"; layer 1: SAME flow, SAME {speed:.0f} mm/s, pressed to Z{press:.2f} — the bead spreads to "
+    # THE HEADER MUST ROUND THE WAY THE FILE RUNS. '{speed:.0f}' printed a 15.3 mm/s wide-bead
+    # crawl as "15 mm/s", which is the same class of error as a summary line recomputed instead of
+    # measured — the number in the header has to be the number in the F word.
+    w(f"; bead {bead_w}x{layer_h} at {speed:.1f} mm/s (north star {machine.DEFAULT_SPEED:g}, "
+      f"lowered only by this bead/flow) -> flow={flow:.1f} mm3/s, {layers} layers")
+    w(f"; layer 1: SAME flow, SAME {speed:.1f} mm/s, pressed to Z{press:.2f} — the bead spreads to "
       f"~{first_w:.1f}mm and that squished footprint is the adhesion")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
@@ -382,8 +409,9 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         if k:
             # Z-ONLY, AND IT KEEPS METERING. layer_h of filament over layer_h of path is exactly
             # e_per_mm — the same material per mm as everything else, so the join is not a void.
-            # It runs at 20 mm/s because this is the Z AXIS, whose limit is machine.MAX_Z_V (30);
-            # the 50 mm/s north star is the head's XY speed and cannot be commanded on Z.
+            # It runs at min(speed, 20) because this is the Z AXIS, whose limit is machine.MAX_Z_V
+            # (30); the north star is the head's XY speed and cannot be commanded on Z. It is a
+            # Z-only move (no X/Y), so R3 does not see it as a second body speed.
             e += layer_h * e_per_mm
             L.append(f"G1 F{round(min(speed, 20) * 60)} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
@@ -404,8 +432,9 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + width + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(adv=spoke_adv, flow=round(flow, 1), layers=layers, grams=round(grams, 1), speed=round(speed),
-                                     mins=round(e / e_per_mm / speed / 60, 1))
+    return "\n".join(L) + "\n", dict(adv=spoke_adv, flow=round(flow, 1), layers=layers,
+                                     grams=round(grams, 1), speed=round(speed, 1),
+                                     bead=bead_w, mins=round(e / e_per_mm / speed / 60, 1))
 
 
 if __name__ == "__main__":
@@ -471,4 +500,6 @@ if __name__ == "__main__":
     print(f"  OD {a.od}mm (+{a.crown} crown, +{a.flange} flange), {a.width}mm wide, "
           f"{a.bore}mm D-bore modelled {a.bore + SHRINK:.2f} for shrink")
     print(f"  {st['layers']} layers, {a.spokes} spokes advancing {st['adv']:.4f} rad/layer")
-    print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g")
+    print(f"  {st['bead']:g}x{a.layer_h:g} bead at {st['speed']} mm/s "
+          f"(north star {machine.DEFAULT_SPEED:g}) -> flow {st['flow']} mm3/s, "
+          f"~{st['mins']} min, {st['grams']} g")

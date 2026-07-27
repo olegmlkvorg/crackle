@@ -201,45 +201,57 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # LAYER_H by a rounding crumb — and R2 compares the two. Round once, here, and the file agrees
     # with its own stamp by construction.
     z_step = round(layer_z or bead_h, 3)
-    # SPEED IS AN INPUT HELD FIXED, NOT AN OUTPUT SOLVED FROM FLOW. Oleg, 2026-07-27: "50 is our
-    # north star for moving". This was min(flow / bead_area, MAX_SPEED), which lands on 50 only
-    # because MAX_SPEED happens to equal CONSTANT_SPEED today, and drops SILENTLY below it for any
-    # smaller --flow — a head changing speed through the back door of an argument default, which is
-    # exactly what R3 exists to forbid. (Every archived hilbert file in out/ was generated with
-    # --flow 13 or 36, so that back door was the normal case, not the exotic one.)
-    # Pin the speed; reach flow by widening the bead (machine.bead_for_flow), and SAY SO when the
-    # two disagree instead of trading one for the other in silence.
+    # SPEED IS THE FREE VARIABLE. 50 IS WHERE IT STARTS, NOT WHERE IT IS STUCK.
+    # Oleg, 2026-07-27, correcting the previous version of this block: "speed is not fixed - 50 is
+    # north star default unless overruled by other constraints."
+    #
+    # It had been written as `speed = machine.CONSTANT_SPEED`, an immovable 50, with flow solved
+    # from it. That is a different and worse rule, and it broke the two things this generator exists
+    # to do:
+    #   · THE WIDE-BEAD TRICK. Oleg: "you can do line width 10mm to compensate for the flow ... we
+    #     know it is not going to make 10mm, but it will extrude enough". The whole point is that a
+    #     fat commanded bead buys material per MILLIMETRE so the head CRAWLS and still lands the flow
+    #     target. Pinned at 50 the same command means 10 x 0.6 x 50 = 300 mm3/s, so it was REFUSED —
+    #     the trick inverted into an error message. 7 of the archived commands in out/ stopped
+    #     running.
+    #   · TPU. Working flow 15.2 mm3/s. At a pinned 50 that needs a 0.51mm bead, narrower than the
+    #     0.8 nozzle, so the generator announced that TPU "cannot be run ... at all on this hotend".
+    #     It runs fine: at the normal 1.2x0.6 bead it simply moves at 21 mm/s. An over-strict rule of
+    #     mine had been promoted into a claim about the material.
+    #
+    # What R3 actually requires is ONE speed WITHIN a print, so material per mm does not change where
+    # the geometry is tightest. machine.speed_for_flow gives that one speed: the north star unless
+    # the bead or the material pulls it down, never above.
     flow_target = flow
-    speed = machine.CONSTANT_SPEED
-    flow = speed * bead_w * bead_h
+    speed = machine.speed_for_flow(flow_target, bead_w, bead_h)
+    flow = speed * bead_w * bead_h          # what this file will actually DELIVER, per move
     f = round(speed * 60)
-    if abs(flow - flow_target) > 0.05:
-        print(f"  ! --flow {flow_target:g} mm3/s is not what a {bead_w:g}x{bead_h:g} bead delivers "
-              f"at the {speed:g} mm/s constant speed — running {flow:.1f}. Speed is fixed (R3); to "
-              f"hit {flow_target:g} set --bead-w {machine.bead_for_flow(flow_target, bead_h):.2f}.")
-    # UNDER A FIXED SPEED, WIDTH *IS* FLOW — AND THAT INVERTS THE WIDE-BEAD TRICK.
-    # Oleg's technique was "you can do line width 10mm to compensate for the flow ... we know it is
-    # not going to make 10mm, but it will extrude enough": a huge commanded bead bought material per
-    # millimetre so the HEAD COULD CRAWL and still hit the flow target. The old code did exactly
-    # that — --bead-w 10 solved to 9.2 mm/s.
-    # With speed pinned at the north star the same command means 10 x 0.6 x 50 = 300 mm3/s, five
-    # times the highest flow this machine has ever been shown to hold. Replaying the archived
-    # commands proved it: moore_k1c_o4_190mm_L3 emitted a move implying 301 mm3/s.
-    # REFUSE, DO NOT QUIETLY RESIZE. Narrowing 10mm to 1.83mm to satisfy the ceiling would return a
-    # lattice instead of the fused sheet that was asked for, and machine.speed_for already records
-    # why that is unacceptable: "a cap that silently rewrites your input is indistinguishable from
-    # a bug". Say what the arithmetic is and let the operator choose.
+    _want_speed = flow_target / (bead_w * bead_h)
+    if flow < flow_target - 0.05:
+        # The bead is too THIN to carry the target at the north star. Speed cannot go up to fix it
+        # (50 is the ceiling), so the honest report is the reduced flow plus the bead that closes it.
+        print(f"  ! --flow {flow_target:g} mm3/s would need {_want_speed:.0f} mm/s at a "
+              f"{bead_w:g}x{bead_h:g} bead, above the {machine.DEFAULT_SPEED:g} mm/s north star — "
+              f"delivering {flow:.1f} at {speed:g} mm/s. Widen the bead to close it: --bead-w "
+              f"{machine.bead_for_flow(flow_target, bead_h):.2f}.")
+    elif speed < machine.DEFAULT_SPEED - 0.05:
+        print(f"  ~ {bead_w:g}x{bead_h:g} = {bead_w*bead_h:.2f}mm2 at {flow_target:g} mm3/s runs at "
+              f"{speed:.1f} mm/s, under the {machine.DEFAULT_SPEED:g} north star — the bead asks for "
+              f"it. That is the wide-bead crawl working, not a violation: one speed, just a lower one.")
+    # THE MATERIAL CEILING LANDS ON THE SPEED, NOT ON THE BEAD. __main__ already routes --flow
+    # through machine.flow_for, so this only bites when emit() is called directly; keep it anyway,
+    # because a delivered flow past the material's measured ceiling is a physical fact, not a policy.
+    # Narrowing the bead would return a lattice instead of the fused sheet that was asked for —
+    # the bead IS the part. Speed is only the clock, so the clock is what moves.
     _mcap = machine.MATERIAL_FLOW.get(material, machine.FLOW)
     if flow > _mcap + 1e-9:
-        _wmax = machine.bead_for_flow(_mcap, bead_h, speed)
-        raise SystemExit(
-            f"a {bead_w:g}x{bead_h:g} bead at the fixed {speed:g} mm/s delivers {flow:.0f} mm3/s; "
-            f"{material}'s measured ceiling is {_mcap:g}.\n"
-            f"  Speed is an INPUT now (R3), so width is flow: the widest bead {material} can take "
-            f"at {speed:g} mm/s is --bead-w {_wmax:.2f}"
-            + (f",\n  which is under the {machine.NOZZLE:g}mm nozzle — {material} cannot be run at "
-               f"the {speed:g} mm/s north star at all on this hotend."
-               if _wmax < machine.NOZZLE else "."))
+        _over = flow
+        speed = machine.speed_for_flow(_mcap, bead_w, bead_h)
+        flow = speed * bead_w * bead_h
+        f = round(speed * 60)
+        print(f"  ! a {bead_w:g}x{bead_h:g} bead was about to deliver {_over:.0f} mm3/s; "
+              f"{material}'s measured ceiling is {_mcap:g} — running {speed:.1f} mm/s for "
+              f"{flow:.1f} mm3/s. Bead unchanged; deposit per mm is unchanged.")
 
     # Every order that will appear on the plate must clear the fuse check, not just the default.
     orders = list(mix) if mix else [order]
@@ -270,9 +282,9 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # other whichever of the two numbers the header declares. Two rates in a file IS the violation.
     #
     # The width compensation was not wrong when it was written — it existed because layer 1 CRAWLED
-    # while the body ran fast, so the cross-section had to grow to keep the flow up. Nothing crawls
-    # any more; every move runs at CONSTANT_SPEED, so there is nothing left to compensate for and
-    # the compensation is now pure over-extrusion.
+    # while the body ran fast, so the cross-section had to grow to keep the flow up. There is only
+    # ONE speed in the file now (it may be a crawl, but the body crawls with it), so there is nothing
+    # left to compensate for and the compensation is pure over-extrusion.
     #
     # The body's 0.72mm2 forced through a 0.1mm gap does not vanish, it SPREADS — about
     # bead_w*bead_h/PRESS_HARD wide — and that squished footprint IS the adhesion. The lattice cells
@@ -297,17 +309,21 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     first_w = first_area / first_h      # what it SPREADS to, not a second commanded bead
     e_first_mm = e_per_mm
 
-    # THE MOVE-RATE CEILING IS A FUNCTION OF SPEED, AND THE SPEED JUST TREBLED.
+    # THE MOVE-RATE CEILING IS A FUNCTION OF THE SPEED ACTUALLY RESOLVED, NOT OF THE NORTH STAR.
     # round_corners samples every 90-degree corner by ANGLE (6 deg per point), so a small-span, high
-    # -order lattice emits sub-0.2mm segments. That was harmless while --flow 13 solved to 18 mm/s;
-    # at the fixed 50 it is 2.8x the segments per second, and replaying the archived commands caught
-    # it: moore_k2plus_o3_40mm_L17 asked for 380 moves/s against machine.MAX_MOVES_PER_SEC=300, the
-    # rate at which Klipper drains its lookahead and the head FREEZES with no error to read.
+    # -order lattice emits sub-0.2mm segments. At 50 mm/s that is a real hazard — replaying the
+    # archived commands caught moore_k2plus_o3_40mm_L17 asking for 380 moves/s against
+    # machine.MAX_MOVES_PER_SEC=300, the rate at which Klipper drains its lookahead and the head
+    # FREEZES with no error to read. At a wide-bead crawl of 9 mm/s the same geometry asks for a
+    # sixth of that, so deriving the floor from a hardcoded 50 would throw away detail the machine
+    # can execute perfectly well.
     # The threshold is derived, not chosen — a segment shorter than speed/MAX_MOVES_PER_SEC cannot
     # be executed at this speed, so it is not geometry, it is a request the host cannot serve.
     # machine.decimate exists for exactly this and keeps endpoints, so closed loops stay closed.
     # 1.2x margin because the rate is measured over a 24-move window, not per segment.
-    _min_seg = machine.CONSTANT_SPEED / machine.MAX_MOVES_PER_SEC * 1.2
+    # If the duration clamp below lowers the speed further, this floor was merely CONSERVATIVE —
+    # it dropped points the machine could have run, which costs detail, never safety.
+    _min_seg = speed / machine.MAX_MOVES_PER_SEC * 1.2
     shapes = [machine.decimate(round_corners(curve(o, span, closed), fillet), _min_seg)
               for o in orders]
     pts = shapes[0]
@@ -352,21 +368,23 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # how a file ends up with two.
     # IT ALSO NEVER PASSED `material`, so flow_for_duration defaulted to "pla" and measured a
     # pla-matte part against PLA's 55 mm3/s figure — a number that does not belong to it.
-    # AND THE CLAMP MUST NOT LAND ON THE SPEED. Dividing a clamped flow back into a speed is R3
-    # broken from inside a helper: the head quietly leaves 50 mm/s and nothing in the output says so.
-    # Speed is fixed, so a clamp is absorbed by NARROWING THE BEAD — the same trade, made visible.
+    # THE CLAMP LANDS ON THE SPEED, WHICH IS EXACTLY WHERE IT BELONGS. flow_for_duration's own
+    # advice is "deposit per mm is unchanged; only the clock moves", and that is true precisely
+    # because E is metered per MILLIMETRE: slowing the head lowers the extruder's duty cycle and
+    # changes not one microgram of the part. The previous version refused instead, on the grounds
+    # that speed was fixed — so it protected a rule Oleg had not made at the cost of the part.
+    # It stays ONE speed for the whole file; it is simply a lower one, which R3 allows.
     _mins_all = _len1 * layers / speed / 60.0
     _fc = machine.flow_for_duration(flow, _mins_all, " for this part", material)
     if _fc < flow - 1e-9:
-        # flow_for_duration's own advice is "deposit per mm is unchanged; only the clock moves" —
-        # true when the answer was to SLOW DOWN, which R3 no longer permits. The only lever left is
-        # the bead, and moving that DOES change the part, so this refuses instead of resizing.
-        raise SystemExit(
-            f"a {bead_w:g}x{bead_h:g} bead at {speed:g} mm/s holds {flow:.1f} mm3/s for "
-            f"{_mins_all:.0f} min of unbroken extrusion, above the {_fc:g} mm3/s maintained figure "
-            f"for {material}.\n"
-            f"  Speed is fixed (R3), so the only lever is the bead: --bead-w "
-            f"{machine.bead_for_flow(_fc, bead_h, speed):.2f}, or fewer layers / a smaller span.")
+        speed = machine.speed_for_flow(_fc, bead_w, bead_h)
+        flow = speed * bead_w * bead_h
+        f = round(speed * 60)
+        first_speed = speed
+        _mins_all = _len1 * layers / speed / 60.0
+        print(f"  ~ holding {_fc:g} mm3/s with a {bead_w:g}x{bead_h:g} bead means {speed:.1f} mm/s "
+              f"for the whole file (~{_mins_all:.0f} min). Bead, path and grams are identical; only "
+              f"the clock moves.")
 
     L = []
     w = L.append
@@ -387,8 +405,15 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # ONE FLOW FOR THE WHOLE FILE. There used to be two lines here declaring two numbers, with a
     # comment explaining that layer 1 is "a different bead at a different speed" — which is the
     # violation, not a caveat about it. R4 checks every extruding move against this single figure.
+    #
+    # AND IT IS THE DELIVERED FLOW, NOT THE REQUESTED ONE. `flow` here is bead_w * bead_h * speed
+    # at the speed this file actually resolved to — the same arithmetic validate.py re-derives from
+    # the emitted G1 lines. Declaring the --flow that was ASKED for would be an aspiration stamped
+    # as a measurement, which is the defect this project keeps catching in itself.
     w(f"; FLOW={flow:.2f}")
-    w(f"; bead {bead_w:.2f}x{bead_h:g} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s "
+    w(f"; SPEED={speed:.2f}   ; one speed, the north star ({machine.DEFAULT_SPEED:g}) unless the "
+      f"bead or the material pulled it down")
+    w(f"; bead {bead_w:.2f}x{bead_h:g} = {bead_w*bead_h:.2f}mm2 at {speed:.1f} mm/s "
       f"-> flow={flow:.1f} mm3/s, layer 1 included")
     w(f"; layer 1: same {first_area:.2f}mm2 laid at Z{first_h:.2f} (machine.PRESS_HARD) — spreads to "
       f"~{first_w:.1f}mm wide, fan OFF")
@@ -439,7 +464,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # validator actually looks for them.)
     w("; ARGV: " + " ".join(_sys.argv))
     w("; BODY_START")
-    w(f"G1 F{round(first_speed*60)}                 ; the north star — every move, layer 1 included")
+    w(f"G1 F{round(first_speed*60)}                 ; ONE speed — every move, layer 1 included")
 
     e = 0.0
     for k in range(layers):
@@ -511,7 +536,10 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # Both quantities are now summed from the geometry that was actually emitted.
     _npts = sum(len(lp) for lp in pts)
     _mins = _len1 * layers / speed / 60.0     # one speed for the whole file now
-    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=_npts, grams=round(grams, 1), speed=round(speed),
+    # SPEED IS REPORTED TO A DECIMAL. round() to the integer turned a 9.17 mm/s wide-bead crawl into
+    # "9 mm/s", and 9 x 6.0 = 54 does not reconstruct the 55 mm3/s stamped two words later — a
+    # summary line that disagrees with its own file is how a wrong number survives a read-through.
+    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=_npts, grams=round(grams, 1), speed=round(speed, 1),
                                      cells=n * n, pitch=round(pitch, 2),
                                      mins=round(_mins, 1))
 

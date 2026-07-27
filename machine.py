@@ -156,7 +156,13 @@ DEFAULT_MATERIAL = LOADED[DEFAULT_PRINTER]
 # MEASURED, sustained  -- a flow held for real minutes without the extruder complaining:
 SUSTAINED_FLOW_BY_MATERIAL = {
     "pla":       55.0,   # Oleg 2026-07-27
-    "pla-matte": 65.0,   # Oleg 2026-07-27
+    "pla-matte": 60.0,   # Oleg 2026-07-27, SECOND revision — by ear, mid-print: "k2 crack
+                         # ocasionally lets reduce flow by 5". 65 ran silent on a 2.3-minute
+                         # ramp; on a real multi-minute part the extruder began slipping
+                         # occasionally. A burst figure is not a working figure, and the ear
+                         # heard it before any instrument could: the firmware logged nothing.
+                         # Trimmed live with M220 S92 (E is metered per mm, so cutting speed
+                         # cuts flow and leaves deposit per mm untouched).
 }
 # THE 48.6 STALL WAS NOT A FLOW FAILURE. Oleg, 2026-07-27: "driver coocked because i closed the
 # printer top with glass. will not again". The extruder driver over-heated because the enclosure

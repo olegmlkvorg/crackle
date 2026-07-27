@@ -183,40 +183,56 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
          printer='k2plus', dish=2.0, rail=3.0, material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
-    # SPEED IS AN INPUT HELD FIXED, NOT AN OUTPUT SOLVED FROM FLOW. Oleg, 2026-07-27: "50 is our
-    # north star for moving". This was min(flow / bead_area, MAX_SPEED), which happens to land on
-    # 50 at the default flow and silently drops BELOW it for any smaller --flow — the same
-    # head-changes-speed behaviour R3 exists to forbid, arriving through the back door of an
-    # argument default. Pin the speed; reach flow by widening the bead (machine.bead_for_flow),
-    # and SAY SO when the two disagree rather than trading one for the other in silence.
-    speed = machine.CONSTANT_SPEED
+    # SPEED STARTS AT THE NORTH STAR AND COMES DOWN WHEN A CONSTRAINT SAYS SO.
+    # Oleg, 2026-07-27, correcting the previous version of this block: "speed is not fixed - 50 is
+    # north star default unless overruled by other constraints."
+    #
+    # That block pinned speed to 50 and made the bead the only free variable. It is a different and
+    # worse rule than the one he stated, and it broke the two things this generator is actually for:
+    #   · THE WIDE-BEAD TRICK. A fat commanded bead is how this project reaches a flow target — the
+    #     head CRAWLS and the width carries the volume (10 x 0.6 x 50 would be 300 mm3/s, which no
+    #     machine can deliver; at 15 mm/s the same bead lands 90). Pinning the speed inverted the
+    #     trick: a wider bead became an ERROR instead of a slower, fatter line.
+    #   · TPU. Its measured working flow is 15.2 mm3/s. At a pinned 50 that needs a 0.51mm bead
+    #     through a 0.8mm orifice, so the code refused and I reported TPU as unprintable. It is
+    #     not — at the ordinary 1.2x0.6 bead it simply runs at 21 mm/s. An over-strict rule of mine
+    #     had turned itself into a claim about a material.
+    #
+    # WHAT R3 ACTUALLY REQUIRES is ONE speed for the whole print, so material per mm never changes
+    # where the geometry is tightest. The VALUE of that one speed is the north star unless a real
+    # constraint pushes it lower; it is never higher. machine.speed_for_flow() is that resolution.
+    speed = machine.speed_for_flow(flow, bead_w, layer_h)
+    # RESOLVE AGAINST THE FEEDRATE THE FILE WILL ACTUALLY CARRY. F is written as an integer
+    # mm/min, so a computed 15.283 mm/s is commanded as F916 = 15.2667. Declaring flow from the
+    # pre-rounding number would put an aspiration in the '; FLOW=' stamp rather than what the file
+    # delivers, which is precisely what R4 forbids. Round first, then derive everything from it.
+    # FLOOR, never round-to-nearest: rounding UP puts the delivered flow a hair OVER a measured
+    # material ceiling (TPU's 15.2 came out 15.204), which is a ceiling breach on the artifact even
+    # if it is invisible. Flooring costs at most 1/60 mm/s. An exact 50 stays exactly F3000.
+    f = max(1, math.floor(speed * 60 + 1e-9))
+    speed = f / 60.0
     delivered = speed * bead_w * layer_h
-    if abs(delivered - flow) > 0.05:
-        print(f"  ! --flow {flow:g} mm3/s is not what a {bead_w}x{layer_h} bead delivers at the "
-              f"{speed:g} mm/s constant speed — running {delivered:.1f}. Speed is fixed (R3); to "
-              f"hit {flow:g} set --bead-w {machine.bead_for_flow(flow, layer_h):.2f}.")
-    # A FIXED SPEED AND A MATERIAL'S FLOW CEILING CAN GENUINELY CONFLICT — REFUSE, DO NOT SPLIT
-    # THE DIFFERENCE. With speed pinned by R3, the bead is the only free variable, and a nozzle
-    # cannot lay one narrower than its own orifice. TPU is the case that exists: measured 15.2
-    # mm3/s, so a 50 mm/s head would need a 0.51mm bead through a 0.8mm hole. There is no answer,
-    # and the old code's answer — drop the head to 21 mm/s — is exactly the R3 violation that
-    # started this. Printing 36 on a 15.2 material instead would be worse still, so the file is
-    # not emitted at all and the arithmetic is stated.
+    # A MATERIAL CEILING LOWERS THE SPEED; IT NO LONGER REFUSES THE PRINT.
+    # flow is normally already clamped by machine.flow_for() in __main__, so this is the belt-and-
+    # braces path for emit() called directly — and the answer is the same one the wide bead gets:
+    # the head slows down until the bead delivers what the material can take.
     _cap = machine.flow_for(material, delivered, ' for belt.py')
     if delivered > _cap + 1e-9:
-        _bead = machine.bead_for_flow(_cap, layer_h, speed)
-        _fix = (f"use --bead-w {_bead:.2f}" if _bead >= machine.NOZZLE else
-                f"no bead works at this layer height — {_bead:.2f}mm is under the "
-                f"{machine.NOZZLE}mm orifice; drop --layer-h to "
-                f"{_cap / (speed * machine.NOZZLE):.2f} and --bead-w to {machine.NOZZLE}, "
-                f"or print this belt in a material with more flow")
-        raise SystemExit(
-            f"a {bead_w}x{layer_h} bead at the fixed {speed:g} mm/s delivers {delivered:.1f} "
-            f"mm3/s, but {material}'s measured ceiling is {_cap:g}. Speed is not the variable "
-            f"here (R3: \"50 is our north star for moving\") — the bead is. To hit {_cap:g}, "
-            f"{_fix}.")
+        f = max(1, math.floor(machine.speed_for_flow(_cap, bead_w, layer_h) * 60 + 1e-9))
+        speed = f / 60.0
+        delivered = speed * bead_w * layer_h
+    if delivered < flow - 0.05:
+        # Not an error: the bead is simply too small to carry the target at the north star, and
+        # speed may not go ABOVE it. Say what would close the gap and print anyway.
+        print(f"  ~ a {bead_w}x{layer_h} bead at the {machine.DEFAULT_SPEED:g} mm/s north star "
+              f"delivers {delivered:.1f} mm3/s, not the {flow:g} asked for — speed cannot go over "
+              f"the north star. To hit {flow:g} widen the bead: --bead-w "
+              f"{machine.bead_for_flow(flow, layer_h):.2f}.")
+    elif speed < machine.DEFAULT_SPEED - 0.05:
+        print(f"  ~ {speed:.1f} mm/s, below the {machine.DEFAULT_SPEED:g} mm/s north star: a "
+              f"{bead_w}x{layer_h} bead carries {flow:g} mm3/s only at this speed. One speed for "
+              f"the whole print (R3); the value is the constraint's, not the default's.")
     flow = delivered
-    f = round(speed * 60)
     layers = max(1, int(round(belt_w / layer_h)))
     # FLOW IS CONSTANT AND LAYER 1 IS NOT AN EXCEPTION.
     # Oleg, 2026-07-27: "omg why you killed first layer flow!!!!!!! flow must be constant".
@@ -325,7 +341,13 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     L = []
     w = L.append
     w(f"; CLEATED BELT — closed loop, {per:.0f}mm centreline, {belt_w}mm wide, {n_cleats} cleats")
-    w(f"; bead {bead_w}x{layer_h} at {speed:.0f} mm/s -> flow={flow} mm3/s, {layers} layers")
+    # DELIVERED, NOT REQUESTED. `; ...flow=` is read back by validate.py and compared against the
+    # flow every emitted move implies, so it must be bead_w * layer_h * the speed actually
+    # commanded — with the feedrate rounding already folded in. `{speed:.0f}` used to print 15 for
+    # a 15.28 mm/s file; the exact commanded feedrate is stated so the header can be checked
+    # against the body by eye.
+    w(f"; bead {bead_w}x{layer_h} at {speed:.2f} mm/s (F{f}) -> flow={flow:.2f} mm3/s, "
+      f"{layers} layers")
     w(f"; printed FLAT: belt width is the Z height, belt thickness is the wall")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
@@ -375,7 +397,7 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     # FLOW the R4 constant-flow check on every extruding move.
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={layer_h}")
-    w(f"; FLOW={flow}")
+    w(f"; FLOW={flow:.2f}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
@@ -426,7 +448,7 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
     return "\n".join(L) + "\n", dict(flow=round(flow, 1), per=round(per), layers=layers, grams=round(grams, 1),
-                                     speed=round(speed),
+                                     speed=round(speed, 1),
                                      mins=round(e / e_per_mm / speed / 60, 1))
 
 

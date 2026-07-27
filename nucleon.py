@@ -42,7 +42,7 @@ WELD CONTROL carries over from weave.py: in a single layer the second pass throu
 lift or plough the bead already down. Lift = interlace, stay = fuse. Phase 1 said fusing is the
 mechanism, so --weld defaults to 1.0.
 """
-import argparse, math, os, sys
+import argparse, math, os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
 import smooth
@@ -69,7 +69,7 @@ from pathstats import crossings as find_crossings
 # ring and the rosette meet naturally and the path can walk ring -> ellipse -> ring without lifting.
 # That closes the perimeter while keeping the continuous stroke and the lobed bore. Not built yet.
 
-def bore_ratio(a, bore_d, fit=0.70, N=3, bead_w=1.2, speed=58.0):
+def bore_ratio(a, bore_d, fit=0.70, N=3, bead_w=1.2, speed=None):
     """Solve b/a so the emitted central void MEASURES `bore_d + fit` across.
 
     Oleg, 2026-07-27, after a round bore that "barely fitted stick ... on hot": "imagine a nucleon
@@ -87,6 +87,14 @@ def bore_ratio(a, bore_d, fit=0.70, N=3, bead_w=1.2, speed=58.0):
     two wrong answers — so this bisects on the ACTUAL geometry instead of predicting it, which is
     the same discipline as the fit gauge: the artifact decides.
     """
+    # PASS THE SPEED THE PRINT WILL ACTUALLY RUN AT. The default used to be a hard 58.0, a number
+    # no file can command any more (the north star is 50 and speed only goes DOWN from there), so a
+    # caller taking the default was solving against a path the machine will never emit.
+    # MEASURED, so the change is not taken on faith: at a=60, 1/4in bore, the solved RATIO moves
+    # with speed (0.1066 at 58, 0.0961 at 50, 0.0964 at 22.9, 0.0972 at 15.3) because the sampling
+    # is speed-adaptive — but the EMITTED inner radius lands at 6.5044-6.5046 in every case. The
+    # bisection self-corrects, so this changes the bore by 0.0002mm and no more.
+    speed = machine.DEFAULT_SPEED if speed is None else speed
     # Solve against the path emit() ACTUALLY WRITES — same speed, same fillet — and against the
     # MATERIAL EDGE, which is half a bead inside the centreline. Both corrections are needed and
     # neither is guessable:
@@ -246,13 +254,32 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     #
     # So: same flow, same speed, pressed to the plate. Only Z changes on layer 1.
     e_first_mm = e_per_mm
-    # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
-    # a calm head beat chasing volumetric throughput; and on stacked geometry the two cannot both
-    # be satisfied anyway (see machine.MACHINE_MAX_SPEED).
-    # machine.MAX_SPEED is the limit of the WORK (30). MACHINE_MAX_SPEED (120) is what the
-    # machine could do — capping against it emitted files validate.py rejects outright.
-    speed = min(flow / (strand_w * layer_h), machine.MAX_SPEED)
+    # ONE SPEED PER PRINT, AND ITS VALUE IS THE NORTH STAR UNLESS A CONSTRAINT PUSHES IT DOWN.
+    # Oleg, 2026-07-27: "speed is not fixed - 50 is north star default unless overruled by other
+    # constraints."
+    #
+    # This is the whole of the rule and both halves matter. 50 is where speed STARTS and is the
+    # ceiling it may never exceed; a fat bead or a low-flow material moves it DOWN, and that is the
+    # wide-bead trick working exactly as intended — command a 6mm bead and the head CRAWLS so the
+    # flow still lands. Implemented as an immovable 50 the trick inverts: 6 x 0.6 x 50 = 180 mm3/s,
+    # a flow no machine here can deliver, so the command gets refused for being fat rather than run
+    # slowly. Nothing in this generator narrows a bead to chase a fixed speed, and nothing may.
+    #
+    # machine.speed_for_flow() is the single definition — min(DEFAULT_SPEED, flow / bead area) —
+    # so this file cannot drift from the rule the validator enforces.
+    speed = machine.speed_for_flow(flow, strand_w, layer_h)
+    # WHAT THE FILE ACTUALLY DELIVERS, not what was asked for. When the bead is thin enough that
+    # the flow target would need more than the north star, the north star wins and the flow lands
+    # SHORT — the honest response is to widen the bead, and the honest stamp is the delivered
+    # number (see the '; FLOW=' stamp below, which R4 checks every move against).
     actual_flow = strand_w * layer_h * speed
+    if flow > actual_flow * 1.001:
+        print(f"  ! flow {flow:g} mm3/s needs {flow/(strand_w*layer_h):.0f} mm/s at a "
+              f"{strand_w}x{layer_h} bead — over the {machine.DEFAULT_SPEED:g} north star, so this "
+              f"runs {actual_flow:.1f}. Widen the bead to close the gap; speed does not go up.")
+    elif speed < machine.DEFAULT_SPEED - 0.05:
+        print(f"  {speed:.1f} mm/s — below the {machine.DEFAULT_SPEED:g} north star because a "
+              f"{strand_w}x{layer_h} bead at {flow:g} mm3/s asks for it. The crawl is the point.")
     f_mm_min = round(speed * 60)
     b = a * ratio
     cx = cy = origin + a
@@ -322,9 +349,17 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w(f"; PRINTER={printer}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={layer_h}")   # validate.py checks the Z ladder against this
-    w(f"; FLOW={flow}")   # R4 checks every move against this
+    # THE STAMP IS WHAT THE FILE DELIVERS, NOT WHAT IT WANTED. This declared `flow` — the REQUEST
+    # — while every move carried strand_w*layer_h*speed. At a 1.2x0.6 bead against a 55 request the
+    # north star caps the head at 50 and the file delivers 36.0, so the stamp overstated the file
+    # by 53% and R4 correctly failed all 6851 extruding moves as "under 80% of declared". A stamp
+    # that records an ASPIRATION cannot verify anything: the check it feeds is "is this file
+    # internally consistent", and an aspiration makes every honest file look starved.
+    w(f"; FLOW={actual_flow:.1f}")   # R4 checks every move against this — DELIVERED, not requested
     w("; ARGV: " + " ".join(sys.argv))
-    w(f"; flow={actual_flow:.1f} mm3/s at {speed:.0f} mm/s (capped), bead {strand_w}x{layer_h} = {strand_w*layer_h:.2f}mm2")
+    w(f"; flow={actual_flow:.1f} mm3/s delivered at {speed:.1f} mm/s "
+      f"({'north star' if speed >= machine.DEFAULT_SPEED - 0.05 else f'below the {machine.DEFAULT_SPEED:g} north star — the bead asks for it'}), "
+      f"bead {strand_w}x{layer_h} = {strand_w*layer_h:.2f}mm2, requested {flow:g}")
     w(f"; predicted junctions/layer = 2*N*(N-1) = {2*N*(N-1)}")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
@@ -438,8 +473,13 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             # of the comment and EVERY move in the file ran at FIRST_LAYER_SPEED — 3323 of 3323
             # below half the declared flow, under a header still claiming 43.2 mm3/s. Inert while
             # FIRST_LAYER_SPEED was 50; a 50->20 change activated a typo nothing was watching.
-            lf = (round(min(machine.FIRST_LAYER_SPEED, speed) * 60)
-                  if frac < 1.0 / layers else f_mm_min)
+            # THE CONDITIONAL IS GONE ON PURPOSE NOW. It chose between machine.FIRST_LAYER_SPEED
+            # and the body speed — two numbers equal only by coincidence, so the file had ONE speed
+            # by luck rather than by construction, and R3 fails a print that runs at two. Speed is
+            # now resolved from the bead and may legitimately sit below 50; a layer-1 branch pinned
+            # to a constant would re-create exactly the split that typo hid. Adhesion here is bought
+            # by the 0.1 press, not by dwelling — that is why the press exists.
+            lf = f_mm_min
             dz = 0.0
             if wave_amp:
                 # CONTINUOUS Z WAVE, independent of crossings. Arches triggered at crossings can
@@ -490,15 +530,13 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # above the one below it, and the pressed first layer only shifts the whole stack down.
         z0 = machine.PRESS_HARD + z_rise * layer
         # FIRST LAYER. The balls failure (2026-07-25) came from 235 mm/s giving the bead no dwell to
-        # wet the plate. With the head now capped at 50 mm/s the whole print runs at what IS a
-        # first-layer speed, so no slowdown is needed and --first-slow defaults to 0.
-        # The SQUISH stays: it presses the bead into the plate and does not touch flow, which is
-        # what Oleg asked for — thick and irregular lines, always.
+        # wet the plate. The head now runs at or below 50 mm/s, which IS a first-layer speed, so
+        # nothing needs slowing — and R3 forbids a second speed anyway.
+        # The PRESS stays, and it is the only thing --first-slow still does: layer 1 is laid at
+        # PRESS_HARD, which is where adhesion actually comes from. Speed is not a lever here.
         if layer < first_slow:
-            lf = round(min(machine.FIRST_LAYER_SPEED, speed) * 60)   # never faster than the body
             z0 = machine.PRESS_HARD
-        else:
-            lf = f_mm_min
+        lf = f_mm_min
         # rotate each layer off the last so crossings distribute through the volume instead of
         # stacking into welded vertical columns
         # LAYERS MUST START WHERE THE LAST ONE ENDED, or the "one continuous path" claim is false.
@@ -570,11 +608,14 @@ if __name__ == "__main__":
     ap.add_argument("--layers", type=int, default=12)
     ap.add_argument("--layer_h", type=float, default=machine.BEAD_H)   # stacking ceiling
     ap.add_argument("--strand_w", type=float, default=machine.BEAD_W)  # stacking ceiling.
-                    # Together these give the fattest bead a 0.8 nozzle can stack (0.72mm2),
-                    # which is what lets max flow run at the SLOWEST possible speed: 111 mm/s
-                    # instead of 235. Oleg wanted 5x slower at constant flow; 2.1x is the
-                    # physical limit for stacked geometry, and going further would land the
-                    # bead taller than the Z step and plough the part off the plate.
+                    # 1.2 x 0.6 is the fattest bead a 0.8 nozzle can STACK (0.72mm2) — wider than
+                    # 1.5x the orifice and the bead lands TALLER than the Z step, so the part climbs
+                    # into the nozzle and gets ploughed off the plate.
+                    # THE STACKING CEILING IS NOT A CEILING ON --strand_w. It applies to geometry
+                    # built layer on layer. A single pressed layer, or a deliberately fat bead used
+                    # to carry flow at a crawl (Oleg: "you have to go 15mm wide in settings"), is
+                    # free to go far wider — speed comes DOWN to suit it. --strand_w 6 runs at
+                    # 15.3 mm/s and delivers the same 55 mm3/s.
     ap.add_argument("--flow", type=float, default=0,
                     help="0 = the material's measured ceiling (PLA keeps the max-flow rule)")
     ap.add_argument("--weld", type=float, default=1.0, help="1=fuse all (Phase 1 winner), 0=weave")
@@ -631,4 +672,28 @@ if __name__ == "__main__":
     open(fn, "w").write(g)
     print(f"{fn}\n  N={a.N} ({2*a.N*(a.N-1)} junctions/layer predicted, {st['junctions']} measured "
           f"over {a.layers} layers), {st['lifts']} lifts")
-    print(f"  {st['speed']} mm/s (capped at {machine.MAX_SPEED:.0f}), flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")
+    # THE SUMMARY IS MEASURED FROM THE FILE, NOT RECOMPUTED FROM THE VARIABLE. A summary line that
+    # re-derives its own numbers agrees with the generator's intention and says nothing about the
+    # artifact — that is how a 120 mm/s bug survived hours under a header claiming 50. Speed here is
+    # read back out of the emitted gcode: the feedrate in force at each extruding move.
+    _f, _seen, _body = 0.0, {}, False
+    for _ln in open(fn):
+        if 'BODY_START' in _ln:
+            _body = True
+            continue
+        if not _body:
+            continue
+        _code = _ln.split(';')[0].strip()
+        _m = re.search(r'\bF(\d+(?:\.\d+)?)', _code)
+        if _m and _code.startswith(('G0', 'G1')):
+            _f = float(_m.group(1)) / 60.0
+        if _code.startswith('G1') and ' E' in _code and ('X' in _code or 'Y' in _code) and _f:
+            _seen[round(_f, 1)] = _seen.get(round(_f, 1), 0) + 1
+    _spds = sorted(_seen)
+    _how = ("at the north star" if _spds and _spds[-1] >= machine.DEFAULT_SPEED - 0.05
+            else f"below the {machine.DEFAULT_SPEED:g} north star — the bead asks for it")
+    print(f"  MEASURED in the file: {'/'.join(f'{s:g}' for s in _spds)} mm/s "
+          f"over {sum(_seen.values())} extruding moves ({_how})"
+          + ("   !! MORE THAN ONE SPEED — R3 violation" if len(_spds) > 1 else ""))
+    print(f"  flow {st['flow']} mm3/s delivered ({a.flow:g} requested), ~{st['mins']} min, "
+          f"{st['grams']} g, {st['lines']} lines")

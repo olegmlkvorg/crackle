@@ -13,7 +13,7 @@ around them. `push.py` refuses to upload a file that fails.
 |---|---|---|---|
 | **R1** | first layer pressed to `PRESS_HARD` (0.1) | *"the nozel need to be 0,1 to board. we need adhesion"* | the file he cancelled — first layer at Z0.510 |
 | **R2** | no Z step above one layer height | *"play Z smartly we dont want floaring lines"* | dropping the Z0.700 step → `Z steps [1.2] exceed 0.6` |
-| **R3** | one constant head speed (50 mm/s) | *"50 is our north star for moving"* | synthesised corner slow-downs → 724 moves off-speed |
+| **R3** | **one** speed per print, ≤ the north star | *"speed is not fixed - 50 is north star default unless overruled by other constraints"* | mixed-speed file → *"runs at 2 different speeds"*; a uniform 21 mm/s crawl correctly **passes** |
 | **R4** | one constant flow, layer 1 included | *"flow must be constant"* | synthesised starved layer 1 → 103 moves under 80% |
 | **R5** | dry travel must not exceed extrusion | *"travel dry is ok, but avoid it at all costs"* | injected dry hops → 278.8m travel vs 227.1m extruded |
 | **R6** | file names a filament with a known flow figure | — | unknown material has no maintained figure |
@@ -108,3 +108,28 @@ silently. Both now fail loudly, verified against stamp-stripped files.
 
 A guard that switches itself off when its input goes missing is worse than no guard, because the
 green tick is indistinguishable from a real pass. This file asserted the fix before it existed.
+
+## R3 was implemented wrong first, and the wrongness became two false claims
+
+I first implemented the north star as an **immovable** 50 mm/s. Oleg corrected it:
+*"speed is not fixed - 50 is north star default unless overruled by other constraints."*
+
+The over-strict version broke two legitimate things — and I reported both as findings about the
+world rather than about my own code:
+
+- **"Your two rules collide."** They do not. The wide-bead trick has always been *crawl with a fat
+  bead*: speed comes DOWN so the flow lands. Pinning speed inverted it (10 mm × 0.6 × 50 = 300
+  mm³/s) and made 7 archived commands unrunnable. **I manufactured the collision, then presented it
+  as his problem to resolve.**
+- **"TPU cannot be printed at the north star at all."** False. At a pinned 50 it needs a 0.51 mm
+  bead, narrower than the nozzle — so I declared the material unprintable. At the normal 1.2 × 0.6
+  bead it runs at **21 mm/s**.
+
+**What R3 actually protects is constancy within a print** — one speed, so material per mm does not
+change where the geometry is already tightest. The value is 50 unless a constraint pushes it lower;
+never higher.
+
+**The general failure:** an over-strict guard does not fail loudly like a missing one. It produces
+*confident, well-evidenced claims that are artifacts of the guard*. Both claims above came with
+arithmetic. Before reporting "X is impossible", check whether X is impossible **or merely forbidden
+by something I wrote**.

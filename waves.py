@@ -127,29 +127,48 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # it to keep a nominal width is the one thing that guarantees the ribbon lifts.
     # Same flow, same speed, pressed to the plate. Only Z changes on layer 1.
     e_first_mm = e_per_mm
-    # R3 — SPEED IS AN INPUT HELD FIXED, NOT AN OUTPUT SOLVED FROM FLOW.
-    # "50 is our north star for moving" (Oleg, 2026-07-27). The old line here was
-    # min(flow / bead_area, MAX_SPEED), which lands on 50 only because the default flow happens to
-    # ask for more than 50 — a lower --flow, or a narrower bead, silently produced an off-speed file
-    # and nothing said so. Pinning it removes the accident.
-    speed = machine.CONSTANT_SPEED
-    # WITH SPEED AND BEAD BOTH FIXED, FLOW IS FULLY DETERMINED — so --flow is ADVISORY here, and it
-    # has to say so in BOTH directions. A cap that silently rewrites your input is indistinguishable
-    # from a bug (machine.speed_for says exactly this), and the old code rewrote it in silence: it
-    # recomputed `flow` from the capped speed and printed the result as if it had been asked for.
-    delivered = bead_w * bead_h * speed
-    if abs(delivered - flow) > flow * 0.001:
-        _dir = "under" if delivered < flow else "OVER"
-        # The way to move flow is the BEAD, not the head. But widening past machine.BEAD_W
-        # (1.5x nozzle) makes the bead land TALLER than the Z step and the part climbs into the
-        # nozzle on a stacked run — so the width is printed as a suggestion, never applied.
-        print(f"  ! flow is an OUTPUT here: {bead_w:g}x{bead_h:g} at a fixed {speed:g} mm/s "
-              f"(machine.CONSTANT_SPEED) delivers {delivered:.1f} mm3/s, {_dir} the {flow:g} "
-              f"requested ({delivered/flow*100:.0f}%). Speed may not move — R3. To hit {flow:g} "
-              f"exactly, set --bead-w {machine.bead_for_flow(flow, bead_h):.2f} "
-              f"(machine.BEAD_W is {machine.BEAD_W:g}; check it still stacks before going wider).")
-    flow = delivered
+    # R3 — ONE SPEED PER PRINT. THE VALUE IS THE NORTH STAR UNLESS A CONSTRAINT PUSHES IT DOWN.
+    # Oleg, 2026-07-27, correcting the version of this block that stood here: "speed is not fixed -
+    # 50 is north star default unless overruled by other constraints."
+    #
+    # This file read `speed = machine.CONSTANT_SPEED` and called that R3. It is a different and
+    # worse rule, and it broke the two things it was most important not to break:
+    #   · THE WIDE-BEAD TRICK. A fat commanded bead is how this work carries flow — the head CRAWLS
+    #     and the bead does the volume. Pinned at 50 the width multiplies the other way instead:
+    #     --bead-w 6 asked for 180 mm3/s and validate.py refused the file outright. Speed has to be
+    #     free to come DOWN; that is the whole technique.
+    #   · TPU. Its measured working flow is 15.2 mm3/s. At a pinned 50 that needs a 0.51mm bead,
+    #     narrower than the 0.8 nozzle — so this generator emitted 36 mm3/s of TPU, 237% of the
+    #     material's ceiling, while printing a warning that speed "may not move". At the ordinary
+    #     1.2x0.6 bead it simply runs at 21 mm/s.
+    # What R3 protects is CONSTANCY WITHIN a print — one speed, so material per mm does not change
+    # where the geometry is tightest — and a ceiling, never a floor. machine.speed_for_flow returns
+    # that one speed: min(DEFAULT_SPEED, flow / bead_area).
+    speed = machine.speed_for_flow(flow, bead_w, bead_h)
+    # DERIVE EVERYTHING FROM THE FEEDRATE THE FILE ACTUALLY COMMANDS, NOT THE IDEAL ONE.
+    # `; FLOW=` has to be what the file DELIVERS (R4), and what it delivers is bead x (F/60) — F is
+    # written as an integer mm/min. The gap is under 0.01 mm/s, and a stamp computed from a number
+    # the file does not contain is exactly how a declared value drifts into an aspiration.
     f = round(speed * 60)
+    speed = f / 60.0
+    delivered = bead_w * bead_h * speed
+    if delivered < flow * 0.999:
+        # Speed is already AT the north star and the bead cannot carry the rest. The only remaining
+        # lever is WIDTH — but widening past machine.BEAD_W (1.5x nozzle) makes the bead land TALLER
+        # than the Z step and the part climbs into the nozzle on a stacked run, so the width is
+        # printed as a suggestion and never applied.
+        print(f"  ! {bead_w:g}x{bead_h:g} at the {machine.DEFAULT_SPEED:g} mm/s north star delivers "
+              f"{delivered:.1f} mm3/s, under the {flow:g} requested ({delivered/flow*100:.0f}%). "
+              f"Speed may not go ABOVE the north star, so the bead is the lever: "
+              f"--bead-w {machine.bead_for_flow(flow, bead_h):.2f} hits {flow:g} exactly "
+              f"(machine.BEAD_W is {machine.BEAD_W:g}; check it still stacks before going wider).")
+    elif speed < machine.DEFAULT_SPEED - 0.05:
+        # A CRAWL IS NOT A VIOLATION — SAY SO OUT LOUD SO IT IS NEVER READ AS ONE. A fat bead or a
+        # low-flow material lands the requested flow below 50, and that is the rule working.
+        print(f"  ~ {bead_w:g}x{bead_h:g} = {bead_w*bead_h:.2f}mm2 carries {flow:g} mm3/s at "
+              f"{speed:.1f} mm/s — under the {machine.DEFAULT_SPEED:g} north star because the bead "
+              f"is fat or the material is slow. One speed for the whole print; that is R3.")
+    flow = delivered
     s = cell
     w_total = cols * 2 * (s * math.sqrt(3) / 2.0)      # wave-row geometry, not hex-cell
     h_total = (rows - 1) * s + s / 2.0
@@ -162,10 +181,11 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     pts = round_corners(comb_path(cell, cols, rows, ox, oy), fillet)
     # DECIMATE TO KEEP THE HOST ALIVE.
     # round_corners samples by angle, which produced ~0.15mm segments — fine at the old 30 mm/s cap,
-    # but MAX_SPEED is now 70 and that is 466 moves/second against a host that stalls near 300.
+    # but at the 50 mm/s north star that is 333 moves/second against a host that stalls near 300.
     # Klipper does not error when it runs out of lookahead; it simply FREEZES mid-print. The limit
     # is a rate, so the minimum segment is derived from the speed actually commanded rather than
-    # picked: at 250 moves/s of headroom, seg = speed / 250.
+    # picked: at 250 moves/s of headroom, seg = speed / 250. A resolved speed BELOW the north star
+    # (a fat bead crawling) therefore needs no extra decimation — the 0.25mm floor governs.
     _min_seg = max(0.25, speed / 250.0)
     _dec = [pts[0]]
     for _p in pts[1:-1]:
@@ -188,12 +208,15 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w(f"; MATERIAL={material}")            # R6, and the TPU fan guard
     w(f"; LAYER_H={bead_h}")               # R2 — the Z ladder is checked against this
     w(f"; FLOW={flow:.1f}")                # R4 — every extruding move is checked against this
-    # THE STAMP IS THE FLOW THAT IS ACTUALLY DELIVERED, not the one that was requested. Stamping
-    # the request while the head runs at a fixed 50 mm/s declares a number no move in the file
-    # meets, and R4 then reports every single move as starved — which is exactly what nucleon.py
-    # does today (declares 55, delivers 36, 6851 moves flagged).
+    # THE STAMP IS THE FLOW THAT IS ACTUALLY DELIVERED, not the one that was requested — R4. It is
+    # computed as bead_w * bead_h * (F/60) from the SAME rounded feedrate the body lines carry, so
+    # the declaration and the moves cannot disagree. Stamping the request instead declares a number
+    # no move in the file meets, and R4 then reports every single move as starved — which is exactly
+    # what nucleon.py does today (declares 55, delivers 36, 6851 moves flagged).
     w("; ARGV: " + " ".join(_sys.argv))
-    w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow:.1f} mm3/s")
+    w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.1f} mm/s -> flow={flow:.1f} mm3/s"
+      + ("" if speed >= machine.DEFAULT_SPEED - 0.05
+         else f" (under the {machine.DEFAULT_SPEED:g} north star: the bead carries the flow)"))
     w(f"; {w_total:.0f} x {h_total:.0f}mm on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed, pressed to {press}mm")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
@@ -232,8 +255,9 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # Layer 1 sits at `press` (squashed into the plate so it BONDS). Every layer above steps by the
     # full bead height, because it is landing on plastic rather than glass and does not need to be
     # crushed -- pressing an upper layer just ploughs the one beneath it.
-    # The Z axis is slower than the head and cannot be commanded at the north star: machine.MAX_Z_V
-    # is 30 mm/s. This is the feedrate for the vertical seam step only, which carries no XY.
+    # The Z axis is slower than the head and cannot always be commanded at the resolved print
+    # speed: machine.MAX_Z_V is 30 mm/s. This is the feedrate for the vertical seam step only,
+    # which carries no XY — so there is no head velocity here for R3 to be constant about.
     _zf = round(min(speed, machine.MAX_Z_V) * 60)
     for k in range(layers):
         seq = pts        # closed loop -- same direction every layer, so no seam reversal
@@ -273,7 +297,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     L += ["M107", "M104 S0", "M140 S0", f"G0 Z{press+(layers-1)*bead_h+40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed),
+    return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed, 1),
                                      mins=round(e / e_per_mm / speed / 60, 1),
                                      size=(round(w_total), round(h_total)))
 
