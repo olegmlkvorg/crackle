@@ -585,6 +585,77 @@ def check(path):
     elif _worst[0]:
         print(f"  peak implied flow {_worst[0]:.1f} mm3/s (cap {_base:.0f} for {_fmat})")
 
+    # ========================= OLEG'S STANDING RULES, ENFORCED HERE =========================
+    # These are not suggestions the generators may interpret. Every one of them was stated as an
+    # absolute, and every one of them was then broken by a generator that had its own idea --
+    # because the rule lived in a constant, or a comment, or my memory, none of which fail.
+    #
+    # Oleg, 2026-07-27: "why you keep annoying me with same errors again and again. why you dont
+    # have guards to enforce my requirements". He is right. A rule enforced by my attention is a
+    # rule that costs HIM attention. It belongs on the artifact, where routing around it is
+    # impossible, and it must be shown able to FAIL or it is decoration.
+    #
+    #   R1  first layer pressed to PRESS_HARD          "the nozel need to be 0,1 to board"
+    #   R2  no Z step above one layer height           "play Z smartly we dont want floaring lines"
+    #   R3  one constant head speed                    "50 is our north star for moving"
+    #   R4  one constant flow, first layer included    "flow must be constant"
+    #
+    # The ONLY licensed exception is the prime line, which is laid off the part before printing
+    # starts. It is identified by its own comment, not by being slow -- otherwise "slow" becomes
+    # a way to opt out of R3.
+    _rules_txt = open(path).read()
+    _decl_flow = None
+    _mf = re.search(r'^; FLOW=([\d.]+)', _rules_txt, re.M)
+    if _mf:
+        _decl_flow = float(_mf.group(1))
+    _xr, _yr, _er, _fr = None, None, 0.0, None
+    _spd, _flw = {}, []
+    _area = math.pi * (1.75 / 2) ** 2
+    for _raw in _rules_txt.splitlines():
+        _code = _raw.split(';')[0].strip()
+        _isprime = 'PRIME' in _raw.upper()
+        if not _code.startswith(('G0', 'G1')):
+            continue
+        _g = dict(re.findall(r'\b([XYEF])(-?\d+(?:\.\d+)?)', _code))
+        if 'F' in _g:
+            _fr = float(_g['F'])
+        if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime:
+            _d = math.hypot(float(_g['X']) - _xr, float(_g['Y']) - _yr)
+            _de = float(_g['E']) - _er
+            if _d > 0.05 and _de > 0:
+                _sp = round(_fr / 60.0, 1)
+                _spd[_sp] = _spd.get(_sp, 0) + 1
+                _flw.append((_de * _area) / (_d / (_fr / 60.0)))
+        if 'E' in _g:
+            _er = float(_g['E'])
+        if 'X' in _g:
+            _xr = float(_g['X'])
+        if 'Y' in _g:
+            _yr = float(_g['Y'])
+    if _spd:
+        _off = {k: v for k, v in _spd.items() if abs(k - machine.CONSTANT_SPEED) > 0.6}
+        if _off:
+            _n = sum(_off.values())
+            problems.append(f"R3 constant speed: {_n} extruding moves are not at "
+                            f"{machine.CONSTANT_SPEED:g} mm/s (found {sorted(_off)[:4]}) — a head "
+                            f"that changes speed changes material per mm")
+    # A MISSING STAMP IS A FAILURE, NOT A SKIP. R4 silently did nothing on any file without a
+    # '; FLOW=' header -- including the exact starved-first-layer file it was written to catch,
+    # which it passed. An unchecked input must fail loudly; that is the whole lesson of this repo.
+    if _flw and not _decl_flow:
+        problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "
+                        "is unverifiable. Regenerate with a current generator.")
+    if _flw and _decl_flow:
+        _lo = [f for f in _flw if f < _decl_flow * 0.80]
+        _hi = [f for f in _flw if f > _decl_flow * 1.20]
+        if _lo:
+            problems.append(f"R4 constant flow: {len(_lo)} extruding moves deliver under 80% of "
+                            f"the declared {_decl_flow:g} mm3/s (worst {min(_lo):.1f}) — the first "
+                            f"layer is the usual offender and it is NOT an exception")
+        if _hi:
+            problems.append(f"R4 constant flow: {len(_hi)} extruding moves exceed 120% of the "
+                            f"declared {_decl_flow:g} mm3/s (worst {max(_hi):.1f})")
+
     # FIRST LAYER MUST BE PRESSED TO THE PLATE, AND NOTHING MAY FLOAT ABOVE IT.
     # Oleg's rule -- "the nozel need to be 0,1 to board. we need adhesion" -- lived only as the
     # constant machine.PRESS_HARD, which generators were free to ignore. nucleon.py did: it carried

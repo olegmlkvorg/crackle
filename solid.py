@@ -518,6 +518,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # its own header.
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={layer_h}")   # validate.py checks the Z ladder against this
+    w(f"; FLOW={flow}")   # R4 checks every move against this
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")

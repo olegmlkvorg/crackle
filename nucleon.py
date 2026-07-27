@@ -232,12 +232,20 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # it 1.18x on the one layer whose only job is to bond. Surplus on layer 1 does not build a
     # thicker layer, it ploughs the part off the plate (the postfoot failure, +10.4%).
     # Already fixed in hilbert, waves, honeycomb and solid; this is the fifth site.
-    # FIRST LAYER IS PRESSED TO THE PLATE, NOT SQUISHED BY A FRACTION. Oleg's rule is absolute:
-    # "the nozel need to be 0,1 to board. we need adhesion". This file used first_squish=0.85 of
-    # layer_h -- 0.51mm, five times too high -- because it carried its OWN first-layer model while
-    # machine.PRESS_HARD sat unused. He caught it on the plate, twice. Metered to the height it is
-    # ACTUALLY laid at: surplus on layer 1 does not build a thicker layer, it ploughs the part off.
-    e_first_mm = (strand_w * machine.PRESS_HARD) / area
+    # FLOW IS CONSTANT. THE FIRST LAYER IS NOT AN EXCEPTION TO IT.
+    # Oleg, 2026-07-27: "omg why you killed first layer flow!!!!!!! flow must be constant".
+    # I had metered layer 1 to strand_w * PRESS_HARD -- 0.217mm2 against the body's 1.302mm2,
+    # one sixth of the material -- reasoning that a bead laid at 0.1mm can only hold 0.1mm of
+    # material. That reasoning is wrong here, and he had already said so twice:
+    #   "you have to go 15mm wide in settings do not worry of massive over extrusion,
+    #    this is what we do"
+    #   "dont worry too much about ... this is what we do"
+    # The bead does not stay 2.17mm wide at a 0.1mm gap. It SPREADS -- the same volume per mm
+    # laid into a 0.1mm gap lands ~13mm wide, and that enormous squished footprint IS the
+    # adhesion. Starving it to keep a nominal width is the one thing that guarantees it lifts.
+    #
+    # So: same flow, same speed, pressed to the plate. Only Z changes on layer 1.
+    e_first_mm = e_per_mm
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
     # a calm head beat chasing volumetric throughput; and on stacked geometry the two cannot both
     # be satisfied anyway (see machine.MACHINE_MAX_SPEED).
@@ -314,6 +322,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w(f"; PRINTER={printer}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={layer_h}")   # validate.py checks the Z ladder against this
+    w(f"; FLOW={flow}")   # R4 checks every move against this
     w("; ARGV: " + " ".join(sys.argv))
     w(f"; flow={actual_flow:.1f} mm3/s at {speed:.0f} mm/s (capped), bead {strand_w}x{layer_h} = {strand_w*layer_h:.2f}mm2")
     w(f"; predicted junctions/layer = 2*N*(N-1) = {2*N*(N-1)}")
