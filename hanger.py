@@ -122,7 +122,11 @@ def main():
 
     g, st = S.emit(region, height, a.bead_w, a.layer_h, a.flow, temp,
                    machine.bed_for(a.material, a.printer), 1.75, (bx, by),
-                   True, machine.PRESS_HARD, 100, a.bead_w * a.layer_h / machine.PRESS_HARD,
+                   # first_w = the BEAD, not the spread width. Feeding layer 1 the body's
+                   # cross-section at a 0.1 press over-fills a solid region 3.3x: the paths are
+                   # bead-spaced, so a 11mm ribbon overlaps its neighbours six times. Same
+                   # failure that sheared the rosetta off the plate.
+                   True, machine.PRESS_HARD, 100, a.bead_w,
                    True, a.printer, f"HANGER x{a.n}", material=a.material)
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"hanger_{a.printer}_x{a.n}_h{a.hole:g}_T{temp:g}.gcode")

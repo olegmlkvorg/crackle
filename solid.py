@@ -554,6 +554,16 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     w(f"G0 F9000 X{_px - 24:.3f} Y{_py:.3f}")
     w("G1 E20 F300                      ; stationary purge — pressure before motion")
     w(f"G1 F1200 X{_px:.3f} Y{_py:.3f} E30      ; prime line, laid in the clear corridor")
+    # ANGLED BREAK-OFF, so the prime does not drag a thread into the part.
+    # Oleg, 2026-07-27: "make the first sstripe of extrudement disconnected from main model, you
+    # know how the creality print draws an angle disconnect and start dwawing, this will make our
+    # prints cleaner". The lifted travel below already avoided extruding across the part, but the
+    # bead was still ATTACHED when the head left: molten PLA stretches rather than snaps, so a
+    # tail rode along and landed on layer 1.
+    # A short un-extruded run at an angle off the end of the prime wipes the nozzle against the
+    # plate and breaks the tail there, in the corridor, where it belongs. No retraction -- this
+    # project keeps flow continuous, and the wipe achieves the separation mechanically.
+    w(f"G0 F3000 X{_px + 12:.3f} Y{_py + 12:.3f}  ; PRIME break-off — angled wipe, no extrusion")
     w("G92 E0")
     # ONE lifted travel from the prime to the real start. Kept explicit and tagged: it is cheaper
     # than the alternative, which was extruding a starved thread across the part to reach it.
@@ -574,6 +584,10 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # against the flow those same moves actually carry. A stamp copied from the --flow request would
     # declare an aspiration and quietly fail every move in a wide-bead or low-flow-material print.
     w(f"; FLOW={flow:.4f}")   # R4 checks every move against this
+    # Layer 1 is laid at PRESS_HARD and metered to that gap, so its cross-section differs from the
+    # body BY CONSTRUCTION. Declared so R4 exempts it and R4b (fill ratio) polices it instead --
+    # an exception the checker has to guess at is a hole.
+    w(f"; PRESSED_LAYER1={press:g}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")

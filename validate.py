@@ -140,15 +140,20 @@ def check(path):
                         "backwards-extrusion and off-bed checks NEVER RAN. This file is unchecked, "
                         "not clean. Add its marker to validate.py.")
     # NO TRAVEL IS A RULE (machine.py). Zero non-extruding moves between the first extrusion and
-    # the last. Two G0 are permitted and only two: reaching the prime start before any plastic
-    # exists, and parking after the object is complete.
+    # the last. The permitted G0s are named, never inferred: reaching the prime start before any
+    # plastic exists, parking after the object is complete, an inter-object HOP, and the PRIME
+    # break-off -- an angled un-extruded wipe that snaps the prime bead off IN THE CORRIDOR so it
+    # does not ride along and land on layer 1 (Oleg, 2026-07-27: "make the first sstripe of
+    # extrudement disconnected from main model ... this will make our prints cleaner"). It sits
+    # between the prime and the part, which is why it falls inside this window at all.
     _lines = open(path).read().split('\n')
     _seq = any(l.startswith('; SEQUENTIAL=') for l in _lines)
     _ext = [i for i, l in enumerate(_lines) if re.match(r'G1 .*E[\d.]', l)]
     if _ext:
         _inside = [i for i, l in enumerate(_lines)
                    if l.startswith('G0 ') and _ext[0] < i < _ext[-1]
-                   and '; HOP' not in l and '; PRIME-TRAVEL' not in l]
+                   and '; HOP' not in l and '; PRIME-TRAVEL' not in l
+                   and '; PRIME break-off' not in l]
         _hops = sum(1 for l in _lines if '; HOP over' in l)
         if _hops:
             print(f"  {_hops} inter-object hops (lifted, flow suspended, no retract)")
@@ -626,7 +631,7 @@ def check(path):
     _mf = re.search(r'^; FLOW=([\d.]+)', _rules_txt, re.M)
     if _mf:
         _decl_flow = float(_mf.group(1))
-    _xr, _yr, _er, _fr = None, None, 0.0, None
+    _xr, _yr, _er, _fr, _zr = None, None, 0.0, None, 0.0
     _spd, _flw, _nlink = {}, [], 0
     _area = math.pi * (1.75 / 2) ** 2
     for _raw in _rules_txt.splitlines():
@@ -634,7 +639,8 @@ def check(path):
         _isprime = 'PRIME' in _raw.upper()
         if not _code.startswith(('G0', 'G1')):
             continue
-        _g = dict(re.findall(r'\b([XYEF])(-?\d+(?:\.\d+)?)', _code))
+        _g = dict(re.findall(r'\b([XYEFZ])(-?\d+(?:\.\d+)?)', _code))
+        if 'Z' in _g: _zr = float(_g['Z'])
         if 'F' in _g:
             _fr = float(_g['F'])
         # LINK MOVES ARE DECLARED, NOT ASSUMED. solid.py labels its contour-to-contour connectors
@@ -648,6 +654,9 @@ def check(path):
             _nlink += 1
         _l1decl = re.search(r'^; SPEED_LAYER1=([\d.]+)', _rules_txt, re.M)
         _isl1 = bool(_l1decl) and _fr is not None and abs(_fr/60.0 - float(_l1decl.group(1))) < 0.6
+        _pdecl = re.search(r'^; PRESSED_LAYER1=([\d.]+)', _rules_txt, re.M)
+        if _pdecl and abs(_zr - float(_pdecl.group(1))) < 1e-6:
+            _isl1 = True
         if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime and not _islink \
                 and not _isl1:
             _d = math.hypot(float(_g['X']) - _xr, float(_g['Y']) - _yr)
@@ -811,13 +820,19 @@ def check(path):
     # The second half is his follow-on: "play Z smartly we dont want floaring lines". Rebasing
     # layer 1 to 0.1 without rebasing the ladder left a 1.10mm step onto layer 2 -- extruding into
     # air over a 0.60mm bead. Any step bigger than one layer height is a floating line.
-    _zs = []
+    # ONLY Z MOVES THAT ARE FOLLOWED BY EXTRUSION ARE LAYERS. The end-of-print park lift is a Z
+    # move too, and on a short part it fell inside the scan window and was reported as a 30.7mm
+    # "floating line" -- a false positive that would refuse every 4-layer part.
+    _zs, _pend = [], None
     for _l in open(path):
-        _m = re.match(r'G1 (?:F\d+ )?Z(\d+\.\d+)', _l.split(';')[0].strip())
+        _c = _l.split(';')[0].strip()
+        _m = re.match(r'G1 (?:F\d+ )?Z(\d+\.\d+)$', _c)
         if _m:
-            _z = float(_m.group(1))
-            if not _zs or _z != _zs[-1]:
-                _zs.append(_z)
+            _pend = float(_m.group(1))
+        elif _pend is not None and _c.startswith('G1') and ' E' in _c and 'X' in _c:
+            if not _zs or _pend != _zs[-1]:
+                _zs.append(_pend)
+            _pend = None
         if len(_zs) > 6:
             break
     if _zs:
