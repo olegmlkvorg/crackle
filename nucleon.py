@@ -49,6 +49,44 @@ import smooth
 from pathstats import crossings as find_crossings
 
 
+def bore_ratio(a, bore_d, fit=0.70, N=3, bead_w=1.2, speed=58.0):
+    """Solve b/a so the emitted central void MEASURES `bore_d + fit` across.
+
+    Oleg, 2026-07-27, after a round bore that "barely fitted stick ... on hot": "imagine a nucleon
+    but give it a ineer ring size of 1/4 inch".
+
+    N ellipses about one centre leave a central void bounded by N arcs — it touches the rod at N
+    points and opens out between them, which is exactly the relief a hot bulging wall needs and
+    exactly what a circle cannot give. And it costs no travel: a nucleon is ONE continuous stroke,
+    so the bore, the wall and the cavities between lobes are all the same curve.
+    Measured against the round-bore shell it replaces: dry travel 434 moves / 10.4m -> 1 move.
+
+    THE RATIO IS SOLVED, NOT DERIVED, and that is deliberate. b/a = bore_r/a emits a hole 1.2mm too
+    small; adding half a bead over-corrects to 8.17 on a 7.05 target, because the fillet and the
+    curvature-adaptive sampling move the innermost path by more than the bead alone. Two models,
+    two wrong answers — so this bisects on the ACTUAL geometry instead of predicting it, which is
+    the same discipline as the fit gauge: the artifact decides.
+    """
+    # Solve against the path emit() ACTUALLY WRITES — same speed, same fillet — and against the
+    # MATERIAL EDGE, which is half a bead inside the centreline. Both corrections are needed and
+    # neither is guessable:
+    #     ratio 0.2074  raw r 3.526  emitted r 3.648  -> hole 6.10mm   (solving the raw curve)
+    #     ratio 0.2321  raw r 3.946  emitted r 4.128  -> hole 7.06mm   (correct)
+    #     ratio 0.2426  raw r 4.124  emitted r 4.304  -> hole 7.41mm   (raw + half a bead)
+    # The fillet moves the innermost point ~0.18mm outward, so a model that ignores it is wrong by
+    # more than the fit tolerance it is trying to hit.
+    target = (bore_d + fit) / 2.0 + bead_w / 2.0
+    lo, hi = 0.05, 0.60
+    for _ in range(48):
+        mid = (lo + hi) / 2.0
+        pts = nucleon_path(N, a, a * mid, 0.0, 0.0, 600, speed=speed)
+        inner = min(math.hypot(x, y) for x, y in pts)
+        if inner < target: lo = mid
+        else: hi = mid
+        if hi - lo < 1e-6: break
+    return (lo + hi) / 2.0
+
+
 def _ellipse_R(a, b, t):
     """Local radius of curvature of the ellipse at parameter t."""
     num = (a * a * math.sin(t) ** 2 + b * b * math.cos(t) ** 2) ** 1.5
