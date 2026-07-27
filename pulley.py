@@ -151,11 +151,11 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     #   "you have to go 15mm wide in settings do not worry of massive over extrusion,
     #    this is what we do"
     # So layer 1 differs from the body in Z ALONE: same material per mm, same 50 mm/s.
-    first_h = press
+    # There is no first_h, no e_first-of-its-own and no f_first any more, and that absence IS the
+    # rule: the only thing layer 1 does differently is sit at `press`.
     e_first = e_per_mm
-    # (there is no f_first any more, and that absence is the point: layer 1 runs the body feedrate)
-    # What the base bead actually LANDS at. Not a knob any more — it is arithmetic, and the brim
-    # spacing below is the only thing that needs it.
+    # What the base bead actually LANDS at, once that constant flow is squashed through the press
+    # gap. Not a knob — arithmetic. The brim spacing below is the only thing that needs it.
     first_w = bead_w * layer_h / max(press, 1e-6)
 
     r_bore = bore_d / 2 + SHRINK / 2

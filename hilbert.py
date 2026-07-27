@@ -196,17 +196,27 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # So the Z step must be set to what LANDS, not what was commanded, or the nozzle ploughs the
     # layer it just laid. --layer-z sets it independently; bead_h alone still meters E.
     e_per_mm = (bead_w * bead_h) / area
-    z_step = layer_z or bead_h
-    # LAYER 1 IS NOT AS TALL AS THE OTHERS, SO IT MUST NOT BE FED LIKE THEM.
-    # This metered every layer with the BODY cross-section (bead_w * bead_h) while printing layer 1
-    # at Z=press. With press 0.30 and bead_h 0.60 that is exactly 2x over-extrusion on the one layer
-    # that has to bond: 0.72mm2 of plastic commanded into a 0.30mm gap. The surplus has nowhere to
-    # go but under the nozzle, which ploughs the print off the plate — reported as "bonding failed",
-    # and the same mechanism that detached the foot on 2026-07-25.
+    # QUANTISED TO THE 3 DECIMALS Z IS ACTUALLY WRITTEN AT. The ladder is emitted as Z{z:.3f}, so a
+    # z_step carrying more precision than that produces printed steps that differ from the declared
+    # LAYER_H by a rounding crumb — and R2 compares the two. Round once, here, and the file agrees
+    # with its own stamp by construction.
+    z_step = round(layer_z or bead_h, 3)
+    # SPEED IS AN INPUT HELD FIXED, NOT AN OUTPUT SOLVED FROM FLOW. Oleg, 2026-07-27: "50 is our
+    # north star for moving". This was min(flow / bead_area, MAX_SPEED), which lands on 50 only
+    # because MAX_SPEED happens to equal CONSTANT_SPEED today, and drops SILENTLY below it for any
+    # smaller --flow — a head changing speed through the back door of an argument default, which is
+    # exactly what R3 exists to forbid. (Every archived hilbert file in out/ was generated with
+    # --flow 13 or 36, so that back door was the normal case, not the exotic one.)
+    # Pin the speed; reach flow by widening the bead (machine.bead_for_flow), and SAY SO when the
+    # two disagree instead of trading one for the other in silence.
     flow_target = flow
-    speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
+    speed = machine.CONSTANT_SPEED
     flow = speed * bead_w * bead_h
     f = round(speed * 60)
+    if abs(flow - flow_target) > 0.05:
+        print(f"  ! --flow {flow_target:g} mm3/s is not what a {bead_w:g}x{bead_h:g} bead delivers "
+              f"at the {speed:g} mm/s constant speed — running {flow:.1f}. Speed is fixed (R3); to "
+              f"hit {flow_target:g} set --bead-w {machine.bead_for_flow(flow_target, bead_h):.2f}.")
 
     # Every order that will appear on the plate must clear the fuse check, not just the default.
     orders = list(mix) if mix else [order]
@@ -227,39 +237,42 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
             print(f"  ! {_msg}\n    --fuse-ok: printing anyway, cells will merge — deliberate.")
     n = (2 ** (order + 1)) if closed else (2 ** order)
     pitch = span / (n - 1)
-    # LAYER 1: 0.1mm OFF THE PLATE, FULL FLOW, WIDTH TAKES THE STRAIN.
-    # Oleg, 2026-07-26: "first layer maintain same 55 flow but put nozzle 0.1 to the plate,
-    # compensate with line width, set it to 10 if needed".
+    # LAYER 1: PRESSED TO THE PLATE. SAME BEAD, SAME FLOW, SAME SPEED — ONLY Z CHANGES.
+    # Oleg, 2026-07-27: "omg why you killed first layer flow!!!!!!! flow must be constant", and
+    # "the nozel need to be 0,1 to board. we need adhesion".
     #
-    # I got this wrong once already by capping the width to keep the lattice cells open — which
-    # silently cut the flow, which was the whole thing being protected. The flow target is the
-    # constraint; the width is the free variable; the cells are not the priority on layer 1.
+    # What stood here modelled layer 1 as its OWN bead: a width solved from flow_target/first_speed
+    # (13.0mm at the defaults) laid at 0.1mm, i.e. 1.10mm2 against the body's 0.72. Measured on the
+    # emitted file that is +53% on every move of the layer, and R4 fails it from one side or the
+    # other whichever of the two numbers the header declares. Two rates in a file IS the violation.
     #
-    #   width 10.0 x height 0.1 = 1.00 mm2  ->  at 55 mm/s that is exactly 55 mm3/s
+    # The width compensation was not wrong when it was written — it existed because layer 1 CRAWLED
+    # while the body ran fast, so the cross-section had to grow to keep the flow up. Nothing crawls
+    # any more; every move runs at CONSTANT_SPEED, so there is nothing left to compensate for and
+    # the compensation is now pure over-extrusion.
     #
-    # The consequence is deliberate and worth stating: at a lattice pitch below the first-layer
-    # width the base fuses into a SOLID SHEET. That is a raft the object grows out of, and it is
-    # the strongest bed contact available.
-    first_h = first_h or press
-    # HOLD THE FLOW, LET THE WIDTH ABSORB IT. Oleg: "why you did not force max flow for the first
-    # layer?!" — because I applied the speed cap as a FLOW cut, which is backwards. The first layer
-    # wants BOTH: a crawling head (dwell, so it wets the plate) AND the full flow target (material,
-    # so there is something to bond). Those are only compatible if the cross-section grows:
+    # The body's 0.72mm2 forced through a 0.1mm gap does not vanish, it SPREADS — about
+    # bead_w*bead_h/PRESS_HARD wide — and that squished footprint IS the adhesion. The lattice cells
+    # still fuse into a solid raft on layer 1, which is what was wanted; it now happens at the same
+    # flow as everything else rather than at a second, higher one.
     #
-    #     area = flow_target / first_speed      e.g. 55 / 20 = 2.75 mm2
-    #     width = area / first_h                     2.75 / 0.1 = 27.5 mm commanded
-    #
-    # It will not land 27.5mm wide. It does not need to — the point is the material, and on a
-    # lattice pitch far below that the first layer simply fuses into a solid raft, which is the
-    # strongest bed contact available and exactly what "its fine to break the shape" permits.
-    first_speed = min(machine.FIRST_LAYER_SPEED, machine.MAX_SPEED)
-    if first_w > 0:
-        first_area = first_w * first_h
-        first_speed = min(flow_target / first_area, first_speed)
-    else:
-        first_area = flow_target / first_speed
-        first_w = first_area / first_h
-    e_first_mm = first_area / area
+    # R1 IS NOT AN ARGUMENT. --press and --first-h are kept so archived commands still run, but the
+    # first layer is laid at machine.PRESS_HARD whatever they say, and the file says so out loud.
+    if press and abs(press - machine.PRESS_HARD) > 1e-9:
+        print(f"  ~ --press {press:g} ignored: layer 1 is laid at machine.PRESS_HARD "
+              f"({machine.PRESS_HARD:g}) — R1, adhesion comes from the press.")
+    if first_h and abs(first_h - machine.PRESS_HARD) > 1e-9:
+        print(f"  ~ --first-h {first_h:g} ignored: layer 1 is laid at machine.PRESS_HARD "
+              f"({machine.PRESS_HARD:g}) — R1.")
+    first_h = machine.PRESS_HARD
+    first_speed = speed
+    first_area = bead_w * bead_h
+    if first_w and abs(first_w - first_area / first_h) > 1e-9:
+        print(f"  ~ --first-w {first_w:g} ignored: flow is constant (R4), so layer 1 commands the "
+              f"body's {first_area:.2f}mm2 and spreads to ~{first_area/first_h:.1f}mm at "
+              f"{machine.PRESS_HARD:g}mm.")
+    first_w = first_area / first_h      # what it SPREADS to, not a second commanded bead
+    e_first_mm = e_per_mm
 
     shapes = [round_corners(curve(o, span, closed), fillet) for o in orders]
     pts = shapes[0]
@@ -299,27 +312,51 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # filament the way the `mins` estimate does it. Lowering speed at a FIXED cross-section lowers
     # the rate and nothing else: E is per mm, so the part is unchanged to the microgram.
     _len1 = sum(math.dist(lp[i - 1], lp[i]) for lp in pts for i in range(1, len(lp)))
-    _f1 = machine.flow_for_duration(first_area * first_speed,
-                                    _len1 / first_speed / 60.0, " on layer 1")
-    if _f1 < first_area * first_speed - 1e-9:
-        first_speed = _f1 / first_area
-    _fb = machine.flow_for_duration(flow, _len1 / speed / 60.0 * max(0, layers - 1),
-                                    " on the body layers")
-    if _fb < flow - 1e-9:
-        speed = _fb / (bead_w * bead_h)
-        flow = round(_fb, 1)
-        f = round(speed * 60)
+    # ONE FLOW, ONE DURATION. This asked twice — once for layer 1, once for the body — because the
+    # two used to run at different rates. They do not any more, and asking twice about one number is
+    # how a file ends up with two.
+    # IT ALSO NEVER PASSED `material`, so flow_for_duration defaulted to "pla" and measured a
+    # pla-matte part against PLA's 55 mm3/s figure — a number that does not belong to it.
+    # AND THE CLAMP MUST NOT LAND ON THE SPEED. Dividing a clamped flow back into a speed is R3
+    # broken from inside a helper: the head quietly leaves 50 mm/s and nothing in the output says so.
+    # Speed is fixed, so a clamp is absorbed by NARROWING THE BEAD — the same trade, made visible.
+    _mins_all = _len1 * layers / speed / 60.0
+    _fc = machine.flow_for_duration(flow, _mins_all, " for this part", material)
+    if _fc < flow - 1e-9:
+        bead_w = _fc / (speed * bead_h)
+        e_per_mm = e_first_mm = (bead_w * bead_h) / area
+        first_area = bead_w * bead_h
+        first_w = first_area / first_h
+        flow = speed * bead_w * bead_h
+        print(f"  ! bead narrowed to {bead_w:.2f}mm to hold {flow:.1f} mm3/s at the fixed "
+              f"{speed:g} mm/s — the head does not slow down (R3).")
 
     L = []
     w = L.append
     kind = "MOORE (closed)" if closed else "HILBERT (open)"
     w(f"; {kind} curve order {order} — one continuous extrusion, {n}x{n} grid = {n*n} cells")
-    # STATE BOTH FLOWS. Layer 1 is a different bead at a different speed, and a header that
-    # declares one number makes the validator flag the other as an overrun.
-    w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow} mm3/s")
-    w(f"; layer 1: {first_w:.1f}x{first_h} = {first_area:.2f}mm2 at {first_speed:.0f} mm/s "
-      f"-> flow={first_area*first_speed:.1f} mm3/s, fan OFF")
-    w(f"; {span:.0f}mm square, {pitch:.2f}mm pitch, {layers} layers, layer1 {first_h}mm x {first_w:.2f}mm wide, body bead {bead_w}x{bead_h}")
+    # THE STAMPS validate.py READS, AND A MISSING ONE IS ITSELF A FAILURE (RULES.md).
+    # They sit at the very top because the validator only reads the first 4000 characters for
+    # LAYER_H, and stops at BODY_START for MATERIAL — a stamp further down is a stamp that is not
+    # there. This file carried MATERIAL and PRINTER but neither LAYER_H nor FLOW, so R2 and R4
+    # SILENTLY SKIPPED on every hilbert file ever produced: they reported nothing, which reads
+    # exactly like passing.
+    w(f"; PRINTER={printer}")
+    w(f"; MATERIAL={material}")
+    # LAYER_H IS THE Z STEP, NOT bead_h. R2 checks the emitted Z ladder against this, and the ladder
+    # rises by z_step. bead_h only meters E; --layer-z is what the bead actually LANDS at and is
+    # what the part grows by, so it is the layer height in every sense R2 cares about.
+    w(f"; LAYER_H={z_step:.3f}")
+    # ONE FLOW FOR THE WHOLE FILE. There used to be two lines here declaring two numbers, with a
+    # comment explaining that layer 1 is "a different bead at a different speed" — which is the
+    # violation, not a caveat about it. R4 checks every extruding move against this single figure.
+    w(f"; FLOW={flow:.2f}")
+    w(f"; bead {bead_w:.2f}x{bead_h:g} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s "
+      f"-> flow={flow:.1f} mm3/s, layer 1 included")
+    w(f"; layer 1: same {first_area:.2f}mm2 laid at Z{first_h:.2f} (machine.PRESS_HARD) — spreads to "
+      f"~{first_w:.1f}mm wide, fan OFF")
+    w(f"; {span:.0f}mm square, {pitch:.2f}mm pitch, {layers} layers, Z step {z_step:.3f}mm, "
+      f"body bead {bead_w:.2f}x{bead_h:g}")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
     w("; HEADER_BLOCK_END")
@@ -351,21 +388,21 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     _apx = max(6.0, x0 - 55.0)
     _apy = max(6.0, y0 - 12.0)
     w(f"G0 F9000 X{_apx:.3f} Y{_apy:.3f}")
-    w("G1 E25 F300                      ; stationary purge — pressure before motion")
-    w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E37   ; prime ends where the curve begins")
+    w("G1 E25 F300                      ; PRIME purge, stationary — pressure before motion")
+    # THE ONE LICENSED EXCEPTION TO R3, AND IT IS IDENTIFIED BY ITS NAME, NOT BY BEING SLOW
+    # (RULES.md). This line is laid off the part before the object starts; "PRIME" in the comment is
+    # what exempts it. Nothing else in this file may carry that word.
+    w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E37   ; PRIME line — ends where the curve begins")
     w("G92 E0")
-    # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
-    # knowing which plate, and a filename is not a contract.
     # THE FILE MUST RECORD THE COMMAND THAT MADE IT. The belt that fixed the cleats
     # recorded neither --dish nor --rail, so which fix version was on the plate could
     # not be established from the artifact — in a project whose doctrine is measuring
     # the emitted file, that is a provenance hole. Now every file is reproducible from
-    # its own header.
-    w(f"; MATERIAL={material}")
+    # its own header. (PRINTER/MATERIAL/LAYER_H/FLOW are stamped at the top, where the
+    # validator actually looks for them.)
     w("; ARGV: " + " ".join(_sys.argv))
-    w(f"; PRINTER={printer}")
     w("; BODY_START")
-    w(f"G1 F{round(first_speed*60)}                 ; layer 1 speed holds the flow target")
+    w(f"G1 F{round(first_speed*60)}                 ; the north star — every move, layer 1 included")
 
     e = 0.0
     for k in range(layers):
@@ -400,9 +437,18 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
                 d = math.dist((px, py), (x, y))
                 if d < 1e-9:
                     continue
-                # the hop between tiles extrudes THIN — continuous, but it snaps off
-                thin = 0.3 if (pi == 0 and li > 0) else 1.0
-                e += d * (e_first_mm if k == 0 else e_per_mm) * thin
+                # THE LINK BETWEEN TILES RUNS AT FULL FLOW. It used to extrude at 0.3x so it would
+                # snap off — 48 moves per layer at --tile 7, every one of them 70% under the
+                # declared rate, which is R4 broken for the same reason a starved layer 1 breaks it.
+                # validate.py already records the project's ruling on this exact trick, for
+                # between-part moves: "a travel must suspend flow, not thin it". Thinning is not a
+                # middle ground; a link either carries the bead or it is a dry, tagged hop.
+                # CONSEQUENCE, stated because it changes the object: at --tile > 1 the copies are
+                # now joined by a full-width bead and must be CUT apart, not snapped. If separate
+                # parts matter more than the continuous stroke, the sanctioned alternative is a
+                # lifted, unmetered '; HOP' (machine.NO_TRAVEL_RULE) — that is a design decision,
+                # not a validator workaround, so it is left to the owner.
+                e += d * (e_first_mm if k == 0 else e_per_mm)
                 L.append(f"G1 {'F%d ' % (round(first_speed*60) if k == 0 else f) if (px, py) == pts[0][0] else ''}"
                          f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
                 px, py = x, y
@@ -413,8 +459,12 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # lifted to 75.5 — then travelled to park, driven 13.1mm THROUGH the finished object. Shipped
     # files escaped only because the +40mm of slack absorbs the error below about 45 layers, so it
     # would have surfaced first on the tallest print anyone ever ran.
+    # THE PARK LIFT IS A DRY MOVE AND MUST BE WRITTEN AS ONE. Emitted as `G1 Z...` it looked like a
+    # layer change to R2's ladder scan: on a 1-layer file the ladder read [0.100, 40.100] and the
+    # 40mm park was reported as a Z step 66x the layer height. G0 is what a non-extruding rapid is,
+    # the machine treats the two identically, and R2 then only ever sees real layer changes.
     L += ["M107", "M104 S0", "M140 S0",
-          f"G1 Z{first_h + (layers-1)*z_step + 40:.1f} F900",
+          f"G0 Z{first_h + (layers-1)*z_step + 40:.1f} F900   ; park lift — dry, not a layer",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
     # `pts` was rebound from a point list to a LIST OF LOOPS 150 lines above, so len() had been
@@ -423,7 +473,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # travels and to a differently-metered layer 1 — it reported the whole print at the body speed.
     # Both quantities are now summed from the geometry that was actually emitted.
     _npts = sum(len(lp) for lp in pts)
-    _mins = (_len1 / first_speed + _len1 / speed * max(0, layers - 1)) / 60.0
+    _mins = _len1 * layers / speed / 60.0     # one speed for the whole file now
     return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=_npts, grams=round(grams, 1), speed=round(speed),
                                      cells=n * n, pitch=round(pitch, 2),
                                      mins=round(_mins, 1))
@@ -442,17 +492,22 @@ if __name__ == "__main__":
                     help="0 = machine.temp_for(material). A PLA 210 default reached TPU in every generator.")
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = machine.BED_TEMP[material] — PLA is maxed to the plate ceiling by standing rule")
-    ap.add_argument("--press", type=float, default=0.55)
-    ap.add_argument("--first-h", type=float, default=0.10,
-                    help="layer-1 height — thin squashes it into the plate (default 0.10)")
+    # --press AND --first-h ARE NO LONGER INPUTS, they are kept so archived commands still run.
+    # Layer 1 is laid at machine.PRESS_HARD by rule (R1) and the generator says so when a command
+    # asks for something else. The old default was 0.55 — a first layer half a millimetre off the
+    # plate — which is exactly the file Oleg cancelled.
+    ap.add_argument("--press", type=float, default=machine.PRESS_HARD,
+                    help="IGNORED: layer 1 is machine.PRESS_HARD (R1). Kept for old commands.")
+    ap.add_argument("--first-h", type=float, default=machine.PRESS_HARD,
+                    help="IGNORED: layer 1 is machine.PRESS_HARD (R1). Kept for old commands.")
     ap.add_argument("--fuse-ok", action="store_true",
                     help="allow a bead wide enough to merge neighbouring cells")
     ap.add_argument("--layer-z", type=float, default=0.0,
                     help="Z step per layer. 0 = same as --bead-h. Set it to what the bead ACTUALLY "
                          "lands at when commanding a width far past the nozzle.")
     ap.add_argument("--first-w", type=float, default=0.0,
-                    help="layer-1 bead WIDTH; 0 = auto, wide enough to hold the body flow at "
-                         "--first-h, capped at 0.62x the lattice pitch so cells stay open")
+                    help="IGNORED: flow is constant (R4), so layer 1 commands the body bead and "
+                         "lets it spread at the 0.1mm press. Kept for old commands.")
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--aux", type=float, default=0.2,
                     help="chamber/side fans 0-1")
@@ -492,4 +547,4 @@ if __name__ == "__main__":
     print(f"{fn}\n  order {a.order} -> {st['cells']} cells, {st['pitch']}mm pitch, "
           f"{span:.0f}mm square, fillet {fillet:.2f}mm, {st['pts']} points")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, "
-          f"{a.layers} layers, layer 1 {a.first_h}mm tall")
+          f"{a.layers} layers, layer 1 pressed to {machine.PRESS_HARD}mm at the same flow")

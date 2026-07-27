@@ -74,3 +74,16 @@ them. This is the point: the file he catches is a sample, not the set.
 | `waves`, `honeycomb` | no stamps at all — R4 could not see them |
 | `stave_*` | flow not constant |
 | `archtest` | extrudes below already-printed material; separate question, experimental file |
+
+## The one bypass, stated plainly
+
+`push.py --skip-validate` uploads a file that failed. It exists for genuine measurement files and
+emergencies, and it prints *"fix it, or pass --skip-validate if you know better than the
+validator"* rather than pretending the failure did not happen.
+
+**It is a hole, and naming it is the point.** If it starts getting used routinely, the honest
+response is to fix the generator or the rule — not to keep reaching for the flag. Legitimate
+measurement files should not need it: `validate.py` already exempts files stamping `FLOW_TEST=1`
+from the flow cap, because a flow ramp deliberately exceeds it.
+
+Verified 2026-07-27: pushing a file with a starved first layer is **refused**.

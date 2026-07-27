@@ -344,16 +344,11 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w(f"G0 F9000 X{_apx:.3f} Y{_apy:.3f}")
     w("G1 E25 F300                      ; stationary purge — pressure before motion")
     w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E37   ; prime ends where the comb begins")
-    w("G92 E0"); # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
-    # knowing which plate, and a filename is not a contract.
-    # THE FILE MUST RECORD THE COMMAND THAT MADE IT. The belt that fixed the cleats
-    # recorded neither --dish nor --rail, so which fix version was on the plate could
-    # not be established from the artifact — in a project whose doctrine is measuring
-    # the emitted file, that is a provenance hole. Now every file is reproducible from
-    # its own header.
-    w(f"; MATERIAL={material}")
-    w("; ARGV: " + " ".join(_sys.argv))
-    w(f"; PRINTER={printer}")
+    w("G92 E0")
+    # The machine, the material, the layer height, the flow and the command that made the file are
+    # all stamped at the TOP of the header now, not here. validate.py reads several of them out of
+    # the first 4000 characters, and a stamp that arrives after a long ARGV line is a stamp that can
+    # silently go missing — and a missing stamp is a FAILURE, not a skip (RULES.md).
     w("; BODY_START")
 
     e = 0.0
@@ -365,9 +360,12 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # Layer 1 sits at `press` (squashed into the plate so it BONDS). Every layer above steps by the
     # full bead height, because it is landing on plastic rather than glass and does not need to be
     # crushed -- pressing an upper layer just ploughs the one beneath it.
-    _seen = {}
+    #
+    # R2 — THE LADDER IS REBASED ON THE PRESSED FIRST LAYER: z = press + bead_h*k, never
+    # bead_h*(k+1). Pressing layer 1 to 0.1 without rebasing leaves a 1.10mm step onto layer 2 over
+    # a 0.60mm bead, i.e. a layer extruded into air. Oleg: "play Z smartly we dont want floaring
+    # lines".
     for k in range(layers):
-        _seen = {}
         seq = pts        # closed loop -- same direction every layer, so no seam reversal
         z = press + k * bead_h
         if k:
@@ -381,25 +379,27 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
             d = math.dist((px, py), (x, y))
             if d < 1e-9:
                 continue
-            # DO NOT DEPOSIT A THIRD COAT ON A WALL THAT ALREADY HAS TWO.
-            # Routing between cells along existing walls (rather than cutting across open cells)
-            # means some walls are traversed 3 or 4 times. Two passes is DESIGNED — shared walls get
-            # double thickness and the lattice is sized for it — but a third and fourth pass at full
-            # rate is 3-4x the plastic in one line, which is the exact mechanism that detached the
-            # foot, the tray and the wave sheet today. Repeat visits beyond the second lay a token
-            # thread: the wall is already there, the path only needs continuity.
-            _k = tuple(sorted([(round(px, 1), round(py, 1)), (round(x, 1), round(y, 1))]))
-            _seen[_k] = _seen.get(_k, 0) + 1
-            _mult = 1.0 if _seen[_k] <= 2 else 0.15
-            e += d * (e_first_mm if k == 0 else e_per_mm) * _mult
+            # ONE RATE FOR EVERY MOVE IN THE FILE (R4).
+            # This loop used to meter a wall's 3rd and 4th pass at 0.15x — a token thread, on the
+            # argument that the wall already exists and the path only needs continuity. That is a
+            # generator deciding for itself when the flow rule applies, which is exactly what
+            # RULES.md exists to stop: "flow must be constant". The over-deposit it was hiding is
+            # real and is now MEASURED and stamped into the header instead (see `overprint`), so it
+            # can be argued with from the artifact rather than silently compensated for.
+            e += d * (e_first_mm if k == 0 else e_per_mm)
             L.append(f"G1 {'F%d ' % f if (px, py) == seq[0] and k == 0 else ''}"
-                     f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}{' ; RETRACE thin' if _mult < 1.0 else ''}")
+                     f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = x, y
-    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press+(layers-1)*bead_h+40:.1f} F900",
+    # END-OF-PRINT RETREAT — a rapid, non-extruding move, so it is a G0 and not a G1.
+    # It was a G1, which is wrong on its own terms (nothing is extruded) and also made the 40mm
+    # retreat read as a 40mm LAYER STEP to the R2 ladder check. Files with many layers hid that by
+    # filling the check's window before the retreat was reached; a 1-layer comb did not.
+    L += ["M107", "M104 S0", "M140 S0", f"G0 Z{press+(layers-1)*bead_h+40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
     return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed),
                                      mins=round(e / e_per_mm / speed / 60, 1),
+                                     overprint=round(overprint, 1),
                                      size=(round(w_total), round(h_total)))
 
 
@@ -411,10 +411,17 @@ if __name__ == "__main__":
     ap.add_argument("--bead-w", type=float, default=machine.BEAD_W)
     ap.add_argument("--bead-h", type=float, default=machine.BEAD_H)
     ap.add_argument("--flow", type=float, default=machine.FLOW)
-    ap.add_argument("--temp", type=int, default=machine.TEMP)
+    ap.add_argument("--temp", type=int, default=0,
+                    help="0 = machine.temp_for(material). A hardcoded machine.TEMP (210, the "
+                         "translucent PLA figure) stamped MATERIAL=pla-matte into a file printed "
+                         "20C under that spool's rating — the exact defect machine.py's "
+                         "material-routing audit was written about.")
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = machine.BED_TEMP[material] — PLA is maxed to the plate ceiling by standing rule")
-    ap.add_argument("--press", type=float, default=machine.PRESS_HARD)
+    ap.add_argument("--press", type=float, default=machine.PRESS_HARD,
+                    help="first-layer Z. R1 requires machine.PRESS_HARD (%.2f) and validate.py "
+                         "refuses anything else — the knob stays only for a deliberate levelling "
+                         "experiment." % machine.PRESS_HARD)
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--layers", type=int, default=1, help="stacked layers of comb")
     ap.add_argument("--fillet", type=float, default=3.0,
@@ -429,6 +436,18 @@ if __name__ == "__main__":
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     machine.check_flow(a.flow, f' for honeycomb.py')
+    # R1 IS NOT NEGOTIABLE BY FLAG. "the nozel need to be 0,1 to board. we need adhesion" — a file
+    # laid anywhere else is refused by validate.py and by push.py, so say so HERE rather than let
+    # someone discover it after a generation run.
+    if abs(a.press - machine.PRESS_HARD) > 1e-9:
+        print(f"  !! --press {a.press:g} is not machine.PRESS_HARD ({machine.PRESS_HARD:g}). R1 "
+              f"presses the first layer to the plate; validate.py will refuse this file and push.py "
+              f"will not upload it. Only do this to measure something.")
+    # MATERIAL FOLLOWS THE PRINTER. A comb generated for one spool and printed on another is
+    # silently wrong: right geometry, wrong temperature, wrong flow ceiling.
+    machine.check_spool(a.printer, a.material)
+    a.temp = a.temp or machine.temp_for(a.material)
+    a.flow = machine.flow_for(a.material, a.flow, ' for honeycomb.py')
     bxy = (tuple(float(v) for v in a.bed_size.split(",")) if a.bed_size
            else machine.BED[a.printer])
     g, st = emit(a.cell, a.cols, a.rows, a.bead_w, a.bead_h, a.flow, a.temp, a.bed or machine.bed_for(a.material, a.printer), 1.75,
@@ -441,3 +460,9 @@ if __name__ == "__main__":
           f"{st['pts']} points, one continuous path")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, "
           f"pressed to {a.press}mm")
+    # SAY THE OVERPRINT OUT LOUD. A hex lattice cannot be drawn edge-once, so a single stroke
+    # re-walks walls; two passes on a shared wall is the design, the rest is routing. Flow is
+    # constant (R4), so this fraction of the path lands 3-4 beads deep in one line. It used to be
+    # metered down to 15% and therefore invisible.
+    print(f"  overprint {st['overprint']}% of path on a 3rd/4th pass — laid at FULL rate (R4: flow "
+          f"is constant). Watch those walls on the plate; if they bulge, fix the WALK, not the flow.")
