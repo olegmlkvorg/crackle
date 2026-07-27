@@ -124,6 +124,12 @@ SUSTAINED_MINS = 8.0       # unbroken extrusion beyond this is a soak, not a bur
 #   55    the standing rule. Inherited, never re-measured on the current filament.
 #   48.6  SUSTAINED for 16 minutes at 210C -> the extruder DRIVER over-heated and stalled.
 #         This is the only number that ever came from a failure, and it set SUSTAINED_FLOW=27.
+#   70-90 CRACKED, by ear, at 230C on pla-matte, pressed 0.1, spiral inward — Oleg stopped it at
+#         24.5% ("extruder cracks try 55-65"). Measured 54-72 mm3/s delivered with ZERO firmware
+#         stalls and zero over-temp, which is the point: THE FIRMWARE NEVER SAW IT. Cracking is the
+#         extruder losing grip on the filament, and it is upstream of anything the logs or the
+#         plate can show. The ear caught what 3200Hz of accelerometer and a stall counter did not.
+#         Note this happened at 230C, so the ceiling is not purely melt-limited as I had argued.
 #   70    commanded on a Moore lattice; DELIVERED 32.2. The lattice's mean segment is 0.292mm and
 #         reaching 58 mm/s from a corner needs 0.33mm, so the head never reached commanded speed
 #         on a single move. That run measured the SHAPE, not the hotend.
