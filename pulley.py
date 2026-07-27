@@ -173,7 +173,7 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
     # M190 only waits for HEATING; if the bed is hotter than target it returns instantly and
     # the part prints on a plate left hot by the previous job. TEMPERATURE_WAIT blocks both ways.
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
     # FAN OFF FOR LAYER 1, CLAMPED BY MATERIAL AFTER. Oleg: "fans for printing pla should be only

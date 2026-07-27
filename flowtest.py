@@ -123,7 +123,7 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     # which is how a TPU test meant for 45C got laid onto a hot bed and welded itself down.
     # TEMPERATURE_WAIT blocks in BOTH directions.
     w(f"M140 S{bed}")
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")

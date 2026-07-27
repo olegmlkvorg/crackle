@@ -249,6 +249,25 @@ def flow_for(material, requested, label=""):
     return requested
 
 
+# THE BED TARGET IS NOT A STARTING GATE. Oleg, 2026-07-27, watching a print sit at 0% while the
+# plate crawled to 120: "you dont need to wait for 120 plate. 120 is recomendation not a constraint
+# to start".
+#
+# TEMPERATURE_WAIT was blocking on MINIMUM = target-3, so every job waited for the FULL recommended
+# bed before laying anything — on a 350mm plate from cold that is minutes of an idle machine, and
+# the 120 is chosen for extra grip on tall open geometry, not because 119 fails.
+#
+# The upper guard STAYS and is the part that matters: it is what stops a file meant for a 45C TPU
+# plate printing on a 98C one left hot by the previous job, which welds it down. Only the floor
+# moves — the bed goes on climbing to target while layer 1 prints.
+BED_START_MIN = {"pla": 60, "pla-matte": 60, "petg": 60, "tpu": 35, "abs": 90}
+
+
+def bed_start(material, bed):
+    """Temperature the plate must actually REACH before printing may begin."""
+    return min(bed - 3, BED_START_MIN.get(material, 60))
+
+
 def bed_for(material, printer):
     """The bed target this material wants, clamped to what this machine can actually hold."""
     want = BED_TEMP.get(material, 60)

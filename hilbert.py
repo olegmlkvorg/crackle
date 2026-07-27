@@ -329,7 +329,7 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
     # M190 only waits for HEATING; if the bed is hotter than target it returns instantly and
     # the part prints on a plate left hot by the previous job. TEMPERATURE_WAIT blocks both ways.
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={bed-3} MAXIMUM={bed+5}")
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
     # LAYER 1 PRINTS WITH THE FAN OFF, whatever was asked for. Its job is to weld to the plate.
