@@ -452,19 +452,24 @@ def flow_for(material, requested, label=""):
 # Oleg, 2026-07-27: "ok lets not start with bed below 100". Not a per-material preference and
 # not scaled by part size -- a floor. His earlier "you dont need to wait for 120 plate" set the
 # ceiling on waiting; this sets the floor on starting.
-BED_START_MIN = {"pla": 100, "pla-matte": 100, "petg": 100, "tpu": 35, "abs": 100}
+# BED_START_MIN retired 2026-07-27 ("everything 120"): the start floor is now always
+# 5C under the machine-held target — see bed_start().
 
 
 def bed_start(material, bed):
     """Temperature the plate must actually REACH before printing may begin.
 
-    Clamped UNDER the machine-capped target because this becomes a BLOCKING M190: a floor the bed
-    cannot provably cross is an infinite stall, not a rule. The K1C at target 90 settles at 87.4
-    with power pinned at 1.00 (measured 2026-07-26), so `bed - 3` = 87 was within 0.4C of its
-    settle point -- one draft away from waiting forever. 5C under the held target is the margin.
-    On the K2 nothing changes: min(115, 100) is still Oleg's 100 floor.
+    Oleg, 2026-07-27 (after "why k2 bed only 100?"): "everything 120" — the start-early floor
+    is retired; every print now waits for the FULL machine-capped target, minus only the
+    stall-safety margin. The old footprint-scaled 100 floor let small parts start while the
+    plate was still climbing; he watched the towers start at 100 and does not want that.
+
+    Still clamped UNDER the machine-capped target because this becomes a BLOCKING M190: a
+    floor the bed cannot provably cross is an infinite stall, not a rule. The K1C at target 90
+    settles at 87.4 with power pinned at 1.00 (measured 2026-07-26), so 5C under the held
+    target is the margin: K2 waits to 115 of a held 120, K1C to 85 of its measured ~87-91.
     """
-    return min(bed - 5, BED_START_MIN.get(material, 60))
+    return bed - 5
 
 
 def bed_for(material, printer):
