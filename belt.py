@@ -381,7 +381,7 @@ if __name__ == "__main__":
                     help="Moore-curve order to fold the belt into the plate (0 = plain ring)")
     ap.add_argument("--margin", type=float, default=12.0)
     ap.add_argument("--material", default="pla",
-                    choices=["pla","petg","tpu","abs"],
+                    choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")

@@ -485,7 +485,7 @@ if __name__ == "__main__":
     ap.add_argument("--lift", type=float, default=0.5)
     ap.add_argument("--lift-win", type=float, default=12.0)
     ap.add_argument("--temp", type=int, default=0)
-    ap.add_argument("--material", choices=["pla","petg","tpu","abs"], default="pla")
+    ap.add_argument("--material", choices=sorted(machine.MATERIAL_TEMP), default="pla")
     ap.add_argument("--printer", choices=sorted(machine.BED), default="k2plus")
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = ask machine.bed_for(material, printer). A hardcoded 120 is what gave\n"

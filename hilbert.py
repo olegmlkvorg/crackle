@@ -462,7 +462,7 @@ if __name__ == "__main__":
     ap.add_argument("--tile", type=int, default=1, help="NxN copies across the plate")
     ap.add_argument("--gap", type=float, default=6.0, help="mm between tiles")
     ap.add_argument("--material", default="pla",
-                    choices=["pla","petg","tpu","abs"],
+                    choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED),
                     help="picks the PRINTABLE plate size from machine.BED")

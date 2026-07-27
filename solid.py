@@ -1285,7 +1285,7 @@ def main():
     ap.add_argument("--clearance", type=float, default=0.0,
                     help="extra bore clearance mm: 0 grip, 0.25 slip, 0.5 loose")
     ap.add_argument("--material", default="pla",
-                    choices=["pla","petg","tpu","abs"],
+                    choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--parts", default="",

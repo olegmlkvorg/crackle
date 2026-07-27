@@ -117,6 +117,9 @@ SUSTAINED_MINS = 8.0       # unbroken extrusion beyond this is a soak, not a bur
                            # stall came at 16 min; half that is the margin, not a second reading.
 
 
+SOAK_OVERRIDE = False    # set True ONLY by a deliberate measurement, never by a part
+
+
 def flow_for_duration(flow, minutes, label=""):
     """Clamp a flow to what the extruder can hold for `minutes` of UNBROKEN extrusion.
 
@@ -124,6 +127,18 @@ def flow_for_duration(flow, minutes, label=""):
     The ceiling is a function of how long you hold it, and every number this project had was taken
     from a burst. A generator that knows its own print time must ask this before emitting.
     """
+    # A CEILING CAN ONLY BE RAISED BY MEASURING PAST IT. SUSTAINED_FLOW is a floor — it means
+    # "did not stall at 27", not "27 is the limit" — and the only way to learn the real number is to
+    # run above it on purpose and watch. So a deliberate soak test may opt out; a PART may never.
+    # Oleg, 2026-07-27, switching to a 230C filament: "we also can test higher flow rate of 70".
+    # That is the right experiment: the stall happened at 210C, and MAX_FLOW 81.2 was measured at
+    # 230C — if the mechanism is melt-limited back-pressure driving extruder torque, 20 more degrees
+    # should move the ceiling a long way. If it stalls anyway, the mechanism is not what I claimed.
+    if SOAK_OVERRIDE and flow > SUSTAINED_FLOW:
+        print(f"  ! SOAK OVERRIDE: running {flow:g} mm3/s for {minutes:.0f} min, ABOVE the "
+              f"{SUSTAINED_FLOW:g} sustained figure{label}. This is a measurement, not a part. "
+              f"Watch for `extruder stall` / MCU over-temp in the firmware log.")
+        return flow
     if minutes >= SUSTAINED_MINS and flow > SUSTAINED_FLOW:
         print(f"  ! flow {flow:g} mm3/s for {minutes:.0f} min of unbroken extrusion{label} — the "
               f"K2 extruder driver over-heated and stalled at 48.6 mm3/s after 16 min (2026-07-26). "
@@ -219,6 +234,13 @@ def flow_for(material, requested, label=""):
     print. It exists to stop a PLA-shaped default reaching a material that cannot swallow it.
     """
     cap = MATERIAL_FLOW.get(material, FLOW)
+    # A measurement may exceed the material cap too — that is what a measurement IS. pla-matte's
+    # 55 is inherited from the 210C translucent PLA and is UNMEASURED at 230; MAX_FLOW 81.2 was
+    # itself taken at 230, so the honest state is "unknown above 55", not "55".
+    if SOAK_OVERRIDE and requested > cap:
+        print(f"  ! SOAK OVERRIDE: {requested:g} mm3/s on {material}{label}, above its inherited "
+              f"{cap:g} cap. Unmeasured territory — that is the point of the run.")
+        return requested
     if requested > cap + 1e-9:
         print(f"  ! flow {requested:g} mm3/s is a {'PLA' if abs(requested-FLOW) < 1e-6 else 'carried-over'} "
               f"number on {material}{label} — its measured ceiling is {cap:g}. Using {cap:g}. "
@@ -413,14 +435,14 @@ def aux_fans(printer, frac):
 # PLA goes to the machine ceiling (BED_MAX 120 — the config claims 135 and silently clamps).
 # TPU deliberately does NOT: Oleg ran it at 120 and reported "tpu on 120 bed is like glue, how to
 # scrap it away" — the belt welded itself to the plate.
-BED_TEMP = {"pla": 120, "petg": 80, "tpu": 45, "abs": 100}
+BED_TEMP = {"pla": 120, "pla-matte": 120, "petg": 80, "tpu": 45, "abs": 100}
 
 # PART-COOLING FAN CEILING, PER MATERIAL. Oleg, 2026-07-26: "fans for printing pla should be only on
 # 20% at most". Running 80% on PLA — which this project had been doing on 320mm plates — chills the
 # bead as it lands, and on layer 1 it chills the bond while it is still forming. It is the cheapest
 # possible way to lose adhesion and it looks like nothing in the file.
 # TPU is the exception and goes the other way: it needs FULL fans (see the guard in validate.py).
-FAN_MAX = {"pla": 0.20, "petg": 0.40, "tpu": 1.00, "abs": 0.10}
+FAN_MAX = {"pla": 0.20, "pla-matte": 0.20, "petg": 0.40, "tpu": 1.00, "abs": 0.10}
 # LAYER 1 GETS NO FAN — EXCEPT WHERE THE MATERIAL DEMANDS IT.
 # The first layer's job is to weld to the plate, and cooling it works against the only thing that
 # matters at that moment. But TPU is the exception in BOTH directions: it needs full fans throughout,
@@ -494,5 +516,11 @@ TPU_TEMP = 200
 
 # Routing tables for temp_for()/flow_for() above. Defined here because they read TEMP, TPU_TEMP
 # and TPU_FLOW, all of which appear further up only after their measurement notes.
-MATERIAL_TEMP = {"pla": TEMP, "petg": 240, "tpu": TPU_TEMP, "abs": 250}
-MATERIAL_FLOW = {"pla": FLOW, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}
+# "PLA" IS NOT ONE MATERIAL. Oleg, 2026-07-27, loading the K2: "we switching the filament to pla
+# matt gray with 230 temp requirement". The translucent PLA this project was built on is rated 210;
+# this one wants 230. Same polymer family, 20 C apart, and the difference is not cosmetic — MAX_FLOW
+# 81.2 was measured at 230 while the extruder stall that set SUSTAINED_FLOW happened at 210.
+# Treating them as one entry is the same defect as sharing SHRINK between metal and bamboo: a number
+# that belongs to ONE material silently governing another.
+MATERIAL_TEMP = {"pla": TEMP, "pla-matte": 230, "petg": 240, "tpu": TPU_TEMP, "abs": 250}
+MATERIAL_FLOW = {"pla": FLOW, "pla-matte": FLOW, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}

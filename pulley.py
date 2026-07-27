@@ -376,7 +376,7 @@ if __name__ == "__main__":
                     help="0-255. 51 = 20%%, the PLA ceiling (machine.FAN_MAX). "
                          "Layer 1 always prints with the fan OFF regardless.")
     ap.add_argument("--material", default="pla",
-                    choices=["pla","petg","tpu","abs"],
+                    choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")

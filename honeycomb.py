@@ -377,7 +377,7 @@ if __name__ == "__main__":
     ap.add_argument("--fillet", type=float, default=3.0,
                     help="corner rounding radius mm — 0 gives sharp corners (banned)")
     ap.add_argument("--material", default="pla",
-                    choices=["pla","petg","tpu","abs"],
+                    choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED),
                     help="picks the PRINTABLE plate size from machine.BED")
