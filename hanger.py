@@ -20,6 +20,7 @@ import argparse, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shapely.geometry import LineString, Point
 from shapely.ops import unary_union
+from shapely.affinity import translate
 
 import machine
 import solid as S
@@ -35,7 +36,10 @@ def bore_for(hole_d, bead_w):
     Verified against the printed hanger: modelled 2.5 -> centreline r 0.92 -> material edge
     0.92 - 0.915 = 0.005mm. No hole at all, which is exactly what Oleg reported.
     """
-    return hole_d + 2.0 * (1.373 * bead_w)
+    # was 1.373 x bead -- a proportion fitted to ONE measurement. A second measurement on a
+    # different bead disagreed by 50% as a proportion but matched within 3% as an absolute, so
+    # the inset is a constant ~3.02 mm. See machine.BORE_INSET_MM.
+    return machine.bore_model(hole_d)
 
 
 def hook_region(shank, hook_r, thick, hole_d, gap_deg, tip):
@@ -173,11 +177,61 @@ def simple_region(length, lip, thick, thread_d, width):
     return body
 
 
+def pole_region(pole_d, ring, drop, hook_r, thick, tip, bead_w):
+    """A CLOSED collar for a vertical pole, with a hook hanging below it.
+
+    Oleg, 2026-07-27: "make the hook proper the hole will pool downwards so the hook has to be
+    closed!! on top to vertical poll".
+
+    The load hangs DOWN, so the attachment cannot be a C that could lift off -- it is a full ring
+    that drops over the top of the pole and cannot escape sideways no matter how it is loaded.
+    Everything below the ring is the hanging part.
+
+    The ring bore is compensated the same way every other hole here is: the printed bore comes out
+    smaller than modelled by ~1.373 x bead per side, so the model has to be bigger than the pole.
+    A collar that grips is a collar that must be forced on, so this aims for a SLIDING fit and
+    lets gravity plus the hook's own offset load do the holding -- the hook hangs off one side, so
+    the ring cants and jams against the pole under load, which is how a real pole hook works.
+    """
+    r = thick / 2.0
+    bore = machine.bore_model(pole_d)           # modelled so the PRINTED bore clears the pole
+    outer = bore / 2.0 + ring
+    parts = [Point(0.0, 0.0).buffer(outer, resolution=64)]
+
+    # the drop: a straight bar down from the ring, offset to one side so the collar cants and
+    # bites the pole when loaded -- the offset IS the retention
+    dx = outer - r
+    parts.append(LineString([(dx, 0.0), (dx, -drop)]).buffer(r, resolution=16))
+
+    # hook curling forward off the bottom of the drop
+    cx, cy = dx + hook_r, -drop
+    # THE MOUTH FACES UP. Sweeping 180 -> 0 goes over the TOP and makes an n, whose mouth faces
+    # down -- anything hung on it falls straight off. Sweeping 180 -> 370 goes UNDER, making a U
+    # that a strap or a loop drops into and sits in the bottom of.
+    arc = []
+    for i in range(41):
+        a = math.radians(180.0 + 190.0 * i / 40.0)
+        arc.append((cx + hook_r * math.cos(a), cy + hook_r * math.sin(a)))
+    parts.append(LineString(arc).buffer(r, resolution=16))
+    if tip > 0:
+        ax, ay = arc[-1]; bx, by = arc[-2]
+        ddx, ddy = ax - bx, ay - by
+        m = math.hypot(ddx, ddy) or 1.0
+        parts.append(LineString([(ax, ay), (ax + ddx / m * tip, ay + ddy / m * tip)])
+                     .buffer(r, resolution=16))
+
+    body = unary_union(parts)
+    return body.difference(Point(0.0, 0.0).buffer(bore / 2.0, resolution=64)), bore
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--style", choices=("j", "lip", "simple"), default="simple",
+    ap.add_argument("--style", choices=("j", "lip", "simple", "pole"), default="pole",
                     help="simple = flat bar + thread hole + short lip; j = eye-hung curl; lip = over a wall")
+    ap.add_argument("--pole", type=float, default=32.0, help="pole style: pole diameter to ring")
+    ap.add_argument("--ring", type=float, default=5.5, help="pole style: collar wall thickness")
+    ap.add_argument("--drop", type=float, default=26.0, help="pole style: bar length below the ring")
     ap.add_argument("--width", type=float, default=9.0, help="simple style: bar width across the face")
     ap.add_argument("--lip", type=float, default=6.0, help="simple style: how far the lip turns up")
     ap.add_argument("--thread", type=float, default=3.0, help="simple style: thread hole diameter")
@@ -190,6 +244,7 @@ def main():
     ap.add_argument("--gap", type=float, default=95.0, help="hook mouth opening, degrees")
     ap.add_argument("--tip", type=float, default=6.0, help="straight run at the hook tip")
     ap.add_argument("--layers", type=int, default=4, help="'couple layers width'")
+    ap.add_argument("--brim", type=int, default=0, help="brim loops; 0 = none (the default)")
     ap.add_argument("--n", type=int, default=1, help="how many hangers on the plate")
     ap.add_argument("--spacing", type=float, default=0.0, help="0 = auto from part width")
     ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
@@ -201,7 +256,7 @@ def main():
     a = ap.parse_args()
 
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
-    a.flow = a.flow or machine.SUSTAINED_FLOW_BY_MATERIAL[a.material]
+    a.flow = a.flow or machine.flow_cap(a.material, a.printer)
     # bead first, then the speed the bead allows -- 50 is the north star, a fat bead pulls it down
     a.bead_w = a.bead_w or machine.bead_for_flow(a.flow, a.layer_h)
     speed = machine.speed_for_flow(a.flow, a.bead_w, a.layer_h)
@@ -211,13 +266,25 @@ def main():
     # outward contour families colliding in the middle, which over-fills the layer and ploughs
     # the part off the plate -- solid.py's own guard refuses it, and it refused 6.0mm here.
     # This is the same bead-multiple rule the thick-profile parts already follow.
+    # THE RING WALL SNAPS TOO. Oleg: "why ring layers are not touching eeachother?" -- the ring
+    # was 4.00mm against a 1.50mm bead = 2.67 passes, so two contours were laid and a 1mm void was
+    # left between them. Same rule as the stroke thickness, which was already snapped; I applied it
+    # to one dimension and not the other, which is why only the ring showed the gap.
+    if a.style == "pole":
+        _rb = max(2, round(a.ring / a.bead_w))
+        if abs(_rb * a.bead_w - a.ring) > 1e-6:
+            print(f"  ring wall {a.ring:g} -> {_rb*a.bead_w:.2f} mm ({_rb} x {a.bead_w:.2f} bead)")
+            a.ring = _rb * a.bead_w
     n_beads = max(2, round(a.thick / a.bead_w))
     snapped = n_beads * a.bead_w
     if abs(snapped - a.thick) > 1e-6:
         print(f"  thickness {a.thick:g} -> {snapped:.2f} mm ({n_beads} x {a.bead_w:.2f} bead)")
         a.thick = snapped
 
-    if a.style == "simple":
+    _bore = None
+    if a.style == "pole":
+        one, _bore = pole_region(a.pole, a.ring, a.drop, a.hook_r, a.thick, a.tip, a.bead_w)
+    elif a.style == "simple":
         one = simple_region(a.shank, a.lip, a.thick, bore_for(a.thread, a.bead_w), a.width)
     elif a.style == "lip":
         one = lip_region(a.wall, a.grip, a.shank, a.hook_r, a.thick, bore_for(a.hole, a.bead_w) if a.hole else 0, a.tip)
@@ -225,21 +292,31 @@ def main():
         one = hook_region(a.shank, a.hook_r, a.thick, bore_for(a.hole, a.bead_w), a.gap, a.tip)
     minx, miny, maxx, maxy = one.bounds
     w = maxx - minx
-    pitch = a.spacing or (w + 12.0)
-    parts = [S._rtranslate(one, i * pitch, 0.0) if hasattr(S, "_rtranslate")
-             else __import__("shapely.affinity", fromlist=["translate"]).translate(one, i * pitch, 0)
-             for i in range(a.n)]
+    # GRID, NOT A ROW. A row of 6 x 40mm needs 240mm on a 220mm plate; the off-bed guard would
+    # refuse it and a row is the wrong shape for a plate anyway.
+    minx, miny, maxx, maxy = one.bounds
+    h = maxy - miny
+    pitch_x = a.spacing or (w + 8.0)
+    pitch_y = h + 8.0
+    _bx, _by = machine.BED[a.printer]
+    cols = max(1, int((_bx - 20.0) // pitch_x))
+    parts = []
+    for i in range(a.n):
+        parts.append(translate(one, (i % cols) * pitch_x, -(i // cols) * pitch_y))
     region = unary_union(parts)
 
     height = machine.PRESS_HARD + a.layer_h * (a.layers - 1)
     bx, by = machine.BED[a.printer]
     rminx, rminy, rmaxx, rmaxy = region.bounds
+    if _bore is not None:
+        print(f"  CLOSED ring for a {a.pole:.0f} mm pole -> modelled bore {_bore:.2f} mm "
+              f"(+{2*machine.BORE_INSET_MM:.2f} so the printed bore clears it)")
     _mod = bore_for(a.thread if a.style == "simple" else a.hole, a.bead_w)
     _req = a.thread if a.style == "simple" else a.hole
     print(f"  hanger: {rmaxx-rminx:.0f} x {rmaxy-rminy:.0f} mm, {a.layers} layers = "
           f"{height:.2f} mm thick")
     print(f"  hole: {_req:.1f} mm wanted -> modelled {_mod:.2f} mm "
-          f"(+{2*1.373*a.bead_w:.2f} for bead width and bulge)")
+          f"(+{2*machine.BORE_INSET_MM:.2f} for bulge, measured twice)")
     print(f"  {a.bead_w:.2f}mm bead at {speed:.1f} mm/s -> {a.bead_w*a.layer_h*speed:.1f} mm3/s "
           f"on {a.material} ({a.printer})")
 
@@ -254,7 +331,11 @@ def main():
                    # carries the same mm2 per mm as the body. The overlap is deliberate: that is
                    # what welds the part to the plate.
                    True, machine.PRESS_HARD, 100, a.bead_w * a.layer_h / machine.PRESS_HARD,
-                   True, a.printer, f"HANGER x{a.n}", material=a.material)
+                   True, a.printer, f"HANGER x{a.n}", material=a.material,
+                   # NO BRIM UNLESS ASKED. Oleg, 2026-07-27: "also dont print brim uinless asked".
+                   # Layer 1 already over-extrudes into a 0.1mm gap and welds itself down; a brim
+                   # on top of that is material to cut off, not adhesion.
+                   brim=a.brim)
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"hanger{a.style}_{a.printer}_x{a.n}_h{a.hole:g}_T{temp:g}.gcode")
     open(fn, "w").write(g)

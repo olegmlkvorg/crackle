@@ -202,6 +202,54 @@ SUSTAINED_FLOW_BY_MATERIAL = {
 #
 # KEPT, because a failure is still a fact -- but recorded with its ACTUAL mechanism so it stops
 # being cited as a flow limit:
+# FLOW IS A PROPERTY OF THE MACHINE AS WELL AS THE FILAMENT. The maintained figures above were
+# established on the K2 Plus. The K1C has a different hotend and a different extruder, so applying
+# K2's number to it is the same defect as applying one filament's number to another -- which this
+# file has now been bitten by twice.
+#
+# Oleg, 2026-07-27, mid-print: "k1 is clicking. meaning flow is too much" -- at the inherited 55.
+# Clicking is the extruder losing grip, and it is upstream of anything the firmware reports.
+# Trimmed live with M220 S85 (46.8 mm3/s). Recorded BELOW that, because the click is the ceiling
+# and a ceiling is not a target.
+#
+# PROVENANCE: by ear, one part, not a soak. Confirm or raise it with a real run before trusting it.
+# HOW MUCH SMALLER A PRINTED HOLE COMES OUT THAN THE MODELLED ONE.
+# MEASURED TWICE, on different parts, different beads, different machines:
+#   rosetta   modelled  9.13 -> printed  3.17   inset 2.978 mm   (bead 2.17, k2plus)
+#   pole ring modelled 36.12 -> printed 30.00   inset 3.060 mm   (bead 1.50, k1c)
+# As a MULTIPLE of bead width those are 1.37 and 2.04 -- inconsistent, so the "1.373 x bead"
+# model that came from the first measurement alone was WRONG. As an ABSOLUTE they agree within
+# 3%. The inset is a constant, not a proportion: the material bulges into the void by about
+# 3 mm regardless of how wide the bead is.
+# A hole must therefore be modelled 6 mm larger in diameter than the hole you want.
+# Below ~6 mm modelled, no hole survives at all -- which is exactly why a 2.5 mm eye printed solid.
+# Hot enough that a previous print's residue softens and lets go, cool enough that PLA does not
+# ooze onto the tip while the probe touches the plate. See the note at the G28 in solid.py.
+PROBE_TEMP = 150
+
+BORE_INSET_MM = 3.02          # mean of the two measurements
+
+def bore_model(hole_d):
+    """The modelled diameter that yields `hole_d` after printing."""
+    return hole_d + 2.0 * BORE_INSET_MM
+
+
+PRINTER_FLOW_CAP = {
+    "k2plus": None,   # the machine the maintained figures were measured on
+    "k1c":    45.0,   # clicked at 55; 46.8 ran quiet. Held under that.
+    "f022":   45.0,   # same hotend family as the k1c, untested -- assumed, not measured
+}
+
+
+def flow_cap(material, printer):
+    """The lower of what the filament can hold and what THIS machine can hold."""
+    m = SUSTAINED_FLOW_BY_MATERIAL.get(material)
+    p = PRINTER_FLOW_CAP.get(printer)
+    if m is None:
+        return p
+    return m if p is None else min(m, p)
+
+
 KNOWN_FAILURE = {
     "pla": (48.6, 16),   # 2026-07-26. CAUSE: sealed enclosure (glass top on), driver over-heat.
                          # NOT a flow ceiling. Top stays open now.

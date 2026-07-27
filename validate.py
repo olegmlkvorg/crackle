@@ -62,7 +62,7 @@ def check(path):
     z = 0.0; e = 0.0; x = y = 0.0; layer_floor = 0.0
     abs_e = True
     problems, warns = [], []
-    travel_mm = extrude_mm = 0.0
+    travel_mm = extrude_mm = hop_mm = 0.0
     feed = 1200.0; secs = 0.0
     zs, temps, maxz = [], [], 0.0
     _seq_ceiling = 0.0   # highest Z the head has reached since the last descent
@@ -105,6 +105,12 @@ def check(path):
                 extrude_mm += d
             else:
                 travel_mm += d
+                # HOPS BETWEEN OBJECTS ARE ALREADY LICENSED, so R5 must not also count them.
+                # On a 12-up plate of small parts the head legitimately crosses the bed once per
+                # part per layer; totalling those made R5 report 1.6:1 and refuse a correct file.
+                # The parts themselves are each one continuous stroke, which is what R5 protects.
+                if '; HOP' in raw or '; PRIME' in raw:
+                    hop_mm += d
             if body and nz < z - 1e-6 and nz < maxz - 1e-6:
                 # A WEAVE lifts over an existing bead and comes back down to the same layer Z.
                 # That descent is the whole point, so it is only ploughing if it goes BELOW the
@@ -409,7 +415,13 @@ def check(path):
             # radius then reports a perfectly-covered layer 2 as 22% overhanging. A false positive
             # is how a guard gets switched off, so the support radius uses the LOWER layer's real
             # width when that lower layer is the pressed first one.
+            # THE PRESSED FIRST LAYER IS FAR WIDER THAN A BEAD. It carries the body's mm2 into
+            # a 0.1mm gap, so it lands at mm2/PRESS_HARD -- about 9mm from a 1.5mm bead. Measuring
+            # support against a one-bead radius then reports a fully-covered layer 2 as 30%
+            # overhanging. A false positive is how a guard gets switched off.
             _cell = _bead
+            if _lh and abs(_a - machine.PRESS_HARD) < 1e-6:
+                _cell = max(_bead, _bead * _lh / machine.PRESS_HARD)
             if _lh and abs(_a - machine.PRESS_HARD) < 1e-6:
                 _cell = max(_bead, _bead * _lh / machine.PRESS_HARD)
             _grid = set()
@@ -486,7 +498,8 @@ def check(path):
             warns.append("no homing — deliberate. Machine must still be homed from a previous run.")
         else:
             problems.append("never homes (no G28 and no START_PRINT macro)")
-    ratio = travel_mm / max(extrude_mm, 1e-9)
+    # R5 measures the WORK's continuity, so licensed hops are excluded from the numerator.
+    ratio = max(0.0, travel_mm - hop_mm) / max(extrude_mm, 1e-9)
     # v2: strands are DRAWN (G1 at travel feedrate with a small E), so travel:extrude no longer
     # measures web content. Count fast extrusion moves instead — those are the strands.
     # CONTENT CHECK — by cross-section, not by feedrate.

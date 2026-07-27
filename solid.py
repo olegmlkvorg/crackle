@@ -302,7 +302,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
               f"{name}: a {bead_w:g}x{layer_h:g} bead delivers the full {flow:.1f} mm3/s only if "
               f"the head crawls. That is the constraint overruling the default, not a fault.")
     layers = max(1, int(round(height / layer_h)))
-    e_first = (first_w * press) / area
+    e_first = (bead_w * layer_h) / area   # full flow: the body's mm2 per mm
     travel_f = int(machine.MACHINE_MAX_SPEED * 60)   # inter-object travel: machine max
     # LAYER 1 RUNS AT THE SAME ONE SPEED, and carries the flow by WIDTH instead. Laid into a
     # PRESS_HARD gap its cross-section is first_w * press, and --first-w defaults to
@@ -361,7 +361,17 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
             return MultiPolygon([one(g) for g in reg.geoms])
         return one(reg)
 
-    _first_widen = max(0.0, (first_w - bead_w) / 2.0)
+    # LAYER 1 WALKS THE SAME PATHS AS THE BODY. WIDTH IS AN EXTRUSION RATE, NOT A PLAN.
+    # Widening the layer-1 CONTOURS by (first_w - bead_w)/2 means any feature narrower than
+    # first_w cannot hold a contour and is DROPPED. Measured on a pole hook: first_w 9mm against
+    # a 4mm ring wall, and layer 1 came out with the bar and hook but NO RING AT ALL -- the ring
+    # started in mid-air on layer 2. The overhang guard caught it (30% unsupported) and I nearly
+    # dismissed that as a false positive.
+    # The physical truth is the other way round: the paths are the same, and the extra material
+    # spreads sideways on its own because a 0.1mm gap gives it nowhere else to go. Oleg has said
+    # exactly this: "first layer is 55 as well just line width is crazy high" -- the WIDTH SETTING
+    # is high, meaning more material per mm, not a different toolpath.
+    _first_widen = 0.0
 
     def rings_at(kk):
         if kk == 0 and _first_widen > 1e-9:
@@ -513,9 +523,22 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # Nothing about safety changes: TEMPERATURE_WAIT below still blocks until the plate is at
     # temperature, so layer 1 cannot start on a cold bed either way. This only reclaims the overlap.
     w(f"M140 S{bed}")
-    w(f"M104 S{temp}")
+    # Target the PROBE temperature first when homing. Setting the print temperature here and then
+    # asking M109 to wait for 150 is a no-op: the tip sails past 150 on its way to 210 and probes
+    # hot anyway. The full temperature is commanded after the probe, below.
+    w(f"M104 S{machine.PROBE_TEMP if home else temp}")
     w("G90")
+    # CLEAN NOZZLE BEFORE THE CALIBRATION TOUCH. Oleg, 2026-07-27: "also clean nozel before
+    # touching the middle fo calibration". G28 probes by touching the plate WITH THE NOZZLE, and
+    # this ran while the hotend was already climbing to print temperature -- soft tip, oozing, and
+    # whatever blob was on it went straight into the Z zero. Every layer height in the file
+    # inherits that error, including the 0.1 press the whole first-layer technique depends on.
+    # Probe at a temperature where PLA is firm and does not ooze; full heat comes after.
+    if home:
+        w(f"M109 S{machine.PROBE_TEMP}                     ; firm tip: probe metal, not a blob")
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
+    if home:
+        w(f"M104 S{temp}                          ; now bring it to print temperature")
     w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
@@ -1492,8 +1515,12 @@ def finish(region, a, label, fn):
     os.makedirs(a.out, exist_ok=True)
     open(fn, "w").write(g)
     print(f"{fn}")
+    # THE SUMMARY MUST DESCRIBE THE FILE. This line printed "(with brim NNxNN)" unconditionally,
+    # including on files generated with --brim 0 that contain no brim at all. A summary that
+    # disagrees with its own artifact is how a wrong number gets believed.
+    _brimtxt = f"(with brim {st['size'][0]+9}x{st['size'][1]+9})" if a.brim else "(no brim)"
     print(f"  part {st['size'][0]}x{st['size'][1]}mm "
-          f"(with brim {st.get('footprint',st['size'])[0]}x{st.get('footprint',st['size'])[1]}), "
+          f"{_brimtxt}, "
           f"{st['rings']} concentric contours, "
           f"{st['layers']} layers = {a.height}mm tall")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g")
