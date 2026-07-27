@@ -205,6 +205,17 @@ def pole_region(pole_d, ring, drop, hook_r, thick, tip, bead_w):
     # SHRINK, which is a metal *grip* fit). Net printed clearance after the ~0.08 gap is ~0.17mm.
     SLIP_CLEAR = 0.25
     bore = machine.bore_model(pole_d) + SLIP_CLEAR   # modelled for a sliding fit over the pole
+    # THE COLLAR WALL IS AN EVEN NUMBER OF BEADS — stricter than the bucket rim's whole-bead
+    # rule, for a measured reason. Fractional (--ring 4.0 = 2.67 beads): the ring families
+    # collide head-on, the clash filter drops one, and the collar prints with a bead-wide
+    # ANNULAR VOID at mid-wall (measured on the x9 plate at r~9.8) — in the wall that carries
+    # the hook's whole load. ODD is no better HERE: contours() recovers a dying strip's
+    # centreline per-geom now, but the collar fuses with its drop bar, and the junction pocket
+    # outlives the bead-wide strip — the strip dies inside a geom that survives, invisible to
+    # the trigger (verified: the 3-bead collar still emitted 2 rings after the per-geom fix).
+    # EVEN bead counts pair up from both edges and cover fully by construction. Solid and one
+    # bead thinner beats nominal-thickness with a void through the middle.
+    ring = max(1, round(ring / (2 * bead_w))) * 2 * bead_w
     outer = bore / 2.0 + ring
     parts = [Point(0.0, 0.0).buffer(outer, resolution=64)]
 

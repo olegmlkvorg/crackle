@@ -145,13 +145,53 @@ def contours(region, bead_w, max_rings=200):
     while not cur.is_empty and n < max_rings:
         geoms = list(cur.geoms) if cur.geom_type == "MultiPolygon" else [cur]
         for g in geoms:
-            if g.is_empty or g.area < (bead_w * bead_w):
+            if g.is_empty:
+                continue
+            if g.area < (bead_w * bead_w):
+                # A DEGENERATE SLIVER IS THE MIDDLE BEAD'S CENTRELINE, NOT NOISE. Eroding a
+                # strip exactly one bead wide leaves a near-zero-width polygon (not empty!),
+                # and skipping it outright is how every odd-bead wall lost its middle bead:
+                # measured, the "3-bead" cleavage coupon printed 2 beads with a bead-wide void
+                # between them, and the hook collar carried the same void at mid-wall. The
+                # sliver's exterior traces the missing centreline; append it at n>=1 so the
+                # clash filter below can still drop it wherever a kept ring covers it.
+                if n > 0 and g.exterior.length > 3.0 * bead_w:
+                    rings.append((n, list(g.exterior.coords)))
                 continue
             rings.append((n, list(g.exterior.coords)))
             # A HOLE IS A WALL TOO. Dropping interiors here would print a bracket whose bores have
             # no wall on the inside -- the part looks right in plan and is hollow where it matters.
             for ring in g.interiors:
                 rings.append((n, list(ring.coords)))
+            # THE MIDDLE BEAD IS NOT OPTIONAL, AND EACH STRIP DIES ON ITS OWN SCHEDULE. Eroding
+            # a strip that is exactly one bead wide yields EMPTY -- its medial line is a
+            # zero-width polygon -- so an odd-bead wall silently lost its middle bead: MEASURED,
+            # the "3-bead" cleavage coupon printed beads at r 4.52 and 8.52 and NOTHING at 6.52,
+            # and the hook collar carried the same bead-wide void at mid-wall. The check is
+            # PER GEOM, not on the global erosion: on a plate the 6-bead coupon keeps eroding
+            # for generations after the 3-bead one is already gone, so a global "next is empty"
+            # trigger misses every part but the thickest (that is exactly how the first version
+            # of this fix passed a lone annulus and still failed the plate).
+            if g.buffer(-bead_w).is_empty:
+                # This strip dies next generation: recover its centreline now, by bisecting for
+                # the deepest surviving erosion (= the strip's half-width; 2*area/perimeter is
+                # exact only for a LONE uniform strip -- a collar fused to its drop bar averages
+                # the two widths and misses). Eroding back 0.02 keeps the recovered ring within
+                # a hair of the true medial: at 0.05 it landed 1.42mm from the outer wall and
+                # the 0.95-bead clash filter killed it by 0.02mm.
+                lo, hi = 0.0, bead_w
+                for _ in range(8):
+                    e_try = (lo + hi) / 2.0
+                    if g.buffer(-e_try).is_empty:
+                        hi = e_try
+                    else:
+                        lo = e_try
+                if lo >= 0.35 * bead_w:    # under that: sliver, the neighbours' spread covers it
+                    mid = g.buffer(-max(lo - 0.02, 0.01))
+                    mg = list(mid.geoms) if mid.geom_type == "MultiPolygon" else [mid]
+                    for gg in mg:
+                        if not gg.is_empty and gg.exterior.length > 3.0 * bead_w:
+                            rings.append((n + 1, list(gg.exterior.coords)))
         cur = cur.buffer(-bead_w)
         n += 1
 
