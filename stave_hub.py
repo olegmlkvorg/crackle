@@ -42,7 +42,7 @@ ap.add_argument("--bell", type=float, default=1.5)     # bore flare at the mouth
 ap.add_argument("--bell-h", type=float, default=6.0)
 ap.add_argument("--vent-w", type=float, default=4.8)
 ap.add_argument("--vents", type=int, default=0)        # slots PER SIDE, crown only
-ap.add_argument("--flow", type=float, default=27.0)    # SUSTAINED, not the 28.8 burst
+ap.add_argument("--flow", type=float, default=machine.SUSTAINED_FLOW_BY_MATERIAL[machine.DEFAULT_MATERIAL])
 ap.add_argument("--printer", default="k2plus")
 ap.add_argument("--report", action="store_true")
 ap.add_argument("--out", default="/private/tmp/claude-501/-Users-olegmalkov-dev-Assist/"

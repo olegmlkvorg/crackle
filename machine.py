@@ -34,17 +34,16 @@ ACCEL = 5000.0          # what the toolhead ACTUALLY reports while printing — 
 # past the nozzle and gets ploughed off the plate — that failure cost a print on 2026-07-25.
 BEAD_W = 1.2            # 1.5 x nozzle — stacking ceiling
 BEAD_H = 0.6            # 0.75 x nozzle — stacking ceiling
-FIRST_LAYER_SPEED = 20.0  # mm/s CEILING for layer 1 — never a target. It must be applied as
-                          # LOWERED 50 -> 20 on 2026-07-26. Oleg: "k2 adhesion broke you moving head
-                          # too fast". Layer 1 was running 55 mm/s with a 10mm-wide bead. The wider
-                          # the first bead, the more time the plastic needs to spread and wet the
-                          # plate — and a 10mm bead from a 0.8mm nozzle is an extreme spread.
-                          # THE KEY POINT, ALREADY WRITTEN BELOW AND IGNORED FOR A DAY: slowing does
-                          # NOT thin the line. E is metered per mm of PATH, so at 20 mm/s the bead
-                          # is still 10.0 x 0.1mm — identical material, laid with four times the
-                          # dwell. Only the RATE (mm3/s) falls, and the rate is not what bonds.
-                          # min(FIRST_LAYER_SPEED, body_speed), because when the body runs SLOWER
-                          # than 50 this becomes a speed-UP: on 2026-07-25 a 2.40mm2 bead with a
+# FIRST LAYER SPEED. Oleg 2026-07-27: "why we need first layer celing at 20 if we already
+# pressing at 0.1". No good answer. The 20 was inherited slicer convention and was never measured
+# on this machine -- the same species of number as the 27 that was just deleted for pretending to
+# be evidence. The slicer default exists to buy adhesion by dwelling; here adhesion is bought
+# MECHANICALLY, by pressing the nozzle to 0.1 of the plate, and that mechanism does not care how
+# fast the head moves. So the first layer runs at the north star like everything else.
+# At a 0.1 gap and a ~3mm first bead that is 0.3mm2 x 50 = 15 mm3/s -- nowhere near any ceiling.
+# WHAT WOULD DISPROVE THIS: the first layer dragging, skipping, or lifting at a plate corner.
+# If that happens the press is not doing the work and this goes back up -- with a measurement.
+# (the assignment lives just below CONSTANT_SPEED, which has to be defined first)
                           # 28 mm/s body ran layer 1 at 50 = 120 mm3/s against a 74 ceiling, so the
                           # extruder skipped from the first millimetre and the part never adhered.
                           # A "slowdown" written for a fast body silently inverts on a slow one.
@@ -76,7 +75,22 @@ MACHINE_MAX_SPEED = 120.0   # what the MACHINE can do — headroom above the 111
 # min moving speed". At the 0.72mm2 stacking ceiling the flow target of 55 would need 76 mm/s, so
 # speed and flow genuinely trade off here: 60 mm/s delivers 43.2 mm3/s. Deposition per mm of path
 # is unaffected — only the rate — so this costs minutes, not material.
-MAX_SPEED = 60.0
+# 50 mm/s IS THE NORTH STAR FOR MOVING (Oleg, 2026-07-27). Not a cap to approach -- the speed
+# everything runs at. MAX_SPEED is pinned to it so nothing can quietly exceed it.
+# CONSTANT SPEED. Oleg 2026-07-27: "keep speed at 50, we want constant movement and material
+# distribution". Speed is an INPUT held fixed, not an output solved from flow -- a head that
+# slows for corners and small radii deposits more per mm exactly where the geometry is already
+# tightest. Flow is reached by widening the bead instead ("we hack with line width, can be set
+# to any number even 20mm"), which keeps mm-per-second of travel constant everywhere.
+CONSTANT_SPEED = 50.0
+MAX_SPEED = CONSTANT_SPEED
+FIRST_LAYER_SPEED = CONSTANT_SPEED   # see the note near the top; adhesion is the 0.1 press
+
+
+def bead_for_flow(flow, layer_h, speed=CONSTANT_SPEED):
+    """Bead width that delivers `flow` at the fixed speed. Width is the free variable now."""
+    return flow / (speed * layer_h)
+
 MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the head stalls; measured
 
 # ---------------------------------------------------------------------------------------------
@@ -111,7 +125,35 @@ MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the hea
 # THE FIX PRESERVES THE PART EXACTLY. E is per MILLIMETRE, not per second, so halving the feedrate
 # halves the extruder's duty cycle and changes not one deposited microgram. M220 S50 mid-print took
 # the measured draw from 48.6 to 27.4 mm3/s and the print carried on from 19%.
-SUSTAINED_FLOW = 27.0      # mm3/s the extruder holds INDEFINITELY. Measured as "did not stall",
+# WHAT IS PHYSICALLY LOADED IN EACH MACHINE. Material follows the PRINTER -- they are one fact.
+# Two independent defaults drift apart silently, and then a part prints the loaded filament at
+# another filament's temperature under another filament's flow clamp. Update this when a spool
+# changes; nothing else should carry a material or printer name as a literal default.
+LOADED = {
+    "k2plus": "pla-matte",   # matte gray, 230C, loaded 2026-07-27
+    "k1c":    "pla",
+    "f022":   "pla",
+}
+DEFAULT_PRINTER = "k2plus"
+DEFAULT_MATERIAL = LOADED[DEFAULT_PRINTER]
+
+# SUSTAINED FLOW PER MATERIAL. There is no global fallback number, deliberately: the old one (27)
+# was invented, never measured, and then labelled "measured" -- so it could never be argued with.
+# A material with no figure gets NO silent clamp; it gets a loud line saying nothing is known.
+#
+# MEASURED, sustained  -- a flow held for real minutes without the extruder complaining:
+SUSTAINED_FLOW_BY_MATERIAL = {
+    "pla":       55.0,   # Oleg 2026-07-27
+    "pla-matte": 65.0,   # Oleg 2026-07-27
+}
+# THE OPEN TENSION, recorded rather than tidied away: on 2026-07-26 this machine stalled at
+# 48.6 mm3/s after 16 minutes on pla -- BELOW the 55 now set for that material. Both can be true,
+# because that run was confounded: 210C (not 230) and a wide-first-layer hack spread over a 320mm
+# plate, so it was the worst case, not the material's limit. The failure is not deleted, because a
+# thing that broke once is the first place to look when it breaks again.
+KNOWN_FAILURE = {
+    "pla": (48.6, 16),   # extruder DRIVER over-heated and stalled, 2026-07-26, 210C, wide layer.
+}
                            # which is a floor on the true value, not the value itself.
 SUSTAINED_MINS = 8.0       # unbroken extrusion beyond this is a soak, not a burst. The observed
                            # stall came at 16 min; half that is the margin, not a second reading.
@@ -124,6 +166,8 @@ SUSTAINED_MINS = 8.0       # unbroken extrusion beyond this is a soak, not a bur
 #   55    the standing rule. Inherited, never re-measured on the current filament.
 #   48.6  SUSTAINED for 16 minutes at 210C -> the extruder DRIVER over-heated and stalled.
 #         This is the only number that ever came from a failure, and it set SUSTAINED_FLOW=27.
+#   55-65 SILENT at 230C — 2.3 min, 57.4 delivered, 0 stalls. Oleg: "test was perfecrt".
+#         The highest flow this machine has been DEMONSTRATED to hold, on any material.
 #   70-90 CRACKED, by ear, at 230C on pla-matte, pressed 0.1, spiral inward — Oleg stopped it at
 #         24.5% ("extruder cracks try 55-65"). Measured 54-72 mm3/s delivered with ZERO firmware
 #         stalls and zero over-temp, which is the point: THE FIRMWARE NEVER SAW IT. Cracking is the
@@ -150,7 +194,7 @@ SUSTAINED_MINS = 8.0       # unbroken extrusion beyond this is a soak, not a bur
 SOAK_OVERRIDE = False    # set True ONLY by a deliberate measurement, never by a part
 
 
-def flow_for_duration(flow, minutes, label=""):
+def flow_for_duration(flow, minutes, label="", material="pla"):
     """Clamp a flow to what the extruder can hold for `minutes` of UNBROKEN extrusion.
 
     Oleg's rule is "always max flow" and this does not weaken it — it measures `max` correctly.
@@ -164,16 +208,32 @@ def flow_for_duration(flow, minutes, label=""):
     # That is the right experiment: the stall happened at 210C, and MAX_FLOW 81.2 was measured at
     # 230C — if the mechanism is melt-limited back-pressure driving extruder torque, 20 more degrees
     # should move the ceiling a long way. If it stalls anyway, the mechanism is not what I claimed.
-    if SOAK_OVERRIDE and flow > SUSTAINED_FLOW:
-        print(f"  ! SOAK OVERRIDE: running {flow:g} mm3/s for {minutes:.0f} min, ABOVE the "
-              f"{SUSTAINED_FLOW:g} sustained figure{label}. This is a measurement, not a part. "
-              f"Watch for `extruder stall` / MCU over-temp in the firmware log.")
+    _sus = SUSTAINED_FLOW_BY_MATERIAL.get(material)
+    _fail = KNOWN_FAILURE.get(material)
+    if _sus is None:
+        if _fail and flow >= _fail[0] and minutes >= _fail[1]:
+            print(f"  !! {material}: {flow:g} mm3/s for {minutes:.0f} min is AT OR ABOVE the flow "
+                  f"that actually failed ({_fail[0]:g} after {_fail[1]:g} min). Not clamping -- no "
+                  f"sustained figure exists for {material}. Run a soak or stand next to it.")
+        else:
+            print(f"  ~ {material}: no sustained flow has ever been measured. Running {flow:g} "
+                  f"unguarded{label}. Listen for extruder cracking; the firmware will not tell you.")
         return flow
-    if minutes >= SUSTAINED_MINS and flow > SUSTAINED_FLOW:
+    if SOAK_OVERRIDE and flow > _sus:
+        print(f"  ~ SOAK_OVERRIDE: running {flow:g} past the {_sus:g} maintained figure{label}. "
+              f"This is a measurement, not a part. Watch it.")
+        return flow
+    if minutes >= SUSTAINED_MINS and flow > _sus:
+        print(f"  ! {flow:g} mm3/s for {minutes:.0f} min exceeds the {_sus:g} mm3/s MAINTAINED "
+              f"figure for {material}{label}. Using {_sus:g}. Deposit per mm is unchanged; "
+              f"only the clock moves.")
+        return _sus
+    return flow
+    if minutes >= SUSTAINED_MINS and flow > _sus:
         print(f"  ! flow {flow:g} mm3/s for {minutes:.0f} min of unbroken extrusion{label} — the "
               f"K2 extruder driver over-heated and stalled at 48.6 mm3/s after 16 min (2026-07-26). "
-              f"Using {SUSTAINED_FLOW:g}. Deposit per mm is unchanged; only the clock moves.")
-        return SUSTAINED_FLOW
+              f"Using {_sus:g}. Deposit per mm is unchanged; only the clock moves.")
+        return _sus
     return flow
 
 
@@ -572,4 +632,22 @@ TPU_TEMP = 200
 # Treating them as one entry is the same defect as sharing SHRINK between metal and bamboo: a number
 # that belongs to ONE material silently governing another.
 MATERIAL_TEMP = {"pla": TEMP, "pla-matte": 230, "petg": 240, "tpu": TPU_TEMP, "abs": 250}
-MATERIAL_FLOW = {"pla": FLOW, "pla-matte": FLOW, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}
+# pla-matte's 65 is MEASURED, not inherited — the only material entry here that is.
+#   55-65 at 230C, pressed 0.1, 15mm ribbon, spiral inward: 2.3 min, 57.4 mm3/s mean delivered,
+#          ZERO firmware stalls, and SILENT. Oleg: "test was perfecrt".
+#   70-90 under the identical conditions: the extruder CRACKED, by ear, with the firmware still
+#          reporting zero stalls and healthy flow.
+# So the BURST ceiling is between 65 and 70, and 65 is the highest figure actually demonstrated.
+# This is a BURST number over 2.3 minutes. It says nothing about a 20-minute part — see
+# SUSTAINED_FLOW, which came from a 16-minute failure and stays where it is until a soak moves it.
+MATERIAL_FLOW = {"pla": FLOW, "pla-matte": 65.0, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}
+
+
+def check_spool(printer, material):
+    """A part generated for one printer with another printer's filament is silently wrong: right
+    geometry, wrong temperature, wrong flow ceiling. Say so loudly rather than emit it quietly."""
+    want = LOADED.get(printer)
+    if want and material != want:
+        print(f"  !! {printer} has {want} loaded, but this part is being generated for {material}. "
+              f"Either load {material}, or drop --material and let it follow the printer.")
+    return material

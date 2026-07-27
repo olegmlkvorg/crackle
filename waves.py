@@ -248,10 +248,10 @@ if __name__ == "__main__":
     ap.add_argument("--layers", type=int, default=1, help="stacked layers of comb")
     ap.add_argument("--fillet", type=float, default=3.0,
                     help="corner rounding radius mm — 0 gives sharp corners (banned)")
-    ap.add_argument("--material", default="pla",
+    ap.add_argument("--material", default=machine.DEFAULT_MATERIAL,
                     choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
-    ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED),
+    ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED),
                     help="picks the PRINTABLE plate size from machine.BED")
     ap.add_argument("--bed-size", default="", help="override WxY mm (rarely right)")
     ap.add_argument("--no-home", action="store_true")

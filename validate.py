@@ -512,7 +512,18 @@ def check(path):
     # Klipper does not reject it -- the nozzle MCU shut down mid-print with "Stepper too far in
     # past". Flow is what this whole project is built on, so an emitted move that violates the cap
     # is a FAIL, not a warning.
-    _cap = machine.FLOW * 1.35          # headroom for legitimate press/dab moves
+    # THE CAP BELONGS TO THE FILE'S MATERIAL, not to a module constant. Checking a matte-PLA part
+    # (65 maintained) against machine.FLOW (a 55 PLA number) reports a wrong cap in the pass line
+    # and would refuse a legitimate file. The header already states the material; read it.
+    _fmat = None
+    for _l in open(path):
+        if _l.startswith('; MATERIAL='):
+            _fmat = _l.split('=', 1)[1].strip().lower()
+            break
+        if 'BODY_START' in _l:
+            break
+    _base = machine.SUSTAINED_FLOW_BY_MATERIAL.get(_fmat, machine.FLOW)
+    _cap = _base * 1.35                 # headroom for legitimate press/dab moves
     _f = 0.0
     _pp = None
     _pe = 0.0
@@ -566,13 +577,13 @@ def check(path):
     _flowtest = bool(re.search(r"^; FLOW_TEST=1", open(path).read()[:4000], re.M))
     if _worst[0] > _cap and _flowtest:
         print(f"  flow cap NOT enforced: file declares FLOW_TEST=1 and peaks at "
-              f"{_worst[0]:.0f} mm3/s against a {machine.FLOW:.0f} cap — this is a measurement.")
+              f"{_worst[0]:.0f} mm3/s against a {_base:.0f} cap — this is a measurement.")
     elif _worst[0] > _cap:
         problems.append(f"move at line {_worst[1]} implies {_worst[0]:.0f} mm3/s "
-                        f"(cap {machine.FLOW:.0f}) — the extruder cannot deliver this and the MCU "
+                        f"(cap {_base:.0f} for {_fmat}) — the extruder cannot deliver this and the MCU "
                         f"will shut down; a position variable is probably stale")
     elif _worst[0]:
-        print(f"  peak implied flow {_worst[0]:.1f} mm3/s (cap {machine.FLOW:.0f})")
+        print(f"  peak implied flow {_worst[0]:.1f} mm3/s (cap {_base:.0f} for {_fmat})")
 
     # HARD SPEED CAP — see machine.MAX_SPEED. A generator that derives speed from flow will happily
     # command 115 mm/s on a small part and throw it off the plate.

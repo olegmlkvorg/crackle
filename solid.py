@@ -254,7 +254,13 @@ def order_rings(rings, here):
 
 def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, press, fan,
          first_w, aux, printer, name, link_max=2.0, link_flow=0.3, min_seg=0.3, brim=4, brim_gap=0.18,
-         material='pla', hop_min=8.0, centre=True, hop_clear=1.5):
+         material=None, hop_min=8.0, centre=True, hop_clear=1.5):
+    # NO DEFAULT MATERIAL HERE. A literal 'pla' default stamped "; MATERIAL=pla" into a file
+    # printing matte at 230C, and validate.py then checked it against the wrong flow cap. An
+    # unpassed material is a bug in the caller, so it fails here instead of being guessed.
+    if material is None:
+        raise ValueError("plate(): material must be passed explicitly — it is stamped into the "
+                         "file header and every downstream check reads it")
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
     speed = machine.speed_for(flow, bead_w * layer_h, f" for {name}")
@@ -263,7 +269,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     layers = max(1, int(round(height / layer_h)))
     e_first = (first_w * press) / area
     travel_f = int(machine.MACHINE_MAX_SPEED * 60)   # inter-object travel: machine max
-    f_first = round(min(flow / (first_w * press), 20.0) * 60)
+    f_first = round(min(flow / (first_w * press), machine.FIRST_LAYER_SPEED) * 60)
 
     # A region may be a fixed polygon OR a callable of layer fraction (see adapter()). Contours
     # are cached per distinct region so a 35-layer part does not re-buffer shapely 35 times.
@@ -1284,10 +1290,10 @@ def main():
                     help="I-beam the spine: flange thickness mm (0 = solid)")
     ap.add_argument("--clearance", type=float, default=0.0,
                     help="extra bore clearance mm: 0 grip, 0.25 slip, 0.5 loose")
-    ap.add_argument("--material", default="pla",
+    ap.add_argument("--material", default=None,
                     choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
-    ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED))
+    ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED))
     ap.add_argument("--parts", default="",
                     help="ONE PLATE, many parts: 'coupler*3,bracket*2,foot'. Overrides --part.")
     ap.add_argument("--sequential", action="store_true", default=False,
@@ -1302,6 +1308,7 @@ def main():
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
     # MATERIAL ROUTES THE NOZZLE AND THE FLOW TOO — see machine.MATERIAL_TEMP.
     a.temp = a.temp or machine.temp_for(a.material)
     a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for solid.py')
@@ -1397,7 +1404,7 @@ def finish(region, a, label, fn):
     g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                  a.bed or machine.bed_for(a.material, a.printer), 1.75, machine.BED[a.printer],
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
-                 f"{label.upper()} stick{a.stick:g} wall{a.wall:g}")
+                 f"{label.upper()} stick{a.stick:g} wall{a.wall:g}", material=a.material)
     os.makedirs(a.out, exist_ok=True)
     open(fn, "w").write(g)
     print(f"{fn}")
@@ -1568,7 +1575,7 @@ def emit_sequential(placed, a, counts, fn):
         g, st = emit(reg, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                      a.bed or machine.bed_for(a.material, a.printer), 1.75, machine.BED[a.printer],
                      not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
-                     f"{name.upper()} #{i+1}", centre=False)
+                     f"{name.upper()} #{i+1}", material=a.material, centre=False)
         pre, _, post = g.partition("; BODY_START\n")
         if head is None:
             head = pre + "; BODY_START\n"

@@ -218,7 +218,7 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--material", default="pla", choices=list(MATERIALS))
+    ap.add_argument("--material", default=machine.DEFAULT_MATERIAL, choices=list(MATERIALS))
     ap.add_argument("--flows", default=None, help="lo,hi in mm3/s")
     ap.add_argument("--temp", type=int, default=None)
     ap.add_argument("--bed", type=int, default=0,

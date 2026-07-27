@@ -461,10 +461,10 @@ if __name__ == "__main__":
     ap.add_argument("--open", action="store_true", help="open Hilbert instead of closed Moore")
     ap.add_argument("--tile", type=int, default=1, help="NxN copies across the plate")
     ap.add_argument("--gap", type=float, default=6.0, help="mm between tiles")
-    ap.add_argument("--material", default="pla",
+    ap.add_argument("--material", default=machine.DEFAULT_MATERIAL,
                     choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
-    ap.add_argument("--printer", default="k1c", choices=sorted(machine.BED),
+    ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED),
                     help="picks the PRINTABLE plate size from machine.BED")
     ap.add_argument("--bed-size", default="", help="override WxY mm (rarely right)")
     ap.add_argument("--no-home", action="store_true")
