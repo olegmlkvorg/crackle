@@ -543,7 +543,12 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # The request stands and needs a MECHANICAL wipe, not a temperature change. Not guessed again
     # until it can be tested against a part that is known to stick.
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
-    w(f"M190 S{machine.BED_START_MIN.get(material, 100)}                     ; BLOCKING bed floor")
+    # THE FLOOR MUST BE SATISFIABLE ON THIS MACHINE. machine.bed_start() clamps under the held
+    # target; the raw BED_START_MIN (Oleg's 100) was emitted here directly, and on the K1C -- bed
+    # pinned at ~87-91 at full power -- M190 S100 never completes: fifteen minutes of heating,
+    # then forever. The floor-vs-K1C-ceiling conflict itself is Oleg's call (QUESTIONS.md); what
+    # is not his call is a file that stalls silently instead of surfacing it.
+    w(f"M190 S{machine.bed_start(material, bed):.0f}                     ; BLOCKING bed floor")
     w(f"M140 S{bed:.0f}")
     w(f"M109 S{temp}")
     w("M204 S8000")

@@ -462,8 +462,15 @@ BED_START_MIN = {"pla": 100, "pla-matte": 100, "petg": 100, "tpu": 35, "abs": 10
 
 
 def bed_start(material, bed):
-    """Temperature the plate must actually REACH before printing may begin."""
-    return min(bed - 3, BED_START_MIN.get(material, 60))
+    """Temperature the plate must actually REACH before printing may begin.
+
+    Clamped UNDER the machine-capped target because this becomes a BLOCKING M190: a floor the bed
+    cannot provably cross is an infinite stall, not a rule. The K1C at target 90 settles at 87.4
+    with power pinned at 1.00 (measured 2026-07-26), so `bed - 3` = 87 was within 0.4C of its
+    settle point -- one draft away from waiting forever. 5C under the held target is the margin.
+    On the K2 nothing changes: min(115, 100) is still Oleg's 100 floor.
+    """
+    return min(bed - 5, BED_START_MIN.get(material, 60))
 
 
 def bed_for(material, printer):
