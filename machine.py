@@ -146,15 +146,27 @@ SUSTAINED_FLOW_BY_MATERIAL = {
     "pla":       55.0,   # Oleg 2026-07-27
     "pla-matte": 65.0,   # Oleg 2026-07-27
 }
-# THE OPEN TENSION, recorded rather than tidied away: on 2026-07-26 this machine stalled at
-# 48.6 mm3/s after 16 minutes on pla -- BELOW the 55 now set for that material. Both can be true,
-# because that run was confounded: 210C (not 230) and a wide-first-layer hack spread over a 320mm
-# plate, so it was the worst case, not the material's limit. The failure is not deleted, because a
-# thing that broke once is the first place to look when it breaks again.
+# THE 48.6 STALL WAS NOT A FLOW FAILURE. Oleg, 2026-07-27: "driver coocked because i closed the
+# printer top with glass. will not again". The extruder driver over-heated because the enclosure
+# was sealed and its heat had nowhere to go -- the flow rate was incidental. Everything built on
+# top of that reading was therefore built on a misattributed cause: the duration clamp below
+# assumed flow could only be held for N minutes, when what could not be held was a closed lid.
+#
+# This is the third time tonight the invariant named the cause and I read the variable instead.
+# What stayed constant across that failure was the glass, not the mm3/s.
+#
+# KEPT, because a failure is still a fact -- but recorded with its ACTUAL mechanism so it stops
+# being cited as a flow limit:
 KNOWN_FAILURE = {
-    "pla": (48.6, 16),   # extruder DRIVER over-heated and stalled, 2026-07-26, 210C, wide layer.
+    "pla": (48.6, 16),   # 2026-07-26. CAUSE: sealed enclosure (glass top on), driver over-heat.
+                         # NOT a flow ceiling. Top stays open now.
 }
                            # which is a floor on the true value, not the value itself.
+# SUSTAINED_MINS EXISTS ONLY AS A PLACEHOLDER NOW. It was set when the 16-minute stall was read
+# as a flow-duration limit; that reading is withdrawn (see KNOWN_FAILURE above). No measurement
+# says flow decays with time on an OPEN machine. It stays wired up so a real soak failure has
+# somewhere to be recorded, but with both materials' maintained figures at or above what anything
+# actually asks for, it no longer clamps real parts.
 SUSTAINED_MINS = 8.0       # unbroken extrusion beyond this is a soak, not a burst. The observed
                            # stall came at 16 min; half that is the margin, not a second reading.
 
