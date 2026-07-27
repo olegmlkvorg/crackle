@@ -271,6 +271,21 @@ def check(path):
     # Material is now tracked per XY CELL and strictly in time order: a move is a dive only if the
     # nozzle passes under material already laid in the cell it is actually crossing.
     _CELL = 0.6
+    # A DECLARED WAVE WALL DESCENDS ON PURPOSE. A sinusoid-Z wall (bucket.py) drops at up to
+    # WAVE_SLOPE dz/dxy, so within one cell the strand legitimately descends slope * cell-diagonal
+    # below ITS OWN crest — 0.40mm at slope 0.47, over this check's 0.35 threshold: 64 false
+    # dives on a file whose lap-to-lap weld gap is provably >= one layer height everywhere.
+    # The raised threshold applies ONLY after the '; WALL_START' marker, and stays UNDER one
+    # layer height — a real collision with the lap below reads >= layer_h and still fails.
+    _mws = re.search(r'^; WAVE_SLOPE=([\d.]+)', '\n'.join(_lines[:60]), re.M)
+    _wall_i = next((i for i, l in enumerate(_lines) if l.startswith('; WALL_START')), None)
+    _wave_thr = 0.35
+    if _mws and _wall_i is not None:
+        _wlh = re.search(r'^; LAYER_H=([\d.]+)', '\n'.join(_lines[:60]), re.M)
+        _wave_thr = max(0.35, min((float(_wlh.group(1)) if _wlh else 0.6) * 0.9,
+                                  float(_mws.group(1)) * _CELL * 1.42 + 0.1))
+        print(f"  wave wall declared (slope {_mws.group(1)}): in-cell dive threshold "
+              f"{_wave_thr:.2f}mm after WALL_START (0.35 before)")
     _topo = {}
     _pz = 0.0
     _px = _py = None
@@ -300,7 +315,8 @@ def check(path):
                 _cy = int((_py + (_ny - _py) * _t) / _CELL)
                 _cz = _pz + (_nz - _pz) * _t
                 _prev = _topo.get((_cx, _cy))
-                if _prev is not None and _prev > 0.3 and _prev - _cz > 0.35:
+                _thr = _wave_thr if (_wall_i is not None and _i > _wall_i) else 0.35
+                if _prev is not None and _prev > 0.3 and _prev - _cz > _thr:
                     if _worst is None or _prev - _cz > _worst[2] - _worst[1]:
                         _worst = (_i + 1, round(_cz, 3), round(_prev, 3))
                 if _ext and (_prev is None or _cz > _prev):
