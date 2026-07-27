@@ -156,6 +156,11 @@ DEFAULT_MATERIAL = LOADED[DEFAULT_PRINTER]
 # MEASURED, sustained  -- a flow held for real minutes without the extruder complaining:
 SUSTAINED_FLOW_BY_MATERIAL = {
     "pla":       55.0,   # Oleg 2026-07-27
+    "tpu":       15.2,      # MEASURED, not inherited: a ramp that ran clean to turn 27,
+                         # with the margin deliberate, and TPU jams the extruder within a minute
+                         # above it. Added 2026-07-27 because R6 was failing every TPU file for
+                         # having no maintained figure — a real gap, not a reason to weaken R6.
+                         # At a 1.2x0.6 bead this resolves to 21.1 mm/s, well under the north star.
     "pla-matte": 60.0,   # Oleg 2026-07-27, SECOND revision — by ear, mid-print: "k2 crack
                          # ocasionally lets reduce flow by 5". 65 ran silent on a 2.3-minute
                          # ramp; on a real multi-minute part the extruder began slipping
@@ -626,6 +631,10 @@ def fan_for(material, requested):
 # The 13.3 "ceiling" measured before this was a partial clog, cleared by Oleg — a limit that moves
 # when you push it is the symptom, not the limit.
 TPU_FLOW = 15.2
+# TPU_FLOW is declared here but SUSTAINED_FLOW_BY_MATERIAL needs it 470 lines earlier, so that
+# table carries the literal. Two copies of a number drift; this refuses to import if they do.
+assert SUSTAINED_FLOW_BY_MATERIAL["tpu"] == TPU_FLOW, (
+    f'tpu flow disagrees between the tables: {SUSTAINED_FLOW_BY_MATERIAL["tpu"]} vs {TPU_FLOW}')
 # ...BUT 15.2 IS NOT A VALIDATED WORKING FLOW, AND NEITHER IS 13. As of 2026-07-26 midday TPU has
 # printed exactly two things reliably (both belts, 24.5 m and 46 m of filament, no stops) and has
 # failed on almost every solid pad since, at BOTH 15.2 and the 13 Oleg then asked for. So the
@@ -670,7 +679,10 @@ MATERIAL_TEMP = {"pla": TEMP, "pla-matte": 230, "petg": 240, "tpu": TPU_TEMP, "a
 # So the BURST ceiling is between 65 and 70, and 65 is the highest figure actually demonstrated.
 # This is a BURST number over 2.3 minutes. It says nothing about a 20-minute part — see
 # SUSTAINED_FLOW, which came from a 16-minute failure and stays where it is until a soak moves it.
-MATERIAL_FLOW = {"pla": FLOW, "pla-matte": 65.0, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}
+# Kept in step with SUSTAINED_FLOW_BY_MATERIAL: pla-matte dropped 65 -> 60 when Oleg heard the
+# extruder crack on a real multi-minute part. Two tables disagreeing about the same filament is
+# how a stale number survives.
+MATERIAL_FLOW = {"pla": FLOW, "pla-matte": 60.0, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}
 
 
 def check_spool(printer, material):
