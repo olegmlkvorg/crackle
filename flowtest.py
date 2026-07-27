@@ -94,7 +94,15 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     _B = bed_xy
     cx, cy = _B[0] / 2, _B[1] / 2
     r_max = min(cx, cy) - margin
-    b = (spacing_mm or line_w) / (2 * math.pi)              # radius gained per radian
+    # PITCH MUST FOLLOW THE REAL RIBBON WIDTH, NOT THE NOMINAL LINE.
+    # Pressing the layer to 0.1 for adhesion means the flow is carried by WIDTH: at 60 mm/s a
+    # 0.1mm-tall ribbon is 11.7mm across at 70 mm3/s and 15.0mm at 90. Spiralling those on a 3mm
+    # pitch lays them five deep — which is not a flow test, it is a pile, and over-extrusion is
+    # exactly what ploughs work off a plate. Pitch defaults to the width at the HIGHEST flow, so
+    # no turn overlaps its neighbour anywhere on the ramp.
+    _w_hi = q_hi / (min(machine.MAX_SPEED, q_hi / (line_w * layer_h)) * layer_h)
+    _pitch = spacing_mm or max(line_w, _w_hi)
+    b = _pitch / (2 * math.pi)              # radius gained per radian
     th_max = (r_max - r0) / b
     turns = th_max / (2 * math.pi)
 
@@ -112,7 +120,7 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
 
     L = []; w = L.append
     w(f"; MAX VOLUMETRIC FLOW — single layer, Archimedean spiral, {turns:.0f} turns")
-    w(f"; line_w={line_w} layer_h={layer_h} temp={temp} bed={bed} fan={fan} spacing={line_w}")
+    w(f"; line_w={line_w}->{_w_hi:.1f} at peak, layer_h={layer_h} temp={temp} bed={bed} fan={fan}, spiral pitch={_pitch:.1f}mm (= widest ribbon, so turns never overlap)")
     w(f"; RAMP {q_lo:g} -> {q_hi:g} mm3/s {'INWARD (peak first, largest radius)' if inward else 'outward'}, r {r0:g}..{r_max:g}mm about ({cx:g},{cy:g})")
     w("; READ IT: centre = lowest flow. Find where the bead stops being continuous plastic.")
     w(f"; BUMPS: {bump_h}mm outward pimples every {bump_every:g} mm3/s, all at one angle -> a spoke.")
@@ -215,7 +223,17 @@ if __name__ == "__main__":
     ap.add_argument("--temp", type=int, default=None)
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = machine.BED_TEMP[material] — per-material, not max")
-    ap.add_argument("--layer_h", type=float, default=0.4)
+    ap.add_argument("--layer_h", type=float, default=machine.PRESS_HARD,
+                    help="PRESSED TO THE PLATE, not a comfortable layer height. Oleg, 2026-07-27,\n"
+                         "stopping a run: 'the nozel need to be 0,1 to board. we need adhesion'.\n"
+                         "A flow test is a SINGLE layer, so that layer IS the first layer — if it\n"
+                         "does not anchor it lifts, curls into the nozzle, and measures curl rather\n"
+                         "than flow. machine.PRESS_HARD (0.10) is the project's standing figure for\n"
+                         "anything gripping the plate and this tool was ignoring it at 0.4.\n"
+                         "The flow is then carried by WIDTH, which is the whole technique: at\n"
+                         "60 mm/s a 0.1mm-tall ribbon needs 11.7mm at 70 mm3/s and 15.0mm at 90.\n"
+                         "It will not land 15mm wide — it does not need to. It needs to extrude\n"
+                         "that much and stay stuck.")
     ap.add_argument("--line_w", type=float, default=3.0)   # single layer: wide is safe
     ap.add_argument("--fan", type=int, default=51)         # 20% — see the FAN note above
     ap.add_argument("--margin", type=float, default=15.0)
