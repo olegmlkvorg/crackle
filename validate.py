@@ -659,16 +659,34 @@ def check(path):
             _xr = float(_g['X'])
         if 'Y' in _g:
             _yr = float(_g['Y'])
+    # R3 IS ABOUT CONSTANCY, NOT ABOUT THE NUMBER 50.
+    # Oleg, correcting my first implementation: "speed is not fixed - 50 is north star default
+    # unless overruled by other constraints." What must hold is ONE speed within a print, so
+    # material per mm does not change where the geometry is already tightest. The VALUE is the
+    # north star unless a real constraint (flow ceiling, fat bead, low-flow material) pushes it
+    # lower -- that is the wide-bead crawl working as intended. Never higher than the north star.
+    #
+    # Failing on "not exactly 50" made the wide-bead trick impossible and made me report TPU as
+    # unprintable when it simply runs at 21 mm/s.
     if _spd:
-        _off = {k: v for k, v in _spd.items() if abs(k - machine.CONSTANT_SPEED) > 0.6}
-        if _off:
-            _n = sum(_off.values())
-            problems.append(f"R3 constant speed: {_n} extruding moves are not at "
-                            f"{machine.CONSTANT_SPEED:g} mm/s (found {sorted(_off)[:4]}) — a head "
-                            f"that changes speed changes material per mm")
-    # A MISSING STAMP IS A FAILURE, NOT A SKIP. R4 silently did nothing on any file without a
-    # '; FLOW=' header -- including the exact starved-first-layer file it was written to catch,
-    # which it passed. An unchecked input must fail loudly; that is the whole lesson of this repo.
+        _fast = {k: v for k, v in _spd.items() if k > machine.MAX_SPEED + 0.6}
+        if _fast:
+            problems.append(f"R3 speed ceiling: {sum(_fast.values())} extruding moves exceed the "
+                            f"{machine.MAX_SPEED:g} mm/s north star (found {sorted(_fast)[:4]})")
+        if len(_spd) > 1:
+            _main = max(_spd, key=_spd.get)
+            _other = {k: v for k, v in _spd.items() if k != _main}
+            problems.append(f"R3 constant speed: this print runs at {len(_spd)} different speeds "
+                            f"— {_main:g} mm/s for {_spd[_main]} moves, plus {sorted(_other)} — "
+                            f"a head that changes speed changes material per mm. One speed per "
+                            f"print; its value may be below {machine.MAX_SPEED:g} if a constraint "
+                            f"requires it, but it must not vary.")
+        elif _spd:
+            _only = next(iter(_spd))
+            if _only < machine.MAX_SPEED - 0.6:
+                print(f"  runs at {_only:g} mm/s, below the {machine.MAX_SPEED:g} north star "
+                      f"— legitimate if a constraint requires it (fat bead / low-flow material)")
+
     if _flw and not _decl_flow:
         problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "
                         "is unverifiable. Regenerate with a current generator.")

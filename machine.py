@@ -75,19 +75,31 @@ MACHINE_MAX_SPEED = 120.0   # what the MACHINE can do — headroom above the 111
 # min moving speed". At the 0.72mm2 stacking ceiling the flow target of 55 would need 76 mm/s, so
 # speed and flow genuinely trade off here: 60 mm/s delivers 43.2 mm3/s. Deposition per mm of path
 # is unaffected — only the rate — so this costs minutes, not material.
-# 50 mm/s IS THE NORTH STAR FOR MOVING (Oleg, 2026-07-27). Not a cap to approach -- the speed
-# everything runs at. MAX_SPEED is pinned to it so nothing can quietly exceed it.
-# CONSTANT SPEED. Oleg 2026-07-27: "keep speed at 50, we want constant movement and material
-# distribution". Speed is an INPUT held fixed, not an output solved from flow -- a head that
-# slows for corners and small radii deposits more per mm exactly where the geometry is already
-# tightest. Flow is reached by widening the bead instead ("we hack with line width, can be set
-# to any number even 20mm"), which keeps mm-per-second of travel constant everywhere.
-CONSTANT_SPEED = 50.0
-MAX_SPEED = CONSTANT_SPEED
+# 50 mm/s IS THE NORTH STAR FOR MOVING -- A DEFAULT, NOT A LAW.
+# Oleg, 2026-07-27, correcting me: "speed is not fixed - 50 is north star default unless
+# overruled by other constraints."
+#
+# I implemented it as an immovable constant, which is a different and worse rule. It made two
+# legitimate things impossible:
+#   * THE WIDE-BEAD TRICK. A fat bead at a fixed speed multiplies flow past anything the machine
+#     can deliver (10mm x 0.6 x 50 = 300 mm3/s). The trick has always been to CRAWL with a fat
+#     bead -- speed comes DOWN so the flow lands. Pinning speed inverted it and made 7 archived
+#     commands unrunnable.
+#   * TPU. Its working flow is 15.2 mm3/s. At a fixed 50 that needs a 0.51mm bead, narrower than
+#     the nozzle -- so I reported TPU as unprintable. It is not: at the normal 1.2x0.6 bead it
+#     simply runs at 21 mm/s. I turned my own over-strict rule into a claim about the material.
+#
+# What is actually required is CONSTANT movement within a print -- one speed, so material per mm
+# does not change where the geometry is tightest. That is the thing worth guarding. The VALUE of
+# that one speed is 50 unless a real constraint (flow ceiling, bead width, material) pushes it
+# lower. It is never higher: 50 remains the ceiling.
+DEFAULT_SPEED = 50.0        # the north star: where speed starts, not where it is stuck
+CONSTANT_SPEED = DEFAULT_SPEED   # back-compat alias
+MAX_SPEED = DEFAULT_SPEED        # never faster than the north star; slower is legitimate
 FIRST_LAYER_SPEED = CONSTANT_SPEED   # see the note near the top; adhesion is the 0.1 press
 
 
-def bead_for_flow(flow, layer_h, speed=CONSTANT_SPEED):
+def bead_for_flow(flow, layer_h, speed=DEFAULT_SPEED):
     """Bead width that delivers `flow` at the fixed speed. Width is the free variable now."""
     return flow / (speed * layer_h)
 
@@ -701,3 +713,13 @@ def decimate(pts, min_seg=0.02):
     else:
         out.append(pts[-1])
     return out
+
+
+def speed_for_flow(flow, bead_w, layer_h):
+    """The one speed this print runs at: as close to the north star as the flow allows.
+
+    Oleg: "50 is north star default unless overruled by other constraints." A fat bead or a
+    low-flow material pushes it DOWN -- that is the wide-bead trick working as intended, not a
+    violation. Never above DEFAULT_SPEED.
+    """
+    return min(DEFAULT_SPEED, flow / max(bead_w * layer_h, 1e-9))
