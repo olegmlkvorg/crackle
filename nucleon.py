@@ -95,7 +95,24 @@ def bore_ratio(a, bore_d, fit=0.70, N=3, bead_w=1.2, speed=58.0):
     #     ratio 0.2426  raw r 4.124  emitted r 4.304  -> hole 7.41mm   (raw + half a bead)
     # The fillet moves the innermost point ~0.18mm outward, so a model that ignores it is wrong by
     # more than the fit tolerance it is trying to hit.
-    target = (bore_d + fit) / 2.0 + bead_w / 2.0
+    # THE INSET IS MEASURED, NOT HALF A BEAD. Half a bead is the geometric centreline-to-edge
+    # distance for a bead that lands where it was told to. At 2.17mm wide and 65 mm3/s on a hot
+    # plate it does not: the material bulges INWARD into the void, and the void is the one place
+    # with nothing to push back. Oleg, 2026-07-27, on the part that came off the plate:
+    # "the hole ended up being 1/8 inch best case" -- 3.18mm from a file whose emitted centreline
+    # void radius was 4.566mm. That is an inset of 2.978mm where the model assumed 1.085mm.
+    #
+    #   measured inset / bead_w = 2.978 / 2.17 = 1.373
+    #
+    # He warned about this before it happened: "we print at hich temps around for high adhesiv so
+    # wals will bulge and it is expected... this is super amplified on round things you create".
+    #
+    # CONFIDENCE: ONE data point, from a print cancelled at ~14% -- so it measures the BOTTOM
+    # layers, which are squished hardest and bulge most. The true steady-state inset is probably
+    # smaller, which means this errs toward a LOOSER hole. That is the safe direction: a loose
+    # bore can be shimmed or heat-formed onto the shaft, a tight one is scrap.
+    BORE_INSET_PER_BEAD = 1.373
+    target = (bore_d + fit) / 2.0 + bead_w * BORE_INSET_PER_BEAD
     lo, hi = 0.05, 0.60
     for _ in range(48):
         mid = (lo + hi) / 2.0
@@ -215,7 +232,12 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # it 1.18x on the one layer whose only job is to bond. Surplus on layer 1 does not build a
     # thicker layer, it ploughs the part off the plate (the postfoot failure, +10.4%).
     # Already fixed in hilbert, waves, honeycomb and solid; this is the fifth site.
-    e_first_mm = (strand_w * layer_h * first_squish) / area
+    # FIRST LAYER IS PRESSED TO THE PLATE, NOT SQUISHED BY A FRACTION. Oleg's rule is absolute:
+    # "the nozel need to be 0,1 to board. we need adhesion". This file used first_squish=0.85 of
+    # layer_h -- 0.51mm, five times too high -- because it carried its OWN first-layer model while
+    # machine.PRESS_HARD sat unused. He caught it on the plate, twice. Metered to the height it is
+    # ACTUALLY laid at: surplus on layer 1 does not build a thicker layer, it ploughs the part off.
+    e_first_mm = (strand_w * machine.PRESS_HARD) / area
     # Speed is CAPPED, and flow follows from it rather than the other way round. Thick walls and
     # a calm head beat chasing volumetric throughput; and on stacked geometry the two cannot both
     # be satisfied anyway (see machine.MACHINE_MAX_SPEED).
@@ -291,6 +313,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         w(f"; ARCH_LIFT={max(lift if weld < 1.0 else 0.0, 2*wave_amp):.3f}")
     w(f"; PRINTER={printer}")
     w(f"; MATERIAL={material}")
+    w(f"; LAYER_H={layer_h}")   # validate.py checks the Z ladder against this
     w("; ARGV: " + " ".join(sys.argv))
     w(f"; flow={actual_flow:.1f} mm3/s at {speed:.0f} mm/s (capped), bead {strand_w}x{layer_h} = {strand_w*layer_h:.2f}mm2")
     w(f"; predicted junctions/layer = 2*N*(N-1) = {2*N*(N-1)}")
@@ -339,7 +362,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # homing left it) and one after the object is finished (park). Neither is a travel within the
     # object, and there is no way to remove them that does not drag a stray line across the plate.
     _sx, _sy = start_xy
-    w(f"G1 Z{layer_h*0.85:.3f} F600")
+    w(f"G1 Z{machine.PRESS_HARD:.3f} F600")   # prime at the plate, same as layer 1
     w(f"G0 F9000 X{_sx - 55:.3f} Y{_sy - 12:.3f}")
     # STATIONARY PURGE before anything moves. The prime line extrudes WHILE travelling, so it never
     # builds nozzle pressure — Oleg watched the first 4 seconds of a print lay nothing at all
@@ -394,10 +417,10 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                 second.append(cum[max(i, j)]); total_lift += 1
         fans_on_at = 1.0 / layers          # fraction of path where layer 1 ends
         L.append(f"; VASE — one continuous extrusion, {len(full)} points, "
-                 f"Z {layer_h*first_squish:.2f} -> {layer_h*layers:.2f}, {total_x} junctions")
+                 f"Z {machine.PRESS_HARD:.2f} -> {layer_h*layers:.2f}, {total_x} junctions")
         L.append(f"; continuous from the prime — no reposition")
-        z_lo = layer_h * first_squish
-        z_hi = z_rise * layers
+        z_lo = machine.PRESS_HARD
+        z_hi = machine.PRESS_HARD + z_rise * (layers - 1)
         for i in range(1, len(full)):
             frac = cum[i] / total
             z = z_lo + (z_hi - z_lo) * frac
@@ -451,7 +474,12 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
                                           mins=round(total / speed / 60, 1))
 
     for layer in range(layers):
-        z0 = z_rise * (layer + 1)
+        # THE LADDER STARTS FROM THE PRESSED LAYER, NOT FROM ZERO. With layer 1 laid at
+        # PRESS_HARD (0.1) but the ladder computed as z_rise*(layer+1), layer 2 landed at 1.20 --
+        # a 1.10mm step over a 0.60mm bead, so it would have extruded into air. Oleg, 2026-07-27:
+        # "play Z smartly we dont want floaring lines". Every layer above the first sits one bead
+        # above the one below it, and the pressed first layer only shifts the whole stack down.
+        z0 = machine.PRESS_HARD + z_rise * layer
         # FIRST LAYER. The balls failure (2026-07-25) came from 235 mm/s giving the bead no dwell to
         # wet the plate. With the head now capped at 50 mm/s the whole print runs at what IS a
         # first-layer speed, so no slowdown is needed and --first-slow defaults to 0.
@@ -459,7 +487,7 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # what Oleg asked for — thick and irregular lines, always.
         if layer < first_slow:
             lf = round(min(machine.FIRST_LAYER_SPEED, speed) * 60)   # never faster than the body
-            z0 = layer_h * first_squish
+            z0 = machine.PRESS_HARD
         else:
             lf = f_mm_min
         # rotate each layer off the last so crossings distribute through the volume instead of

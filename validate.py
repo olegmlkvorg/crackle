@@ -585,6 +585,39 @@ def check(path):
     elif _worst[0]:
         print(f"  peak implied flow {_worst[0]:.1f} mm3/s (cap {_base:.0f} for {_fmat})")
 
+    # FIRST LAYER MUST BE PRESSED TO THE PLATE, AND NOTHING MAY FLOAT ABOVE IT.
+    # Oleg's rule -- "the nozel need to be 0,1 to board. we need adhesion" -- lived only as the
+    # constant machine.PRESS_HARD, which generators were free to ignore. nucleon.py did: it carried
+    # its own first_squish=0.85*layer_h model and laid layer 1 at 0.51mm. He caught it on the plate
+    # TWICE. A rule that depends on every author remembering it is not a rule, so it is checked
+    # here, on the artifact, where no generator can route around it.
+    # The second half is his follow-on: "play Z smartly we dont want floaring lines". Rebasing
+    # layer 1 to 0.1 without rebasing the ladder left a 1.10mm step onto layer 2 -- extruding into
+    # air over a 0.60mm bead. Any step bigger than one layer height is a floating line.
+    _zs = []
+    for _l in open(path):
+        _m = re.match(r'G1 (?:F\d+ )?Z(\d+\.\d+)', _l.split(';')[0].strip())
+        if _m:
+            _z = float(_m.group(1))
+            if not _zs or _z != _zs[-1]:
+                _zs.append(_z)
+        if len(_zs) > 6:
+            break
+    if _zs:
+        if abs(_zs[0] - machine.PRESS_HARD) > 1e-6:
+            problems.append(f"first layer is at Z{_zs[0]:.3f} but must be pressed to "
+                            f"{machine.PRESS_HARD:.2f} — adhesion comes from the press, and this "
+                            f"generator is using its own first-layer model")
+        _steps = [round(_zs[i + 1] - _zs[i], 4) for i in range(len(_zs) - 1)]
+        _lh = None
+        _mlh = re.search(r'^; LAYER_H=([\d.]+)', open(path).read()[:4000], re.M)
+        if _mlh:
+            _lh = float(_mlh.group(1))
+        _big = [g for g in _steps if _lh and g > _lh + 1e-6]
+        if _big:
+            problems.append(f"Z steps {_big} exceed one layer height ({_lh}) — those layers "
+                            f"extrude into air (floating lines)")
+
     # HARD SPEED CAP — see machine.MAX_SPEED. A generator that derives speed from flow will happily
     # command 115 mm/s on a small part and throw it off the plate.
     #
