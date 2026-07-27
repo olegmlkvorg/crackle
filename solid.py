@@ -1268,7 +1268,13 @@ def main():
                     help="0 = machine.temp_for(material). A PLA 210 default reached TPU in every generator.")
     ap.add_argument("--bed", type=int, default=0, help="0 = machine.BED_TEMP['pla']")
     ap.add_argument("--press", type=float, default=0.10)
-    ap.add_argument("--first-w", type=float, default=3.0)
+    # FIRST-LAYER WIDTH IS DERIVED, NOT A CONSTANT. Flow must be constant (Oleg: "flow must be
+    # constant"), and speed is fixed, so layer 1 must carry the SAME mm2 as the body. Laid into a
+    # PRESS_HARD gap that forces its width:  first_w = bead_w * layer_h / PRESS_HARD.
+    # At 2.17 x 0.6 into a 0.1 gap that is ~13mm -- which is exactly the technique he described,
+    # "you have to go 15mm wide in settings do not worry of massive over extrusion, this is what
+    # we do". The old 3.0mm literal starved layer 1 to a quarter of the body's flow.
+    ap.add_argument("--first-w", type=float, default=None)
     ap.add_argument("--fan", type=int, default=51,
                     help="0-255. 51 = 20%%, the PLA ceiling (machine.FAN_MAX). "
                          "Layer 1 always prints with the fan OFF regardless.")
@@ -1311,6 +1317,8 @@ def main():
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
+    if a.first_w is None:
+        a.first_w = a.bead_w * a.layer_h / machine.PRESS_HARD
     # MATERIAL ROUTES THE NOZZLE AND THE FLOW TOO — see machine.MATERIAL_TEMP.
     a.temp = a.temp or machine.temp_for(a.material)
     a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for solid.py')

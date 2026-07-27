@@ -183,17 +183,33 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
          printer='k2plus', dish=2.0, rail=3.0, material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
-    # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
-    # Capping speed without lowering flow would over-extrude by the same ratio.
-    speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
-    flow = speed * bead_w * layer_h
+    # SPEED IS AN INPUT HELD FIXED, NOT AN OUTPUT SOLVED FROM FLOW. Oleg, 2026-07-27: "50 is our
+    # north star for moving". This was min(flow / bead_area, MAX_SPEED), which happens to land on
+    # 50 at the default flow and silently drops BELOW it for any smaller --flow — the same
+    # head-changes-speed behaviour R3 exists to forbid, arriving through the back door of an
+    # argument default. Pin the speed; reach flow by widening the bead (machine.bead_for_flow),
+    # and SAY SO when the two disagree rather than trading one for the other in silence.
+    speed = machine.CONSTANT_SPEED
+    delivered = speed * bead_w * layer_h
+    if abs(delivered - flow) > 0.05:
+        print(f"  ! --flow {flow:g} mm3/s is not what a {bead_w}x{layer_h} bead delivers at the "
+              f"{speed:g} mm/s constant speed — running {delivered:.1f}. Speed is fixed (R3); to "
+              f"hit {flow:g} set --bead-w {machine.bead_for_flow(flow, layer_h):.2f}.")
+    flow = delivered
     f = round(speed * 60)
     layers = max(1, int(round(belt_w / layer_h)))
-    # BASE LAYER PRESSED TO THE PLATE — a 2.5m single-wall loop has enormous peel length and very
-    # little weight holding it down. Metered as the thin wide ribbon it physically is at a 0.1mm
-    # gap, NOT as a full bead: a full bead through 0.1mm packs and skips.
-    e_first = (first_w * press) / area
-    f_first = round(min(flow / (first_w * press), 25.0) * 60)
+    # FLOW IS CONSTANT AND LAYER 1 IS NOT AN EXCEPTION.
+    # Oleg, 2026-07-27: "omg why you killed first layer flow!!!!!!! flow must be constant".
+    # Layer 1 was metered as a first_w x press ribbon — 3.0 x 0.1 = 0.30mm2 against the body's
+    # 0.72 — and crawled at 25 mm/s. Measured on the emitted file that was 719 extruding moves off
+    # the 50 mm/s north star (R3) and 740 moves under 80% of the declared flow (R4), all of them on
+    # the one layer whose job is to bond. The reasoning behind it ("a 0.1mm gap can only hold 0.1mm
+    # of material") is wrong: the same volume per mm forced through a 0.1mm gap does not vanish, it
+    # SPREADS, and that wide squished footprint IS the adhesion. Starving it is precisely how a
+    # 2.5m single-wall loop peels off the plate.
+    # Same bead, same flow, same speed. Only Z changes on layer 1.
+    e_first = e_per_mm
+    f_first = f
 
     if fold:
         # FOLD THE BELT INTO THE PLATE. Oleg: "use hilpert trick to print really long belt".
@@ -244,6 +260,48 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
                          f"on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} plate — off the edge. "
                          f"Shorten --length or use the larger printer.")
 
+    # THE CLEAT PROFILE IS A FUNCTION OF THE LAYER, SO MAKE IT ONE.
+    # It used to be inlined in the layer loop, which left the prime line — emitted BEFORE the loop
+    # — with no way to ask where layer 1 actually starts. It used the full-cleat PROBE ring
+    # instead, and on the default belt that put the prime's end 10.03mm away from the first body
+    # move: one 10mm move carrying 0.6mm of bead, a thread dragged across a bare plate, and the
+    # comment claiming "prime ends where the loop begins" was simply untrue.
+    # It survives every guard: validate.py's starved-move check compares raw absolute E, and the
+    # G92 E0 between the prime and the body makes that delta negative, so the move is skipped
+    # rather than judged. It was found by measuring the emitted file, not by reading either one.
+    def _cleat_h_at(k):
+        """How far the cleats stand proud on layer k.
+
+        TENSION RAILS AT THE EDGES. Oleg: "the V parts of belt that suppose to catch ball, they
+        stretch to almost straight". A cleat is built by displacing the BELT LINE outward, so the
+        cleat's strands ARE the belt: pull the belt taut and you pull on the cleat itself. Since
+        belt width is the Z axis, the outermost layers are left cleat-free — they run dead straight
+        for the whole loop and take ALL the tension, so the cleated layers between them are never
+        loaded and cannot be pulled flat. The rails also give the ball two edges to sit between,
+        which is the same job the dish does.
+
+        RAMP THE CLEAT IN, DO NOT SWITCH IT ON. This was a hard boolean, so the height jumped
+        0 -> full between two adjacent layers: 9.26mm of lateral displacement across one 0.6mm
+        step against a 1.2mm bead, 23% of that layer extruded onto nothing, and 22 further layers
+        stacked on the single bridged bead.
+
+        DISH. Reducing the height in the middle of the belt turns every cleat into a valley the
+        ball rolls to the bottom of.
+        """
+        u = (k / max(1, layers - 1)) * 2.0 - 1.0          # -1 at one edge, +1 at the other
+        _edge = 1.0 - 2.0 * rail / max(belt_w, 1e-6)
+        if abs(u) >= _edge:
+            return 0.0
+        _t = (_edge - abs(u)) / max(_edge, 1e-6)          # smoothstep inward from the rail
+        return (_t * _t * (3.0 - 2.0 * _t)) * max(0.0, cleat_h - dish * (1.0 - u * u))
+
+    def _ring_at(k):
+        """This layer's plate-coordinate path. Centres are fixed for the whole part (see
+        add_cleats) so only the amplitude varies; the path stays closed at every height."""
+        return [(p[0] + cx, p[1] + cy)
+                for p in add_cleats(base_ring, per, n_cleats, _cleat_h_at(k), cleat_w,
+                                    centres=_fixed_centres)]
+
     L = []
     w = L.append
     w(f"; CLEATED BELT — closed loop, {per:.0f}mm centreline, {belt_w}mm wide, {n_cleats} cleats")
@@ -275,7 +333,10 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
         w(_ln)
     w("M82")
     w("G92 E0")
-    x0, y0 = ring[0]
+    # WHERE LAYER 1 ACTUALLY STARTS — not where the full-cleat probe ring starts. `ring` above is
+    # the probe, built at full cleat height for the plate-bounds check only; layer 1 is a rail
+    # layer with no cleats at all, so its first point can be a whole cleat height away.
+    x0, y0 = _ring_at(0)[0]
     w(f"G1 Z{press:.3f} F600")
     w(f"G0 F9000 X{max(6.0, x0 - 45.0):.3f} Y{max(6.0, y0 - 10.0):.3f}")
     w("G1 E25 F300                      ; stationary purge — pressure before motion")
@@ -288,13 +349,24 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
     # not be established from the artifact — in a project whose doctrine is measuring
     # the emitted file, that is a provenance hole. Now every file is reproducible from
     # its own header.
+    # These three are not decoration — validate.py reads them, and a MISSING stamp is itself a
+    # failure (R4 silently skipped on every unstamped file, including the starved one it was
+    # written to catch). MATERIAL routes R6 and the flow cap, LAYER_H the R2 Z-ladder check,
+    # FLOW the R4 constant-flow check on every extruding move.
     w(f"; MATERIAL={material}")
+    w(f"; LAYER_H={layer_h}")
+    w(f"; FLOW={flow}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
 
     e = 0.0
+    px = py = None      # the head's REAL position, carried across layer changes — see below
     for k in range(layers):
+        # THE LADDER IS REBASED ON THE PRESSED FIRST LAYER — `press + k*layer_h`, never
+        # `layer_h*(k+1)`. Pressing layer 1 to 0.1 and then climbing an unshifted ladder puts
+        # layer 2 a full 1.10mm above a 0.60mm bead, extruding into air. Oleg: "play Z smartly we
+        # dont want floaring lines". Every step here is exactly one layer height (R2).
         z = press + k * layer_h
         if k:
             # The loop is closed, so a new layer is a vertical step in place: no repositioning, no
@@ -302,46 +374,33 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
             e += layer_h * e_per_mm
             L.append(f"; --- layer {k+1} at Z{z:.2f}")
             L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
-            L.append(f"G1 F{f}")
-        # cleat height for THIS layer: full at the belt edges, reduced by `dish` in the middle
-        u = (k / max(1, layers - 1)) * 2.0 - 1.0          # -1 at one edge, +1 at the other
-        # TENSION RAILS AT THE EDGES. Oleg: "the V parts of belt that suppose to catch ball, they
-        # stretch to almost straight".
-        #
-        # The cause is structural, not cosmetic: a cleat is built by displacing the BELT LINE
-        # outward, so the cleat's strands ARE the belt. Pull the belt taut and you are pulling on
-        # the cleat itself — it straightens because nothing else is carrying the load.
-        #
-        # Since belt width is the Z axis, the outermost layers can be left cleat-free. They run dead
-        # straight for the whole loop and take ALL the tension, so the cleated layers between them
-        # are never loaded and cannot be pulled flat. The rails also give the ball two edges to sit
-        # between, which is the same job the dish does.
-        # RAMP THE CLEAT IN, DO NOT SWITCH IT ON.
-        # This was a hard boolean, so h_k jumped 0 -> full cleat height between two adjacent layers:
-        # measured 9.26mm of lateral displacement across one 0.6mm layer step on the shipped belt,
-        # against a 1.2mm bead. 23% of that layer was extruded onto nothing, in TPU, and 22 further
-        # layers stacked on the single bridged bead. pulley.py already ramps a 2.5mm step for
-        # exactly this reason; the belt did not.
-        _edge = 1.0 - 2.0 * rail / max(belt_w, 1e-6)
-        if abs(u) >= _edge:
-            h_k = 0.0
-        else:
-            # smoothstep from the rail boundary inward, so the cleat grows over many layers
-            _t = (_edge - abs(u)) / max(_edge, 1e-6)
-            _ramp = _t * _t * (3.0 - 2.0 * _t)
-            h_k = _ramp * max(0.0, cleat_h - dish * (1.0 - u * u))
-        ring = add_cleats(base_ring, per, n_cleats, h_k, cleat_w,
-                          centres=_fixed_centres)
-        ring = [(p[0] + cx, p[1] + cy) for p in ring]
-        px, py = ring[0]
+        # cleat height for THIS layer: rails at the belt edges, dished in the middle — the whole
+        # profile lives in _cleat_h_at() so the prime line can ask it where layer 1 begins.
+        ring = _ring_at(k)
+        # METER FROM WHERE THE HEAD ACTUALLY IS, NOT FROM WHERE THIS LAYER'S RING BEGINS.
+        # `px, py = ring[0]` assumed the layer change left the nozzle on the new ring's start
+        # point. It does not: the cleat amplitude h_k changes every layer, so ring[0] MOVES,
+        # while the layer change is a pure Z step that shifts no XY. The first segment of every
+        # layer was therefore metered for the distance it did not travel — measured on the
+        # emitted file as 21 moves delivering as little as 21.3 mm3/s against a declared 36,
+        # i.e. R4 failing once per layer, and a silent 0.2-0.3mm position discontinuity with it.
+        # Carrying the real position closes the loop through the layer change instead: the ring
+        # ends where it started, and the next layer picks that point up.
+        if px is None:
+            px, py = ring[0]
+        _first_move = True
         for (x, y) in ring[1:]:
             d = math.dist((px, py), (x, y))
             if d < 1e-9:
                 continue
+            # Layer 1 is metered and driven IDENTICALLY to the body (e_first is e_per_mm,
+            # f_first is f). The distinction is kept explicit at the point of use so that
+            # re-introducing a "first layer exception" has to be a deliberate edit here.
             e += d * (e_first if k == 0 else e_per_mm)
-            L.append(f"G1 {'F%d ' % (f_first if k == 0 else f) if (px, py) == ring[0] else ''}"
+            L.append(f"G1 {'F%d ' % (f_first if k == 0 else f) if _first_move else ''}"
                      f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = x, y
+            _first_move = False
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + belt_w + 40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
@@ -372,8 +431,14 @@ if __name__ == "__main__":
                     help="0 = machine.temp_for(material). A PLA 210 default reached TPU in every generator.")
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = machine.BED_TEMP for the material; 120 WELDS TPU")
-    ap.add_argument("--press", type=float, default=0.10, help="base-layer gap — pressed")
-    ap.add_argument("--first-w", type=float, default=3.0)
+    # ONE SOURCE FOR THE PRESS. This was a literal 0.10 that happened to agree with
+    # machine.PRESS_HARD; two copies of a number drift, and validate.py checks the emitted Z
+    # against the constant, not against this file's opinion of it.
+    ap.add_argument("--press", type=float, default=machine.PRESS_HARD,
+                    help="base-layer gap — pressed to the plate (machine.PRESS_HARD)")
+    ap.add_argument("--first-w", type=float, default=3.0,
+                    help="NO LONGER METERS LAYER 1 — flow is constant and layer 1 is not an "
+                         "exception. Kept only so existing command lines still parse.")
     ap.add_argument("--aux", type=float, default=0.2)
     ap.add_argument("--fan", type=int, default=0)
     ap.add_argument("--walls", type=int, default=1)

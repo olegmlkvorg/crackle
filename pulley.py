@@ -96,28 +96,67 @@ def spiral_between(r0, r1, a0, turns_frac, n=60):
 
 
 def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, flow, temp, bed,
-         fil_d, bed_xy, home, press, fan, spoke_adv, sleeve=0, first_w=3.0, aux=0.2,
+         fil_d, bed_xy, home, press, fan, spoke_adv, sleeve=0, aux=0.2,
          brim=0, printer='k1c', material='pla'):
     area = math.pi * (fil_d / 2) ** 2
+    # SPEED IS AN INPUT HELD FIXED, NOT AN OUTPUT SOLVED FROM FLOW.
+    # Oleg, 2026-07-27: "keep speed at 50, we want constant movement and material distribution",
+    # and validate.py R3 fails any file whose extruding moves are not at machine.CONSTANT_SPEED.
+    # This used to be min(flow / bead_area, MAX_SPEED), which lands on 50 only by ACCIDENT — it
+    # does so whenever the flow target happens to want more than 50, and silently emits a slower
+    # head (and an unprintable-by-the-rules file) whenever it does not. `--flow 20` produced a
+    # 41.7 mm/s body and nothing said so.
+    speed = machine.CONSTANT_SPEED
+    # THE BEAD IS THE FREE VARIABLE — BUT ONLY DOWNWARD ON A STACKED PART.
+    # machine.BEAD_W is a STACKING ceiling (1.5x nozzle): a wider command does not land wider, it
+    # lands TALLER than the Z step, the part climbs into the nozzle and gets ploughed off the
+    # plate. So a flow target ABOVE what this bead delivers at 50 mm/s is reported and accepted,
+    # never chased by widening — that hack belongs to single-layer work, not to a 72-layer wheel.
+    #
+    # Downward is a different matter, and it was a live defect: the old speed-solve quietly
+    # honoured a low flow target by slowing the head, so pinning the speed without this would have
+    # taken `--material tpu` from 15.2 mm3/s (right flow, wrong speed) to 24 (right speed, 58%
+    # over a material that jams the extruder within a minute). Narrow the bead instead.
+    _want_w = machine.bead_for_flow(flow, layer_h, speed)
+    if _want_w < bead_w - 1e-9:
+        if _want_w < machine.NOZZLE:
+            print(f"  !! {material} wants {flow:g} mm3/s, which at the {speed:g} mm/s north star "
+                  f"needs a {_want_w:.2f}mm bead — narrower than the {machine.NOZZLE}mm orifice, "
+                  f"which no nozzle can lay. Holding the bead at {machine.NOZZLE}mm and delivering "
+                  f"{machine.NOZZLE*layer_h*speed:.1f} mm3/s. To land on {flow:g} exactly, drop "
+                  f"--layer-h to {flow/(speed*machine.NOZZLE):.2f}.")
+        bead_w = max(_want_w, machine.NOZZLE)
     e_per_mm = (bead_w * layer_h) / area
-    # HARD CAP the head speed, then re-derive the flow that speed actually delivers.
-    # Capping speed without lowering flow would over-extrude by the same ratio.
-    speed = min(flow / (bead_w * layer_h), machine.MAX_SPEED)
-    flow = speed * bead_w * layer_h
+    flow_target, flow = flow, speed * bead_w * layer_h
+    if flow < flow_target * 0.999:
+        print(f"  ! flow target {flow_target:g} mm3/s would need "
+              f"{flow_target/(bead_w*layer_h):.0f} mm/s, but {speed:g} is the north star — "
+              f"delivering {flow:.1f} mm3/s ({flow/flow_target*100:.0f}% of target). The bead is "
+              f"already at its {bead_w}mm stacking ceiling; widening it further makes the part "
+              f"climb into the nozzle, so this is the correct trade. Only the clock moves.")
     f = round(speed * 60)
     layers = max(2, int(round(width / layer_h)))
     # BASE LAYER PRESSED TO THE PLATE. Oleg, after a pulley turned into spaghetti: "make sure you
     # are at 0.1 close to bed when you extrude base layer". A 0.25mm first layer is not pressed, it
     # is merely near — and a part that lets go becomes a ball of filament.
     #
-    # But the base layer CANNOT carry a full 0.9mm bead's worth of material through a 0.1mm gap:
-    # that is 9x too much, it packs against the plate and the extruder skips (measured earlier today
-    # when the honeycomb ran a 0.72mm2 bead at Z0.1 and skipped). So the base layer is metered as
-    # what it physically is — a thin WIDE ribbon: 0.1mm tall, spread to first_w.
+    # FLOW IS CONSTANT AND LAYER 1 IS NOT AN EXCEPTION TO IT.
+    # Oleg, 2026-07-27: "omg why you killed first layer flow!!!!!!! flow must be constant".
+    # This file metered layer 1 as first_w x press = 3.0 x 0.10 = 0.30mm2 against the body's 0.48,
+    # and ran it at 30 mm/s, on the reasoning that a bead laid through a 0.1mm gap can only hold
+    # 0.1mm of material. That reasoning is backwards. The volume does not shrink to fit the gap,
+    # it SPREADS: the body's 0.48mm2 pushed through a 0.10mm gap lands ~4.8mm wide, and that
+    # enormous squished footprint IS the adhesion. Starving it to keep a nominal width is the one
+    # thing that guarantees the part lifts — which is the failure the press was added to fix.
+    #   "you have to go 15mm wide in settings do not worry of massive over extrusion,
+    #    this is what we do"
+    # So layer 1 differs from the body in Z ALONE: same material per mm, same 50 mm/s.
     first_h = press
-    e_first = (first_w * first_h) / area
-    speed_first = min(flow / (first_w * first_h), 30.0)   # slow: adhesion, not throughput
-    f_first = round(speed_first * 60)
+    e_first = e_per_mm
+    # (there is no f_first any more, and that absence is the point: layer 1 runs the body feedrate)
+    # What the base bead actually LANDS at. Not a knob any more — it is arithmetic, and the brim
+    # spacing below is the only thing that needs it.
+    first_w = bead_w * layer_h / max(press, 1e-6)
 
     r_bore = bore_d / 2 + SHRINK / 2
     if sleeve:
@@ -163,7 +202,9 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
         w(f"; web: 2 spokes per layer (rim -> spiral in -> bore -> spiral out), "
           f"rotating {spoke_adv:.4f} rad/layer")
         w(f"; crown +{crown}mm at mid-height (self-centres a flat belt), flange +{flange}mm at the ends")
-    w(f"; bead {bead_w}x{layer_h} at {speed:.0f} mm/s -> flow={flow} mm3/s, {layers} layers")
+    w(f"; bead {bead_w}x{layer_h} at {speed:.0f} mm/s -> flow={flow:.1f} mm3/s, {layers} layers")
+    w(f"; layer 1: SAME flow, SAME {speed:.0f} mm/s, pressed to Z{press:.2f} — the bead spreads to "
+      f"~{first_w:.1f}mm and that squished footprint is the adhesion")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
     w("; HEADER_BLOCK_END")
@@ -284,6 +325,10 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     # seam, and the last ring touches the part so it actually holds it.
     if brim:
         r_first = math.dist((0, 0), path_layers[0][0])
+        # SPACED BY WHAT THE BEAD ACTUALLY LANDS AT. This was `--first-w * 0.9`, a knob that stopped
+        # describing anything the moment layer 1 went to constant flow: the ring pitch was 2.7mm
+        # while the pressed bead lands ~4.8mm wide, so every ring was laid 44% on top of its
+        # neighbour — a brim ridged high enough to catch the nozzle rather than a flat sheet.
         gap = first_w * 0.9                      # slight overlap so rings fuse into one sheet
         r_out = r_first + brim * gap
         if 2 * (r_out + 4) > min(bed_xy):
@@ -303,7 +348,10 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     w(f"G1 Z{press:.3f} F600")
     w(f"G0 F9000 X{cx + x0 - 45:.3f} Y{cy + y0:.3f}")
     w("G1 E25 F300                      ; stationary purge — pressure before motion")
-    w(f"G1 F1200 X{cx + x0:.3f} Y{cy + y0:.3f} E37   ; prime ends where the rim begins")
+    # THE ONE LICENSED EXCEPTION TO R3, AND IT IS NAMED. Laid off the part before printing starts,
+    # so it may run at its own feedrate. validate.py exempts it on the word PRIME in the comment
+    # and on nothing else — never on being slow, or "slow" becomes a way to opt out of the rule.
+    w(f"G1 F1200 X{cx + x0:.3f} Y{cy + y0:.3f} E37   ; PRIME line — ends where the rim begins")
     w("G92 E0")
     # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
     # knowing which plate, and a filename is not a contract.
@@ -312,18 +360,32 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     # not be established from the artifact — in a project whose doctrine is measuring
     # the emitted file, that is a provenance hole. Now every file is reproducible from
     # its own header.
+    # THE STAMPS ARE NOT DECORATION — validate.py READS THEM, and a missing one is itself a
+    # failure. MATERIAL routes the flow cap and the fan guards, LAYER_H is what the Z ladder is
+    # checked against (R2), FLOW is what every extruding move is compared to (R4).
     w(f"; MATERIAL={material}")
+    w(f"; LAYER_H={layer_h}")
+    w(f"; FLOW={flow:.3f}")
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
 
     e = 0.0
     px = py = None
+    # ONE FEEDRATE FOR THE WHOLE BODY. F is sticky in gcode, so setting it once here and restoring
+    # it after each layer-change Z move is the entire speed story of the file: there is no
+    # first-layer feedrate, no corner slow-down, nothing to accidentally leave set.
+    L.append(f"G1 F{f}")
     for k, pts in enumerate(path_layers):
-        z = press + k * layer_h
+        z = press + k * layer_h      # R2: the ladder is REBASED on the pressed first layer, so the
+                                     # step onto layer 2 is one layer_h and not press + layer_h
         if k:
+            # Z-ONLY, AND IT KEEPS METERING. layer_h of filament over layer_h of path is exactly
+            # e_per_mm — the same material per mm as everything else, so the join is not a void.
+            # It runs at 20 mm/s because this is the Z AXIS, whose limit is machine.MAX_Z_V (30);
+            # the 50 mm/s north star is the head's XY speed and cannot be commanded on Z.
             e += layer_h * e_per_mm
-            L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
+            L.append(f"G1 F{round(min(speed, 20) * 60)} Z{z:.3f} E{e:.5f}")
             L.append(f"G1 F{f}")
         for (x, y) in pts:
             X, Y = cx + x, cy + y
@@ -333,9 +395,10 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
             d = math.dist((px, py), (X, Y))
             if d < 1e-9:
                 continue
+            # R4: e_first IS e_per_mm. Layer 1 gets the body's cross-section, laid through a
+            # press gap — the only thing that differs on layer 1 is Z.
             e += d * (e_first if k == 0 else e_per_mm)
-            L.append(f"G1 {'F%d ' % (f_first if k == 0 else f) if e < 1 or k == 1 else ''}"
-                     f"X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
+            L.append(f"G1 X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = X, Y
 
     L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press + width + 40:.1f} F900",
@@ -369,7 +432,10 @@ if __name__ == "__main__":
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = machine.BED_TEMP for the material; 120 WELDS TPU")
     ap.add_argument("--press", type=float, default=0.10, help="base-layer gap — pressed")
-    ap.add_argument("--first-w", type=float, default=3.0, help="base-layer ribbon width")
+    ap.add_argument("--first-w", type=float, default=0.0,
+                    help="IGNORED, and kept only to say so. Layer 1 runs the body's flow (flow is\n"
+                         "constant, layer 1 included), so its width is not a free parameter — the\n"
+                         "bead lands at (bead_w * layer_h) / press, ~4.8mm at the defaults.")
     ap.add_argument("--aux", type=float, default=0.2, help="side/chassis fan speed 0-1")
     ap.add_argument("--brim", type=int, default=5, help="brim rings on layer 1 (0 = none)")
     ap.add_argument("--fan", type=int, default=51,
@@ -390,9 +456,13 @@ if __name__ == "__main__":
     if a.spokes != 2:
         print(f"  ! --spokes {a.spokes} ignored: this generator draws 2 spokes per layer by "
               f"construction. The file is identical to --spokes 2; only the header used to differ.")
+    if a.first_w:
+        print(f"  ! --first-w {a.first_w:g} ignored: flow is constant and layer 1 is not an "
+              f"exception, so the base bead's width is arithmetic, not a setting — "
+              f"(bead_w*layer_h)/press = {a.bead_w*a.layer_h/max(a.press,1e-6):.1f}mm.")
     g, st = emit(a.od, a.width, a.bore, a.flat, a.crown, a.flange, a.spokes, a.bead_w, a.layer_h,
                  a.flow, a.temp, a.bed or machine.bed_for(a.material, a.printer), 1.75, bxy, not a.no_home, a.press, a.fan, a.spoke_adv,
-                 a.sleeve, a.first_w, a.aux, a.brim, a.printer,
+                 a.sleeve, a.aux, a.brim, a.printer,
                  a.material)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/pulley_{a.printer}_od{a.od:.0f}_w{a.width:.0f}_b{a.bore:.0f}D_T{a.temp}.gcode"

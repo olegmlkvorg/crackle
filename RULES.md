@@ -39,3 +39,38 @@ comment, never by being slow, otherwise "slow" becomes a way to opt out of R3.
   ~14%, so it samples the most-squished bottom layers. It errs toward a looser hole, which is the
   safe direction. No guard can check this; only a printed part can.
 - **Whether the object is any good.** Geometry that passes every rule can still be ugly or useless.
+
+## Declared exceptions
+
+An exception must be **declared by the generator in the file**, never inferred by the checker.
+A checker that guesses "this one looks intentional" is a checker with a hole in it.
+
+| exception | how it is declared | why it is legitimate |
+|---|---|---|
+| prime line | comment containing `PRIME` | laid off the part before printing starts |
+| contour link | comment containing `LINK` | crosses ground the NEXT contour covers; a full bead there lays a second bead at the same Z, doubles the height, and the nozzle drags through it on the next layer |
+
+**Declared LINK moves are exempt from R4 but COUNTED and printed on every run**, so an exemption
+can never quietly grow. `solid.py` currently declares 45 of them on a bracket plate.
+
+## False positives are how a guard gets switched off
+
+The OVERHANG check measured support against a one-bead radius while layer 1 is laid into a
+`PRESS_HARD` gap carrying the body's full mm² — so it spreads to `bead_w*layer_h/PRESS_HARD`,
+about **13 mm** at 2.17×0.6. It reported a perfectly-covered layer 2 as 22% overhanging. The
+support radius now uses the lower layer's real width when that layer is the pressed first one.
+
+## Codebase-wide sweep, 2026-07-27
+
+Building the guards revealed the rules were broken almost everywhere, not only where Oleg caught
+them. This is the point: the file he catches is a sample, not the set.
+
+| generator | what the guards found |
+|---|---|
+| `solid` | layer 1 metered at a **3.0 mm literal** width → a quarter of body flow. `--first-w` now derives from constant flow. **Passes.** |
+| `nucleon` | own first-layer model at 0.51 mm; ladder not rebased; sub-resolution segments. **Passes.** |
+| `belt`, `pulley` | 719 and 1046 moves at 25–30 mm/s instead of 50 |
+| `hilbert` | layer 1 at flow 55 against a body of 36 |
+| `waves`, `honeycomb` | no stamps at all — R4 could not see them |
+| `stave_*` | flow not constant |
+| `archtest` | extrudes below already-printed material; separate question, experimental file |

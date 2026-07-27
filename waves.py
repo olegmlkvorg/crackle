@@ -117,14 +117,32 @@ def round_corners(pts, fillet, seg=0.8):
 def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, press, fan, fillet=3.0, layers=1, printer='k1c', material='pla'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
-    # LAYER 1 IS SQUASHED TO `press`, SO IT MUST BE FED FOR `press`, NOT FOR THE BODY HEIGHT.
-    # The comment below already said layer 1 is crushed into the plate to bond; the metering did not
-    # follow. Measured on the emitted file: 0.720mm2 commanded into 0.120mm2 of space — SIX times
-    # over. Same defect found the same day in hilbert.py (2x) and, a day earlier, in solid.py's foot
-    # (+10.4%), where it was reported as "won't stick" all three times.
-    e_first_mm = (bead_w * press) / area
-    speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
-    flow = speed * bead_w * bead_h
+    # R4 — FLOW IS CONSTANT, AND LAYER 1 IS NOT AN EXCEPTION TO IT.
+    # This file used to meter layer 1 at bead_w * press: 0.120mm2 against the body's 0.720mm2, one
+    # SIXTH of the material, on the one layer whose only job is to bond. The reasoning was that a
+    # bead laid into a 0.1mm gap can only hold 0.1mm of material. It is wrong, and Oleg said so
+    # directly: "omg why you killed first layer flow!!!!!!! flow must be constant".
+    # The bead does not stay 1.2mm wide at a 0.1mm gap. The same volume per mm SPREADS — roughly
+    # 12x the nominal width here — and that enormous squished footprint IS the adhesion. Starving
+    # it to keep a nominal width is the one thing that guarantees the ribbon lifts.
+    # Same flow, same speed, pressed to the plate. Only Z changes on layer 1.
+    e_first_mm = e_per_mm
+    # R3 — SPEED IS AN INPUT HELD FIXED, NOT AN OUTPUT SOLVED FROM FLOW.
+    # "50 is our north star for moving" (Oleg, 2026-07-27). The old line here was
+    # min(flow / bead_area, MAX_SPEED), which lands on 50 only because the default flow happens to
+    # ask for more than 50 — a lower --flow, or a narrower bead, silently produced an off-speed file
+    # and nothing said so. Pinning it removes the accident.
+    speed = machine.CONSTANT_SPEED
+    delivered = bead_w * bead_h * speed
+    if delivered < flow * 0.999:
+        # SAY IT, DO NOT SILENTLY REWRITE IT. Flow is now the OUTPUT; the way to raise it is the
+        # bead, not the head — but widening past machine.BEAD_W (1.5x nozzle) makes the bead land
+        # TALLER than the Z step on stacked runs, so the suggestion is a suggestion, not a default.
+        print(f"  ! flow target {flow:g} mm3/s would need {flow/(bead_w*bead_h):.0f} mm/s, but "
+              f"speed is FIXED at {speed:g} (machine.CONSTANT_SPEED) — running {delivered:.1f} "
+              f"mm3/s ({delivered/flow*100:.0f}% of target). Widen the bead to close the gap: "
+              f"--bead-w {machine.bead_for_flow(flow, bead_h):.2f} (check it still stacks).")
+    flow = delivered
     f = round(speed * 60)
     s = cell
     w_total = cols * 2 * (s * math.sqrt(3) / 2.0)      # wave-row geometry, not hex-cell
@@ -156,7 +174,20 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
 
     L = []; w = L.append
     w(f"; WAVES — rippled ribbons to shape by hand, {cols}x{rows} of {cell}mm")
-    w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow} mm3/s")
+    # THE STAMPS COME FIRST, AND A MISSING ONE IS ITSELF A FAILURE (RULES.md). They used to sit
+    # after the prime block; LAYER_H and FLOW were absent altogether, so validate.py could not
+    # check R2 or R4 on this file at all and reported a green tick on a starved first layer.
+    # An unchecked input passing quietly is the worst outcome this repo has.
+    w(f"; PRINTER={printer}")
+    w(f"; MATERIAL={material}")            # R6, and the TPU fan guard
+    w(f"; LAYER_H={bead_h}")               # R2 — the Z ladder is checked against this
+    w(f"; FLOW={flow:.1f}")                # R4 — every extruding move is checked against this
+    # THE STAMP IS THE FLOW THAT IS ACTUALLY DELIVERED, not the one that was requested. Stamping
+    # the request while the head runs at a fixed 50 mm/s declares a number no move in the file
+    # meets, and R4 then reports every single move as starved — which is exactly what nucleon.py
+    # does today (declares 55, delivers 36, 6851 moves flagged).
+    w("; ARGV: " + " ".join(_sys.argv))
+    w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow:.1f} mm3/s")
     w(f"; {w_total:.0f} x {h_total:.0f}mm on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed, pressed to {press}mm")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
@@ -183,16 +214,7 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w(f"G0 F9000 X{_apx:.3f} Y{_apy:.3f}")
     w("G1 E25 F300                      ; stationary purge — pressure before motion")
     w(f"G1 F1200 X{x0:.3f} Y{y0:.3f} E37   ; prime ends where the comb begins")
-    w("G92 E0"); # STAMP THE MACHINE INTO THE FILE. validate.py cannot check bounds without
-    # knowing which plate, and a filename is not a contract.
-    # THE FILE MUST RECORD THE COMMAND THAT MADE IT. The belt that fixed the cleats
-    # recorded neither --dish nor --rail, so which fix version was on the plate could
-    # not be established from the artifact — in a project whose doctrine is measuring
-    # the emitted file, that is a provenance hole. Now every file is reproducible from
-    # its own header.
-    w(f"; MATERIAL={material}")
-    w("; ARGV: " + " ".join(_sys.argv))
-    w(f"; PRINTER={printer}")
+    w("G92 E0")
     w("; BODY_START")
 
     e = 0.0
@@ -204,25 +226,45 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # Layer 1 sits at `press` (squashed into the plate so it BONDS). Every layer above steps by the
     # full bead height, because it is landing on plastic rather than glass and does not need to be
     # crushed -- pressing an upper layer just ploughs the one beneath it.
+    # The Z axis is slower than the head and cannot be commanded at the north star: machine.MAX_Z_V
+    # is 30 mm/s. This is the feedrate for the vertical seam step only, which carries no XY.
+    _zf = round(min(speed, machine.MAX_Z_V) * 60)
     for k in range(layers):
         seq = pts        # closed loop -- same direction every layer, so no seam reversal
+        # R2 — THE LADDER IS REBASED ON THE PRESSED FIRST LAYER. Layer 1 sits at `press` (0.1) and
+        # every layer above it is exactly one bead higher: press + bead_h*k, never bead_h*(k+1),
+        # which would put layer 2 at 1.20 — a 1.10mm step over a 0.60mm bead, extruded into air.
+        # "play Z smartly we dont want floaring lines" (Oleg, 2026-07-27).
         z = press + k * bead_h
         if k:
             L.append(f"; --- layer {k+1} at Z{z:.2f} -- closed loop, starts where layer "
                      f"{k} ended, same direction")
-            e += bead_h * e_per_mm          # keep extruding through the vertical step
-            L.append(f"G1 F{round(min(speed, 20)*60)} Z{z:.3f} E{e:.5f}")
-            L.append(f"G1 F{f}")
+            # Keep extruding through the vertical step: the same material per mm of PATH as
+            # everywhere else, so the seam is filled instead of travelled. Only the feedrate
+            # differs, and it is the Z axis's limit rather than a head speed — this move has no XY
+            # component, so there is no head velocity for R3 to be constant about. E is per mm, so
+            # the deposit is identical whatever the clock says.
+            e += bead_h * e_per_mm
+            L.append(f"G1 F{_zf} Z{z:.3f} E{e:.5f}")
         px, py = seq[0]
+        _first = True
         for (x, y) in seq[1:]:
             d = math.dist((px, py), (x, y))
             if d < 1e-9:
                 continue
             e += d * (e_first_mm if k == 0 else e_per_mm)
-            L.append(f"G1 {'F%d ' % f if (px, py) == seq[0] and k == 0 else ''}"
+            # F ON THE FIRST MOVE OF EVERY LAYER. Feedrates are STICKY in gcode: the prime line
+            # (F1200) and the seam step (F1800) both leave one set. The old version restated F only
+            # on layer 1, so on a stacked run every layer after the first inherited the seam step's
+            # feedrate for its whole length — off the north star, and off it invisibly.
+            L.append(f"G1 {'F%d ' % f if _first else ''}"
                      f"X{x:.3f} Y{y:.3f} Z{z:.3f} E{e:.5f}")
             px, py = x, y
-    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{press+(layers-1)*bead_h+40:.1f} F900",
+            _first = False
+    # THE PARK LIFT IS A RAPID, NOT A PRINT MOVE. Emitted as G1 it entered validate.py's Z ladder
+    # as a 40mm "layer step" and failed R2 — the ladder reads printing layers, and this is the
+    # end-of-print retreat with the heaters already off and nothing extruding. G0 says what it is.
+    L += ["M107", "M104 S0", "M140 S0", f"G0 Z{press+(layers-1)*bead_h+40:.1f} F900",
           f"G0 X10 Y{bed_xy[1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
     return "\n".join(L) + "\n", dict(flow=round(flow, 1), pts=len(pts), grams=round(grams, 1), speed=round(speed),

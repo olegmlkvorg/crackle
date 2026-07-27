@@ -32,6 +32,10 @@ FIL_AREA = math.pi * (1.75 / 2) ** 2
 
 
 def check(path):
+    # Parsed up front because several checks need it and one of them (OVERHANG) runs before the
+    # Z-ladder block where it used to be read. A stamp read late is a stamp that is missing early.
+    _mlh0 = re.search(r'^; LAYER_H=([\d.]+)', open(path).read()[:4000], re.M)
+    _lh = float(_mlh0.group(1)) if _mlh0 else None
     BED = bed_for(path) or DEFAULT_BED
     _unstamped = bed_for(path) is None
     # The machine start block (START_PRINT + Creality's own prime) legitimately lifts to Z3 and
@@ -388,7 +392,15 @@ def check(path):
             # put the nearest sample far from every query point and reported 94% of a perfectly
             # supported layer as overhanging — the same measure-the-easy-quantity error this guard
             # exists to catch. A spatial hash at bead resolution is exact enough and O(n).
+            # THE FIRST LAYER IS WIDER THAN A BEAD, AND THE CHECK MUST KNOW IT. Layer 1 is laid
+            # into a PRESS_HARD gap carrying the body's full mm2, so it spreads to
+            # bead_w*layer_h/PRESS_HARD -- ~13mm at 2.17x0.6. Measuring support against a 2.17mm
+            # radius then reports a perfectly-covered layer 2 as 22% overhanging. A false positive
+            # is how a guard gets switched off, so the support radius uses the LOWER layer's real
+            # width when that lower layer is the pressed first one.
             _cell = _bead
+            if _lh and abs(_a - machine.PRESS_HARD) < 1e-6:
+                _cell = max(_bead, _bead * _lh / machine.PRESS_HARD)
             _grid = set()
             for _q in _A:
                 _grid.add((int(_q[0] // _cell), int(_q[1] // _cell)))
@@ -609,7 +621,7 @@ def check(path):
     if _mf:
         _decl_flow = float(_mf.group(1))
     _xr, _yr, _er, _fr = None, None, 0.0, None
-    _spd, _flw = {}, []
+    _spd, _flw, _nlink = {}, [], 0
     _area = math.pi * (1.75 / 2) ** 2
     for _raw in _rules_txt.splitlines():
         _code = _raw.split(';')[0].strip()
@@ -619,7 +631,16 @@ def check(path):
         _g = dict(re.findall(r'\b([XYEF])(-?\d+(?:\.\d+)?)', _code))
         if 'F' in _g:
             _fr = float(_g['F'])
-        if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime:
+        # LINK MOVES ARE DECLARED, NOT ASSUMED. solid.py labels its contour-to-contour connectors
+        # '; LINK thin' and deliberately meters them down: they cross ground the NEXT contour will
+        # cover, so a full bead there lays a second bead at the same Z, doubles the height and the
+        # nozzle drags through it on the next layer. That is a real reason, and the generator
+        # states it in the file rather than relying on the checker to guess. They are exempt from
+        # R4 but COUNTED and reported, so an exemption can never hide a growing problem.
+        _islink = 'LINK' in _raw.upper()
+        if _islink:
+            _nlink += 1
+        if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime and not _islink:
             _d = math.hypot(float(_g['X']) - _xr, float(_g['Y']) - _yr)
             _de = float(_g['E']) - _er
             if _d > 0.05 and _de > 0:
@@ -645,6 +666,8 @@ def check(path):
     if _flw and not _decl_flow:
         problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "
                         "is unverifiable. Regenerate with a current generator.")
+    if _nlink:
+        print(f"  {_nlink} declared LINK move(s) exempt from R4 (contour connectors, metered thin)")
     if _flw and _decl_flow:
         _lo = [f for f in _flw if f < _decl_flow * 0.80]
         _hi = [f for f in _flw if f > _decl_flow * 1.20]
@@ -680,10 +703,6 @@ def check(path):
                             f"{machine.PRESS_HARD:.2f} — adhesion comes from the press, and this "
                             f"generator is using its own first-layer model")
         _steps = [round(_zs[i + 1] - _zs[i], 4) for i in range(len(_zs) - 1)]
-        _lh = None
-        _mlh = re.search(r'^; LAYER_H=([\d.]+)', open(path).read()[:4000], re.M)
-        if _mlh:
-            _lh = float(_mlh.group(1))
         _big = [g for g in _steps if _lh and g > _lh + 1e-6]
         if _big:
             problems.append(f"Z steps {_big} exceed one layer height ({_lh}) — those layers "

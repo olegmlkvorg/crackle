@@ -241,11 +241,27 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
          fillet=3.0, layers=1, material='pla', printer='k1c'):
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * bead_h) / area
-    # LAYER 1 IS PRESSED TO `press`, SO FEED IT FOR `press`. Was metering every layer with the body
-    # cross-section: 0.720mm2 into a 0.120mm gap — SIX times over, the same defect found today in
-    # hilbert.py (2x) and waves.py (6x) and a day earlier in solid.py's foot (+10.4%).
-    e_first_mm = (bead_w * press) / area
-    speed = min(flow / (bead_w * bead_h), machine.MAX_SPEED)
+    # R4 — FLOW IS CONSTANT, AND THE FIRST LAYER IS NOT AN EXCEPTION TO IT.
+    # Oleg, 2026-07-27: "omg why you killed first layer flow!!!!!!! flow must be constant".
+    # This file used to meter layer 1 at bead_w * press = 0.12mm2 against the body's 0.72mm2 —
+    # one sixth of the material — reasoning that a bead laid into a 0.1mm gap can only hold
+    # 0.1mm of plastic. That reasoning is wrong: the bead does not stay 1.2mm wide at a 0.1mm
+    # gap, it SPREADS, and that enormous squished footprint IS the adhesion. Starving it to keep
+    # a nominal width is the one thing that guarantees the comb lifts off the plate.
+    # Same flow, same speed, pressed to the plate. Only Z changes on layer 1.
+    e_first_mm = e_per_mm
+    # R3 — SPEED IS AN INPUT HELD FIXED, NEVER SOLVED FROM FLOW. Oleg: "50 is our north star for
+    # moving", "keep speed at 50, we want constant movement and material distribution". A head that
+    # solves its speed from a flow target changes speed whenever --flow moves, and a head that
+    # changes speed changes material per mm. So the speed is pinned and the DELIVERED flow is
+    # whatever the bead carries at that speed; machine.speed_for() is still asked, purely so the
+    # gap between the requested figure and the delivered one is printed rather than swallowed.
+    speed = machine.CONSTANT_SPEED
+    _want = machine.speed_for(flow, bead_w * bead_h, ' for honeycomb.py')
+    if _want < speed - 1e-9:
+        print(f"  ! --flow {flow:g} mm3/s would need only {_want:.0f} mm/s, but the head is pinned "
+              f"at {speed:g} (R3). Running {bead_w*bead_h*speed:.1f} mm3/s. To lower flow, narrow "
+              f"the bead (--bead-w) — never the speed.")
     flow = speed * bead_w * bead_h
     f = round(speed * 60)
     s = cell
@@ -272,10 +288,37 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
         raise SystemExit(f"comb spans X {min(_xs):.0f}..{max(_xs):.0f} Y {min(_ys):.0f}.."
                          f"{max(_ys):.0f} on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed — off the plate.")
 
+    # MEASURE THE OVERPRINT INSTEAD OF HIDING IT. A hex lattice has no Eulerian circuit, so a
+    # single stroke MUST re-walk some walls. Two passes on a shared wall is designed (see
+    # comb_path). Anything beyond two is the cell-to-cell routing landing on walls both
+    # neighbouring cells already drew — that plastic is real and it goes on the plate at full
+    # rate now that flow is constant (R4), so the figure is measured from the emitted path and
+    # printed on every run rather than being quietly metered away.
+    _seen, _tot, _over = {}, 0.0, 0.0
+    _pp = pts[0]
+    for _q in pts[1:]:
+        _d = math.dist(_pp, _q)
+        if _d < 1e-9:
+            continue
+        _k = tuple(sorted([(round(_pp[0], 1), round(_pp[1], 1)),
+                           (round(_q[0], 1), round(_q[1], 1))]))
+        _seen[_k] = _seen.get(_k, 0) + 1
+        _tot += _d
+        if _seen[_k] > 2:
+            _over += _d
+        _pp = _q
+    overprint = 100.0 * _over / max(_tot, 1e-9)
+
     L = []; w = L.append
     w(f"; HONEYCOMB — one continuous extrusion, {cols}x{rows} cells of {cell}mm")
+    w(f"; PRINTER={printer}")
+    w(f"; MATERIAL={material}")
+    w(f"; LAYER_H={bead_h}")     # R2: validate.py checks the Z ladder against this
+    w(f"; FLOW={flow:.1f}")      # R4: validate.py checks every extruding move against this
+    w("; ARGV: " + " ".join(_sys.argv))
     w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.0f} mm/s -> flow={flow} mm3/s")
     w(f"; {w_total:.0f} x {h_total:.0f}mm on a {bed_xy[0]:.0f}x{bed_xy[1]:.0f} bed, pressed to {press}mm")
+    w(f"; overprint: {overprint:.1f}% of the path is a 3rd/4th pass over a wall already laid twice")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {layers}"); w("; HEADER_BLOCK_END")
     w(f"M140 S{bed}"); w(f"M104 S{temp}"); w("G90")
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies and homes if not")
