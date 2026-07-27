@@ -325,6 +325,13 @@ def main():
     for i in range(a.n):
         parts.append(translate(one, (i % cols) * pitch_x, -(i // cols) * pitch_y))
     region = unary_union(parts)
+    # CENTRE THE GRID ON THE PLATE HERE. emit(centre=True) used to do it for the union;
+    # sequential emission takes each part in raw coordinates, and rows grow toward -Y.
+    _gminx, _gminy, _gmaxx, _gmaxy = region.bounds
+    _ox = (machine.BED[a.printer][0] - (_gminx + _gmaxx)) / 2.0
+    _oy = (machine.BED[a.printer][1] - (_gminy + _gmaxy)) / 2.0
+    parts = [translate(p, _ox, _oy) for p in parts]
+    region = translate(region, _ox, _oy)
 
     height = machine.PRESS_HARD + a.layer_h * (a.layers - 1)
     bx, by = machine.BED[a.printer]
@@ -347,30 +354,32 @@ def main():
     print(f"  {a.bead_w:.2f}mm bead at {speed:.1f} mm/s -> {a.bead_w*a.layer_h*speed:.1f} mm3/s "
           f"on {a.material} ({a.printer})")
 
-    g, st = S.emit(region, height, a.bead_w, a.layer_h, a.flow, temp,
-                   machine.bed_for(a.material, a.printer), 1.75, (bx, by),
-                   # LAYER 1 RUNS AT FULL FLOW, WITH A CRAZY-HIGH LINE WIDTH. Oleg has said this
-                   # repeatedly and I kept "fixing" it back to a metered layer:
-                   #   "first layer is 55 as well just line width is crazy high"
-                   #   "you have to go 15mm wide in settings do not worry of massive over
-                   #    extrusion, this is what we do"
-                   # first_w is the SPREAD width the material lands at (mm2 / press), so layer 1
-                   # carries the same mm2 per mm as the body. The overlap is deliberate: that is
-                   # what welds the part to the plate.
-                   True, machine.PRESS_HARD, 100, a.bead_w * a.layer_h / machine.PRESS_HARD,
-                   # AUX (side/chassis) FANS AT THE PLA HOUSE NORM, 0.2. A positional True here set
-                   # them to 100% (True == 1.0, the full aux fraction) and chilled the first layer
-                   # on a material that must not be cooled hard. emit() runs this through aux_for(),
-                   # which still forces full aux for materials that require it (e.g. TPU).
-                   0.2, a.printer, f"HANGER x{a.n}", material=a.material,
-                   # NO BRIM UNLESS ASKED. Oleg, 2026-07-27: "also dont print brim uinless asked".
-                   # Layer 1 already over-extrudes into a 0.1mm gap and welds itself down; a brim
-                   # on top of that is material to cut off, not adhesion.
-                   brim=a.brim)
+    # PART BY PART, NOT LAYER BY LAYER. Oleg said it on 07-26 ("lets print part by part not
+    # layer by layer") and again on 07-27 watching THIS plate print layer-by-layer: "do per
+    # object not per layer. also why you need a giant travel between layers?" Layer-by-layer
+    # over 12 hooks meant 12 travels per layer plus a full-plate return at each layer seam —
+    # 11.7m of lifted travel oozing 230C strings across every part (his "messy second layer"),
+    # and a stop midway ruins 12 stumps instead of leaving N finished hooks.
+    # emit_sequential() already existed for exactly this; hanger just never used it.
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"hanger{a.style}_{a.printer}_x{a.n}_h{a.hole:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
-    print(f"{fn}")
+    placed = [(f"{a.style} hook", p) for p in parts]
+
+    class _NS:                             # emit_sequential reads solid.py main()'s namespace
+        pass
+    ns = _NS()
+    ns.cavity = 0; ns.floor = 0.0; ns.height = height; ns.layer_h = a.layer_h
+    ns.bead_w = a.bead_w; ns.flow = a.flow; ns.temp = temp; ns.bed = 0
+    ns.material = a.material; ns.printer = a.printer; ns.no_home = False
+    ns.press = machine.PRESS_HARD
+    # LAYER 1 RUNS AT FULL FLOW, WITH A CRAZY-HIGH LINE WIDTH (Oleg: "you have to go 15mm wide
+    # in settings do not worry of massive over extrusion, this is what we do") — first_w is the
+    # SPREAD width (mm2/press) so layer 1 carries the body's mm2 per mm; the overlap IS the weld.
+    ns.first_w = a.bead_w * a.layer_h / machine.PRESS_HARD
+    ns.fan = 100
+    # aux fans at the PLA house norm 0.2 (a positional True here once ran them at 100%)
+    ns.aux = 0.2
+    st = S.emit_sequential(placed, ns, None, fn)
 
 
 if __name__ == "__main__":

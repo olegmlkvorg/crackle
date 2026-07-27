@@ -189,38 +189,55 @@ def check(path):
     # the relationship BETWEEN parts, which is exactly the class of bug a per-move validator misses,
     # so it has to be checked as geometry: two parts printed one after another may not share ground.
     if _seq:
-        _bb = []          # (label, minx, maxx, miny, maxy)
-        _cur, _xs, _ys = "part 1", [], []
+        # MATERIAL PROXIMITY, NOT BOUNDING BOXES. Bboxes are the wrong frame for CONCAVE parts:
+        # an L-shaped pole hook interlocks its neighbour's box by ~3mm while the material stays
+        # 8mm apart — 29 phantom overlaps on a plate whose hooks provably print disjoint (the
+        # measuring-frame lesson, fourth instance today). The crash being guarded against is
+        # the NOZZLE dragging through a finished part, so measure what the nozzle does: any
+        # extruding point of a later part within 1.5mm of an earlier part's deposited points.
+        _pparts = []      # (label, [points])
+        _cur, _pp = "part 1", []
         for l in _lines:
             if l.startswith('; ---- part'):
-                if _xs:
-                    _bb.append((_cur, min(_xs), max(_xs), min(_ys), max(_ys)))
-                _cur = l.strip('; -').split(':')[0].strip(); _xs, _ys = [], []
-            # A PART'S FOOTPRINT IS WHERE IT DEPOSITS MATERIAL, not everywhere the head went.
-            # Including travels and the end-of-print park put Y340 inside the last part's box and
-            # reported 15 phantom overlaps on a plate whose parts were provably disjoint. Measure
-            # extruding moves only.
+                if _pp:
+                    _pparts.append((_cur, _pp))
+                _cur = l.strip('; -').split(':')[0].strip(); _pp = []
+            # deposits only — travels/park excluded; the PRIME purge is off-part by design
+            if 'PRIME' in l.upper():
+                continue
             _m = re.match(r'^G1 .*X([-\d.]+) Y([-\d.]+).*E[\d.]', l)
             if _m:
-                _xs.append(float(_m.group(1))); _ys.append(float(_m.group(2)))
-        if _xs:
-            _bb.append((_cur, min(_xs), max(_xs), min(_ys), max(_ys)))
+                _pp.append((float(_m.group(1)), float(_m.group(2))))
+        if _pp:
+            _pparts.append((_cur, _pp))
+        _PCELL = 1.5
+        _pgrid = {}
         _clash = []
-        for _i in range(len(_bb)):
-            for _j in range(_i + 1, len(_bb)):
-                _a, _b = _bb[_i], _bb[_j]
-                _ox = min(_a[2], _b[2]) - max(_a[1], _b[1])
-                _oy = min(_a[4], _b[4]) - max(_a[3], _b[3])
-                if _ox > 0.5 and _oy > 0.5:
-                    _clash.append((_a[0], _b[0], _ox, _oy))
+        for _lab, _pp in _pparts:
+            _hit = None
+            for _x2, _y2 in _pp:
+                _gx, _gy = int(_x2 // _PCELL), int(_y2 // _PCELL)
+                for _dx in (-1, 0, 1):
+                    for _dy in (-1, 0, 1):
+                        for _ol, _ox2, _oy2 in _pgrid.get((_gx + _dx, _gy + _dy), ()):
+                            if (_x2-_ox2)**2 + (_y2-_oy2)**2 < _PCELL**2:
+                                _hit = (_ol, _x2, _y2); break
+                        if _hit: break
+                    if _hit: break
+                if _hit: break
+            if _hit:
+                _clash.append((_hit[0], _lab, _hit[1], _hit[2]))
+            for _x2, _y2 in _pp:
+                _pgrid.setdefault((int(_x2 // _PCELL), int(_y2 // _PCELL)), []).append((_lab, _x2, _y2))
         if _clash:
             _f = _clash[0]
             problems.append(
-                f"{len(_clash)} pair(s) of sequentially-printed parts OVERLAP on the plate — "
-                f"e.g. '{_f[0]}' and '{_f[1]}' share {_f[2]:.0f}x{_f[3]:.0f}mm. The head would "
-                f"print the second one into the first and crash.")
+                f"{len(_clash)} sequentially-printed part(s) deposit within {_PCELL}mm of an "
+                f"earlier part's material — e.g. '{_f[1]}' at ({_f[2]:.1f},{_f[3]:.1f}) onto "
+                f"'{_f[0]}'. The nozzle would drag through the finished part.")
         else:
-            print(f"  sequential: {len(_bb)} part footprints, none overlapping")
+            print(f"  sequential: {len(_pparts)} parts, material never within {_PCELL}mm of an "
+                  f"earlier part")
 
     # NO TRAVEL MAY CROSS THE PART AT LAYER HEIGHT.
     # A non-extruding move is only safe if it is ABOVE everything already printed. 161 moves at
@@ -682,6 +699,31 @@ def check(path):
     _mf = re.search(r'^; FLOW=([\d.]+)', _rules_txt, re.M)
     if _mf:
         _decl_flow = float(_mf.group(1))
+    # R8 — THE DECLARED FLOW MUST MEET THE MATERIAL'S FIGURE, OR THE FILE MUST SAY WHY NOT.
+    # Oleg, 2026-07-27, the FIFTH flow incident: "when i said go slow you killed the flow with
+    # it. why our guard to keep flow constant did not worked for the 5th time aleady?!?"
+    # The structural answer: R4 checks the file against ITS OWN '; FLOW=' stamp — a generator
+    # that honestly stamps a derated number is self-consistent and sails through. NOTHING
+    # compared the stamp to the material's measured figure, so a --speed 10 cap silently
+    # re-declared 60 as 12 and every guard nodded. Slow is allowed (air-cooling, tests);
+    # SILENT slow is not: below 80% of the material+printer cap the file must carry an
+    # explicit '; FLOW_DERATE=<reason>' stamp, or it fails here.
+    _m_mat = re.search(r'^; MATERIAL=(\S+)', _rules_txt, re.M)
+    _m_prn = re.search(r'^; PRINTER=(\S+)', _rules_txt, re.M)
+    if _decl_flow and _m_mat:
+        _r8cap = machine.flow_cap(_m_mat.group(1), _m_prn.group(1) if _m_prn else None)
+        _m_der = re.search(r'^; FLOW_DERATE=(.+)$', _rules_txt, re.M)
+        if _r8cap and _decl_flow < 0.8 * _r8cap:
+            if _m_der:
+                print(f"  R8: flow derated to {_decl_flow:g} of the {_r8cap:g} mm3/s cap — "
+                      f"DECLARED: {_m_der.group(1).strip()}")
+            else:
+                problems.append(
+                    f"R8 flow floor: this file declares {_decl_flow:g} mm3/s against the "
+                    f"{_r8cap:g} mm3/s figure for {_m_mat.group(1)} — a {100*_decl_flow/_r8cap:.0f}% "
+                    f"operating point with NO '; FLOW_DERATE=' stamp. R4 only checks the file "
+                    f"against its own declaration; the VALUE needs a declared reason. Slow is "
+                    f"allowed, silent slow is not.")
     _xr, _yr, _er, _fr, _zr = None, None, 0.0, None, 0.0
     _z0 = 0.0
     # HOISTED. These two searches scan the WHOLE file, and they were inside the per-line loop

@@ -101,6 +101,12 @@ def main():
     w(f"; MATERIAL={a.material}")
     w(f"; LAYER_H={lh}")
     w(f"; FLOW={bw*lh*speed:.4f}")
+    if bw * lh * speed < 0.8 * flow:
+        # R8: derating must be DECLARED, in the file and on the console, never silent
+        w(f"; FLOW_DERATE=operator speed cap {a.speed:g} mm/s (bond test: air time for the "
+          f"throws) takes flow {flow:g} -> {bw*lh*speed:g} mm3/s")
+        print(f"  !! FLOW DERATED {flow:g} -> {bw*lh*speed:g} mm3/s by the {a.speed:g} mm/s "
+              f"speed cap — declared in the file (R8). Deposit per mm is unchanged.")
     w(f"; PRINTER={a.printer}")
     w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     w("; SEQUENTIAL=8 rings, hop between")

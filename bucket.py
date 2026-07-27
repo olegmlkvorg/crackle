@@ -277,6 +277,12 @@ def main():
     w(f"; MATERIAL={a.material}")
     w(f"; LAYER_H={lh}")
     w(f"; FLOW={bw*lh*speed:.4f}")
+    if bw * lh * speed < 0.8 * a.flow:
+        # R8: derating must be DECLARED, in the file and on the console, never silent
+        w(f"; FLOW_DERATE=operator --speed {a.speed:g} mm/s takes flow {a.flow:g} -> "
+          f"{bw*lh*speed:g} mm3/s")
+        print(f"  !! FLOW DERATED {a.flow:g} -> {bw*lh*speed:g} mm3/s by the --speed "
+              f"{a.speed:g} cap — declared in the file (R8). Deposit per mm is unchanged.")
     w(f"; PRINTER={a.printer}")
     w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     w("; ARGV: " + " ".join(sys.argv))
