@@ -645,6 +645,14 @@ def check(path):
     if _mf:
         _decl_flow = float(_mf.group(1))
     _xr, _yr, _er, _fr, _zr = None, None, 0.0, None, 0.0
+    # HOISTED. These two searches scan the WHOLE file, and they were inside the per-line loop
+    # below -- 199,560 re.search calls on an 8,000-line file, 16.9 s of the 17.5 s total, and
+    # quadratic in file size. That is why the 372,000-line bucket could not be validated at all.
+    # A guard nobody can afford to run is a guard that does not run.
+    _m_l1 = re.search(r'^; SPEED_LAYER1=([\d.]+)', _rules_txt, re.M)
+    _l1v_decl = float(_m_l1.group(1)) if _m_l1 else None
+    _m_pv = re.search(r'^; PRESSED_LAYER1=([\d.]+)', _rules_txt, re.M)
+    _pv_decl = float(_m_pv.group(1)) if _m_pv else None
     _spd, _flw, _nlink = {}, [], 0
     _area = math.pi * (1.75 / 2) ** 2
     for _raw in _rules_txt.splitlines():
@@ -665,10 +673,8 @@ def check(path):
         _islink = 'LINK' in _raw.upper()
         if _islink:
             _nlink += 1
-        _l1decl = re.search(r'^; SPEED_LAYER1=([\d.]+)', _rules_txt, re.M)
-        _isl1 = bool(_l1decl) and _fr is not None and abs(_fr/60.0 - float(_l1decl.group(1))) < 0.6
-        _pdecl = re.search(r'^; PRESSED_LAYER1=([\d.]+)', _rules_txt, re.M)
-        if _pdecl and abs(_zr - float(_pdecl.group(1))) < 1e-6:
+        _isl1 = bool(_l1v_decl) and _fr is not None and abs(_fr/60.0 - _l1v_decl) < 0.6
+        if _pv_decl is not None and abs(_zr - _pv_decl) < 1e-6:
             _isl1 = True
         if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime and not _islink \
                 and not _isl1:

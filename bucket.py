@@ -80,6 +80,11 @@ def main():
 
     # floor: the rose, fattened to a bead, unioned with the rim so the two are one body
     rose_pts = rose(cx, cy, R - rim + bw / 2, (R - rim) * 0.11)
+    # DECIMATE THE ROSE. Its points are evenly spaced in the PARAMETER, not in distance, so they
+    # bunch where the curve dives toward the centre: measured 380 moves/s against the ~300 where
+    # Klipper drains its lookahead and freezes with no error at all. The floor is the only place
+    # this bites, and it is the same fix the nucleon needed.
+    rose_pts = machine.decimate(rose_pts, machine.CONSTANT_SPEED / 300.0 * 1.2)
     floor = unary_union([rim_ring, LineString(rose_pts).buffer(bw / 2.0, resolution=8)])
 
     n_layers = int(round((a.height - machine.PRESS_HARD) / a.layer_h)) + 1
@@ -122,13 +127,34 @@ def main():
     w(f"G1 F1200 X{px0+40:.3f} Y{py0:.3f} E30   ; PRIME line, in the clear")
     w(f"G0 F3000 X{px0+52:.3f} Y{py0+12:.3f}  ; PRIME break-off — angled wipe, no extrusion")
     w("G92 E0")
+    # WITHOUT THIS MARKER several checks silently do not run. validate.py said so outright:
+    # "BODY NEVER STARTED ... the Z-plough, backwards-extrusion and off-bed checks NEVER RAN.
+    # This file is unchecked, not clean." An unrun check reported as a pass is the worse failure.
+    w("; BODY_START")
 
     e = 0.0
+    pos = [None]
+
     def stroke(pts, z, first):
+        """Emit one continuous stroke, metering E from the REAL distance travelled.
+
+        The first version set the pen position to pts[0] without accounting for where the head
+        actually was. At every stroke boundary -- rose to rim, rim to rim, floor to wall -- the
+        head then crossed a real gap while E advanced by the next segment's tiny amount: a
+        starved thread at 8.9 mm3/s against a declared 60. R4 caught it before it printed.
+        """
         nonlocal e
-        w(f"G0 F9000 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}" if first else "")
+        if first or pos[0] is None:
+            w(f"G0 F9000 X{pts[0][0]:.3f} Y{pts[0][1]:.3f} ; PRIME-TRAVEL to first point")
+            pos[0] = pts[0]
         w(f"G1 F1800 Z{z:.3f}")
-        w(f"G1 F{f}")
+        qx, qy = pos[0]
+        d0 = math.hypot(pts[0][0] - qx, pts[0][1] - qy)
+        if d0 > 0.02:                      # close the gap AS EXTRUSION, properly metered
+            e += d0 * e_per_mm
+            w(f"G1 F{f} X{pts[0][0]:.3f} Y{pts[0][1]:.3f} Z{z:.3f} E{e:.5f}")
+        else:
+            w(f"G1 F{f}")
         qx, qy = pts[0]
         for X, Y in pts[1:]:
             d = math.hypot(X - qx, Y - qy)
@@ -138,6 +164,7 @@ def main():
             w(f"G1 X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
             qx, qy = X, Y
         last[0] = (qx, qy)
+        pos[0] = (qx, qy)
 
     last = [None]
 
