@@ -390,6 +390,14 @@ def main():
             prior += cpts
         if k == 0:
             w("M106 S51                        ; body fan from layer 2 — layer 1 welds unchilled")
+    if not a.floor_layers:
+        # WALL TEST, NO FLOOR. Oleg, 2026-07-27: "ready to drive vaze wall test? skip the
+        # bottom". One pressed lap of the wall ring IS layer 1: laid at PRESS_HARD (R1), its
+        # squished footprint is the weld to the plate, and the wave's first landings then sit
+        # exactly one layer above it — the same relationship they have to a floor top.
+        ring0 = rotate_to(wall_ring, None)
+        stroke(ring0 + [ring0[0]], machine.PRESS_HARD, True)
+        w("M106 S51                        ; body fan from layer 2 — layer 1 welds unchilled")
 
     # ---- WALL: throw-and-land wave helix, single bead, strict ----
     # Landings weld along a SEGMENT (0.2*lambda), not at a point — the point-tangency sinusoid
@@ -400,7 +408,8 @@ def main():
     # and never less anywhere (prof differences are bounded by [-1, 0] there). The climb
     # (H+lh)*t/L is a continuous helix — a per-lap step materializes the whole climb in one
     # 0.25mm segment at the seam (v1's 67 near-vertical moves).
-    z_ft = machine.PRESS_HARD + (a.floor_layers - 1) * lh    # top floor layer's Z
+    # top floor layer's Z; with no floor, the pressed anchor lap at PRESS_HARD plays that role
+    z_ft = machine.PRESS_HARD + (max(a.floor_layers, 1) - 1) * lh
     wall = rotate_to(wall_ring, last[0])
     n_ring = len(wall)
     ds = Lw / n_ring
@@ -427,7 +436,12 @@ def main():
                          f"{z_ft:g}mm floor at H={H:g}")
     w(f"; WALL_START — throw-and-land helix: land {0.2*lam:.1f}mm welded, throw "
       f"{0.8*lam:.1f}mm airborne, climb {H+lh:g}/lap, {K} laps")
+    # THE CLIMB ONTO THE WALL IS A LAYER STEP, NOT AN EXTRUDING MOVE. Without this bare-Z the
+    # wave's first point carries the 0.6 rise inside a 0.25mm segment — one move at 156 mm3/s
+    # per XY-mm, an R4 FAIL (caught by validate on the floorless test, present since v2).
+    w(f"G1 F1800 Z{z_ft + lh:.3f}")
     qx, qy, qz = pos[0]
+    qz = z_ft + lh
     t = 0.0
     started = False
     for lap in range(K):
