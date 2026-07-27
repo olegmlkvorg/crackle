@@ -94,7 +94,7 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
     # M190 only waits for HEATING; a hotter bed returns instantly and the part prints on
     # whatever the last job left. TEMPERATURE_WAIT blocks both ways.
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={min(bed - 3, 60 if bed >= 80 else max(bed - 10, 30))} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
     # FANS OFF while the base bonds, then low. Max cooling froze the arcs beautifully and detached

@@ -60,13 +60,16 @@ import sys as _sys
 import machine
 import pathstats
 
-MATERIALS = {
-    # floor rises as each run passes — no point reprinting known-good flow
-    "pla":  dict(temp=210, bed=60, flows=[20, 90]),   # translucent PLA is rated 210
-    "petg": dict(temp=245, bed=80,  flows=[10, 38]),
-    "tpu":  dict(temp=machine.TPU_TEMP, _unused_temp=230, bed=50,  flows=[2, 12]),
-    "abs":  dict(temp=255, bed=100, flows=[8, 36]),
-}
+# MATERIALS COME FROM machine.py, NOT FROM A SECOND TABLE HERE. This file kept its own copy, so
+# `--material pla-matte` was rejected by the one tool whose entire job is measuring a new filament.
+# A material list in two places is the same defect as SHRINK sizing both metal and bamboo: the
+# tables drift, and the one that drifts is the one nobody is looking at.
+MATERIALS = {m: dict(temp=machine.temp_for(m),
+                     bed=machine.BED_TEMP.get(m, 60),
+                     flows=[20, 90] if m.startswith("pla") else
+                           [10, 38] if m == "petg" else
+                           [2, 12] if m == "tpu" else [8, 36])
+             for m in machine.MATERIAL_TEMP}
 # NO MODULE-LEVEL BED. This was (350,350) while --printer only selected the FAN syntax, so
 # `--printer k1c` emitted a 350mm-plate spiral — X 10..335 on a 220mm machine — saved under a "k2"
 # filename, and validate.py (which hardcoded the same 350) passed it clean. The plate now comes
@@ -74,6 +77,7 @@ MATERIALS = {
 
 
 def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
+         inward,
          bump_h, bump_arc, bump_every, spacing_mm, fixed_speed=None, bed_xy=None,
          printer='k2plus', aux=1.0):
     """With --fixed-speed the ramp varies LINE WIDTH instead of speed.
@@ -109,11 +113,13 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     L = []; w = L.append
     w(f"; MAX VOLUMETRIC FLOW — single layer, Archimedean spiral, {turns:.0f} turns")
     w(f"; line_w={line_w} layer_h={layer_h} temp={temp} bed={bed} fan={fan} spacing={line_w}")
-    w(f"; RAMP {q_lo:g} -> {q_hi:g} mm3/s outward, r {r0:g}..{r_max:g}mm about ({cx:g},{cy:g})")
+    w(f"; RAMP {q_lo:g} -> {q_hi:g} mm3/s {'INWARD (peak first, largest radius)' if inward else 'outward'}, r {r0:g}..{r_max:g}mm about ({cx:g},{cy:g})")
     w("; READ IT: centre = lowest flow. Find where the bead stops being continuous plastic.")
     w(f"; BUMPS: {bump_h}mm outward pimples every {bump_every:g} mm3/s, all at one angle -> a spoke.")
     for mq, mth in marks:
         w(f";   bump {mq:g} mm3/s at r{r0 + b*mth:.0f}mm")
+    w("; FLOW_TEST=1   this file DELIBERATELY exceeds machine.FLOW — it exists to find the")
+    w(";              ceiling, and a ceiling cannot be found from underneath. Not a part.")
     w("; HEADER_BLOCK_START"); w("; total layer number: 1"); w("; HEADER_BLOCK_END")
 
     w(f"M104 S{temp}"); w("G90")
@@ -123,7 +129,7 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     # which is how a TPU test meant for 45C got laid onto a hot bed and welded itself down.
     # TEMPERATURE_WAIT blocks in BOTH directions.
     w(f"M140 S{bed}")
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={min(bed - 3, 60 if bed >= 80 else max(bed - 10, 30))} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
     w("M107" if not fan else f"M106 S{fan}")
@@ -141,11 +147,16 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
     L.append(f"; PRINTER={printer}")
     L.append("; BODY_START")
     e = 0.0
-    th = 0.0
-    px, py = cx + r0, cy
-    while th < th_max:
+    # DIRECTION. Outward puts the peak flow at the end of the run, by which time the hotend has
+    # been soaking for the whole test — so a failure there confounds "too much flow" with "too long
+    # hot", which is exactly the confusion that cost a night on the sustained-flow question.
+    # Inward prints the peak FIRST, on the largest radius and a clean plate.
+    th = th_max if inward else 0.0
+    _step = -1 if inward else 1
+    px, py = (cx + r0 + b * th, cy) if inward else (cx + r0, cy)
+    while (th > 0.0) if inward else (th < th_max):
         r_base = r0 + b * th
-        th += min(seg_len / max(r_base, 1.0), 0.25)
+        th += _step * min(seg_len / max(r_base, 1.0), 0.25)
         r_base = r0 + b * th
         dr = 0.0
         for mq, mth in marks:                       # raised-cosine blip centred on the marked turn
@@ -213,6 +224,12 @@ if __name__ == "__main__":
     ap.add_argument("--bump", type=float, default=1.0, help="marker bump height mm")
     ap.add_argument("--bump-arc", type=float, default=0.12, help="marker half-width in radians")
     ap.add_argument("--bump-every", type=float, default=5.0, help="mm3/s between markers")
+    ap.add_argument("--inward", action="store_true",
+                    help="START at the largest diameter and spiral IN (Oleg, 2026-07-27: 'start\n"
+                         "with higherst diamenter spiral and go invards'). The highest flow then\n"
+                         "prints FIRST, on the gentlest curvature, on a cold clean plate — instead\n"
+                         "of arriving at the end after the hotend has been soaking. If it is going\n"
+                         "to fail it fails early, and the failure is not confounded by heat soak.")
     ap.add_argument("--spacing", type=float, default=None,
                     help="turn spacing mm; lines OVERLAP when < the landed bead width")
     ap.add_argument("--overlap", type=float, default=1.10,
@@ -247,7 +264,8 @@ if __name__ == "__main__":
     # habit of maxing the bed. See machine.BED_TEMP.
     bed = a.bed or machine.BED_TEMP.get(a.material, m["bed"])
     g, st = emit(q_lo, q_hi, a.layer_h, a.line_w, temp, bed, a.fan, 1.75,
-                 not a.no_home, a.margin, a.r0, a.seg, a.bump, a.bump_arc, a.bump_every,
+                 not a.no_home, a.margin, a.r0, a.seg, a.inward,
+                 a.bump, a.bump_arc, a.bump_every,
                  a.spacing, a.fixed_speed or None,
                  (tuple(float(v) for v in a.bed_size.split(',')) if a.bed_size
                   else machine.BED[a.printer]),

@@ -559,7 +559,15 @@ def check(path):
     elif _asked:
         print(f"  delivers the {_asked:.1f} mm3/s it asks for (peak {_worst[0]:.1f})")
 
-    if _worst[0] > _cap:
+    # A FLOW TEST IS ALLOWED TO EXCEED THE CAP — finding a ceiling from underneath is impossible.
+    # The exemption is NARROW: only this one check, only for a file that DECLARES itself a
+    # measurement with `; FLOW_TEST=1`, and it is announced rather than silent. Every other guard
+    # still applies. A part carries no such stamp and is refused exactly as before.
+    _flowtest = bool(re.search(r"^; FLOW_TEST=1", open(path).read()[:4000], re.M))
+    if _worst[0] > _cap and _flowtest:
+        print(f"  flow cap NOT enforced: file declares FLOW_TEST=1 and peaks at "
+              f"{_worst[0]:.0f} mm3/s against a {machine.FLOW:.0f} cap — this is a measurement.")
+    elif _worst[0] > _cap:
         problems.append(f"move at line {_worst[1]} implies {_worst[0]:.0f} mm3/s "
                         f"(cap {machine.FLOW:.0f}) — the extruder cannot deliver this and the MCU "
                         f"will shut down; a position variable is probably stale")
