@@ -800,6 +800,26 @@ def check(path):
             problems.append("MATERIAL=tpu but the file sets no chamber fans at all — "
                             "TPU runs full fans.")
 
+    # R5  DRY TRAVEL IS THE ENEMY. Oleg: "travel dry is ok, but avoid it at all costs" and
+    # "you dont want to travel without filament, find a path of continious extrusion". This is a
+    # design principle, not a hard physical limit, so it FAILS only when travel exceeds extrusion
+    # -- a path spending more distance in the air than laying material has stopped being a
+    # continuous stroke and become a series of hops. Below that it reports the number so the
+    # figure is visible on every run instead of being discovered later.
+    # For reference, measured tonight: nucleon 0.0:1 (one continuous stroke), solid bowl 0.7:1.
+    if ratio > 1.0:
+        problems.append(f"R5 dry travel: {travel_mm/1000:.1f}m of travel against "
+                        f"{extrude_mm/1000:.1f}m extruded ({ratio:.1f}:1) — more distance in the "
+                        f"air than laying material; find a continuously-extruded path")
+
+    # R6  THE FILE MUST NAME THE FILAMENT IT WAS BUILT FOR, AND IT MUST BE THE ONE LOADED.
+    # machine.check_spool() only WARNS at generation time, and a warning scrolls past. A file
+    # built for one filament and printed with another is silently wrong: right geometry, wrong
+    # temperature, wrong flow ceiling. Checked here, on the artifact, where it cannot scroll past.
+    if _fmat and _fmat not in machine.SUSTAINED_FLOW_BY_MATERIAL:
+        problems.append(f"R6 unknown material '{_fmat}': no maintained flow figure exists for it, "
+                        f"so nothing about this file's flow can be checked")
+
     mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
     print(f"  lines={n}  maxZ={maxz:.2f}mm  travel={travel_mm/1000:.1f}m  extrude={extrude_mm/1000:.1f}m"
