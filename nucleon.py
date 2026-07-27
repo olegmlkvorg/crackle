@@ -514,10 +514,20 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             L.append(f"G1 {'F%d ' % lf if i == 1 or (frac >= 1.0/layers and cum[i-1]/total < 1.0/layers) else ''}"
                      f"X{full[i][0]:.3f} Y{full[i][1]:.3f} Z{z+dz:.4f} E{e:.5f}")
         L += ["M107", "SET_PIN PIN=fan1 VALUE=0", "SET_PIN PIN=fan2 VALUE=0",
-              "M104 S0", "M140 S0", f"G1 Z{z_hi+40:.1f} F900",   # Z-only lift, no XY
+              # THE END-OF-PRINT LIFT IS A DRY MOVE, SO IT IS A G0. As a G1 it was indistinguishable
+              # from a layer change to anything reading the file: validate.py takes the first seven
+              # Z values as the Z ladder, so on a print of six layers or fewer the 40mm park lift
+              # landed inside that window and reported "Z steps [40.5] exceed one layer height —
+              # those layers extrude into air". A real 6-layer file was refused for a move made
+              # after the heaters are off. The rule is untouched — every LAYER Z is still a G1 and
+              # still checked; this move simply stops claiming to be one.
+              "M104 S0", "M140 S0", f"G0 Z{z_hi+40:.1f} F900",   # Z-only lift, no XY, no extrusion
               f"G0 X10 Y{machine.BED[printer][1]-10:.0f} F9000"]   # park at the plate's OWN back edge
         grams = e * area * 1.24 / 1000
-        return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed),
+        # speed to ONE DECIMAL — round() to the integer turned a 22.9 mm/s crawl into "23" and a
+        # 15.3 into "15". Speed is no longer a constant with a known value; it is a resolved
+        # number, and rounding a resolved number is how the wrong one gets quoted later.
+        return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed, 1),
                                           flow=round(actual_flow, 1), lines=len(L),
                                           junctions=total_x, lifts=total_lift,
                                           mins=round(total / speed / 60, 1))
@@ -591,9 +601,12 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
             L.append(f"G1 {'F%d ' % lf if i == 1 else ''}X{pts[i][0]:.3f} "
                      f"Y{pts[i][1]:.3f} Z{z0+dz:.4f} E{e:.5f}")
 
-    L += ["M107", "M104 S0", "M140 S0", f"G1 Z{layer_h*layers+40:.1f} F900", f"G0 X10 Y{machine.BED[printer][1]-10:.0f} F9000"]
+    # G0, not G1 — see the note in the vase branch. A dry park lift written as a G1 reads as a
+    # layer change, and on a short print it failed the Z-ladder check as a 40mm floating line.
+    L += ["M107", "M104 S0", "M140 S0", f"G0 Z{layer_h*layers+40:.1f} F900",
+          f"G0 X10 Y{machine.BED[printer][1]-10:.0f} F9000"]
     grams = e * area * 1.24 / 1000
-    return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed), flow=round(actual_flow,1), lines=len(L),
+    return "\n".join(L) + "\n", dict(grams=round(grams, 2), speed=round(speed, 1), flow=round(actual_flow,1), lines=len(L),
                                      junctions=total_x, lifts=total_lift,
                                      mins=round(e / e_per_mm / speed / 60, 1))
 

@@ -263,13 +263,61 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
                          "file header and every downstream check reads it")
     area = math.pi * (fil_d / 2) ** 2
     e_per_mm = (bead_w * layer_h) / area
-    speed = machine.speed_for(flow, bead_w * layer_h, f" for {name}")
-    flow = speed * bead_w * layer_h
+    # ONE SPEED PER PRINT, AND ITS VALUE IS NOT PINNED.
+    # Oleg, 2026-07-27, correcting me: "speed is not fixed - 50 is north star default unless
+    # overruled by other constraints." What must hold is CONSTANCY within a print, so material per
+    # mm does not change where the geometry is already tightest. The VALUE is the north star unless
+    # a real constraint pushes it lower — a fat bead or a low-flow material — and it is never
+    # higher. Pinning it would have broken the two things this work most depends on:
+    #   · THE WIDE-BEAD TRICK — a fat commanded bead so the head CRAWLS and the flow still lands.
+    #     At a pinned speed the width multiplies straight into impossible flow (6 x 0.4 x 50 =
+    #     120 mm3/s); the bead is supposed to push the SPEED down, not the flow up.
+    #   · LOW-FLOW MATERIALS — TPU's 15.2 mm3/s at a pinned 50 needs a 0.51mm bead, narrower than
+    #     the 0.8 nozzle, so the material reads as unprintable. At the normal bead it just crawls.
+    #
+    # STATED PLAINLY, because a comment that overclaims a fix is the same defect as a page that
+    # oversells: this file was NOT one of the ones that pinned speed. It already went through a
+    # helper that took min(flow/area, cap), so the arithmetic here is unchanged and no archived
+    # command was ever refused by it. What changes is that the resolution now names the ONE
+    # function the corrected rule defines (machine.speed_for_flow), so this file cannot drift from
+    # the rest of the repo, and that a legitimate crawl is reported as a crawl rather than as a
+    # failure to reach 50.
+    _flow_req = flow
+    _want = flow / max(bead_w * layer_h, 1e-9)
+    speed = machine.speed_for_flow(flow, bead_w, layer_h)
+    # THE FEEDRATE IS AN INTEGER, so the speed the file DELIVERS is f/60 and not the float above.
+    # Everything downstream — the '; FLOW=' stamp R4 is checked against, the header, the reported
+    # time — is derived from the feedrate actually emitted, so the declared number is the commanded
+    # one rather than an aspiration that happens to sit beside it.
     f = round(speed * 60)
+    speed = f / 60.0
+    flow = speed * bead_w * layer_h
+    if _want > machine.DEFAULT_SPEED + 1e-9:
+        print(f"  ~ a {bead_w:g}x{layer_h:g} bead at the {machine.DEFAULT_SPEED:g} mm/s north star "
+              f"delivers {flow:.1f} mm3/s, not the {_flow_req:g} asked for, for {name}. The bead is "
+              f"too THIN to carry that flow under the ceiling — widen it to "
+              f"{machine.bead_for_flow(_flow_req, layer_h):.2f}mm rather than raise the speed.")
+    elif speed < machine.DEFAULT_SPEED - 0.05:
+        print(f"  ~ {speed:.1f} mm/s, below the {machine.DEFAULT_SPEED:g} mm/s north star, for "
+              f"{name}: a {bead_w:g}x{layer_h:g} bead delivers the full {flow:.1f} mm3/s only if "
+              f"the head crawls. That is the constraint overruling the default, not a fault.")
     layers = max(1, int(round(height / layer_h)))
     e_first = (first_w * press) / area
     travel_f = int(machine.MACHINE_MAX_SPEED * 60)   # inter-object travel: machine max
-    f_first = round(min(flow / (first_w * press), machine.FIRST_LAYER_SPEED) * 60)
+    # LAYER 1 RUNS AT THE SAME ONE SPEED, and carries the flow by WIDTH instead. Laid into a
+    # PRESS_HARD gap its cross-section is first_w * press, and --first-w defaults to
+    # bead_w * layer_h / PRESS_HARD precisely so that equals the body's mm2.
+    # A separate FIRST_LAYER_SPEED clamp here was a second speed knob in a print allowed exactly
+    # one. With the derived width it resolved to the body speed anyway, so it bought nothing; with
+    # an overridden --first-w it silently emitted TWO speeds (R3) instead of showing the actual
+    # defect, which is a first layer not carrying the body's flow (R4). Say that instead.
+    f_first = f
+    _first_area = first_w * press
+    if abs(_first_area - bead_w * layer_h) > 0.01 * bead_w * layer_h:
+        print(f"  ! --first-w {first_w:g} into a {press:g}mm gap is {_first_area:.3f} mm2 against "
+              f"the body's {bead_w * layer_h:.3f} — layer 1 would run at "
+              f"{_first_area / (bead_w * layer_h) * 100:.0f}% of the declared flow. "
+              f"{bead_w * layer_h / press:.2f}mm is the width that matches it.")
 
     # A region may be a fixed polygon OR a callable of layer fraction (see adapter()). Contours
     # are cached per distinct region so a 35-layer part does not re-buffer shapely 35 times.
@@ -450,7 +498,10 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     _rc = sorted({len(_rr) for _rr in _layer_rings.values()})
     _rcs = f"{_rc[0]}" if len(_rc) == 1 else f"{_rc[0]}-{_rc[-1]}"
     w(f"; {_rcs} contours, bead {bead_w}x{layer_h}, {layers} layers = {height}mm tall")
-    w(f"; {speed:.0f} mm/s at flow {flow:.1f} mm3/s (cap {machine.MAX_SPEED:.0f} mm/s)")
+    # SPEED IS REPORTED TO A DECIMAL BECAUSE IT IS NO LONGER ALWAYS 50. Rounding 22.9 to "23" in
+    # the one line a human reads hides the whole point of the correction: the value moved.
+    w(f"; {speed:.1f} mm/s at flow {flow:.1f} mm3/s "
+      f"(north star {machine.DEFAULT_SPEED:g} mm/s — lower is a constraint, never faster)")
     w("; HEADER_BLOCK_START")
     w(f"; total layer number: {layers}")
     w("; HEADER_BLOCK_END")
@@ -518,7 +569,11 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # its own header.
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={layer_h}")   # validate.py checks the Z ladder against this
-    w(f"; FLOW={flow}")   # R4 checks every move against this
+    # THE STAMP IS WHAT THE FILE DELIVERS, NOT WHAT WAS ASKED FOR. `flow` was re-derived above from
+    # the emitted feedrate and the emitted bead (f/60 * bead_w * layer_h), so R4 checks the moves
+    # against the flow those same moves actually carry. A stamp copied from the --flow request would
+    # declare an aspiration and quietly fail every move in a wide-bead or low-flow-material print.
+    w(f"; FLOW={flow:.4f}")   # R4 checks every move against this
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")
@@ -653,7 +708,12 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     _pys = (max(_pry) - min(_pry) + bead_w) if _pry else 0.0
     grams = e * area * 1.24 / 1000
     return "\n".join(L) + "\n", dict(rings=len(rings), layers=layers, grams=round(grams, 1),
-                                     speed=round(speed), flow=round(flow, 1),
+                                     # ONE DECIMAL, and the FEEDRATE ITSELF. Speed is no longer
+                                     # always 50, so an integer report turns 22.9 into "23"; and
+                                     # `feed` is handed out so the sequential splicer restores the
+                                     # exact F this body was written with instead of recomputing it
+                                     # from the request and risking a second speed in one print.
+                                     speed=round(speed, 1), feed=f, flow=round(flow, 1),
                                      mins=round(e / e_per_mm / speed / 60, 1),
                                      # SIZE MUST BE THE PART, NOT THE PART PLUS ITS BRIM.
                                      # xs/ys are taken from rings + base_extra, and base_extra IS
@@ -1598,7 +1658,12 @@ def emit_sequential(placed, a, counts, fn):
 
     safe_z = a.height + 2.0
     travel_f = int(machine.MACHINE_MAX_SPEED * 60)
-    print_f = round(machine.speed_for(a.flow, a.bead_w * a.layer_h) * 60)
+    # TAKE THE FEEDRATE FROM THE BODY THAT WAS ACTUALLY EMITTED, do not recompute it. This line
+    # re-derived speed from the REQUEST, so any difference between the request and what emit()
+    # resolved (the north star cap, or a fat bead crawling under it) would have restored a feedrate
+    # the bodies never used — a second speed in a print allowed exactly one, appearing only after
+    # the first inter-part travel.
+    print_f = bodies[0][2]["feed"]
     L = [head.rstrip("\n")]
     # STAMP IT. validate.py relaxes the no-travel rule ONLY for a file that declares itself
     # sequential, and replaces it with stricter checks (no extruding travel, every descent

@@ -148,10 +148,19 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     # flow against the target would also fire on the sub-0.1% shortfall the F floor introduces,
     # and a warning that cries on rounding noise is a warning people learn to skip.
     if _want_speed > machine.DEFAULT_SPEED * 1.001:
-        _fix = (f"widen --bead-w (still capped by stacking: {machine.BEAD_W}mm is 1.5x nozzle, "
-                f"and a wider bead lands TALLER than the Z step on a {int(round(width/layer_h))}"
-                f"-layer part and ploughs off the plate)"
-                if bead_w <= machine.BEAD_W + 1e-9 else "narrow --bead-w or raise --layer-h")
+        # THE ADVICE MUST POINT THE RIGHT WAY. With speed pinned at the ceiling, delivered flow is
+        # 50 x bead area, so closing the gap means MORE area — the previous text said "narrow
+        # --bead-w", which moves away from the target. And on a stacked part that road ends: past
+        # 1.5x nozzle wide / 0.75x tall the bead lands TALLER than the Z step, the part climbs into
+        # the nozzle and gets ploughed off the plate. When both are at the ceiling there is no fix,
+        # and saying so is better than naming a knob that cannot help.
+        _at_ceiling = (bead_w >= machine.BEAD_W - 1e-9 and layer_h >= machine.BEAD_H - 1e-9)
+        _fix = (f"nothing: {bead_w:g}x{layer_h:g} is already at the "
+                f"{machine.BEAD_W:g}x{machine.BEAD_H:g} stacking ceiling and a fatter bead lands "
+                f"taller than the Z step on a {int(round(width/layer_h))}-layer part — this IS the "
+                f"correct trade" if _at_ceiling else
+                f"raise the bead AREA to {flow_target/machine.DEFAULT_SPEED:.2f}mm2 via --bead-w / "
+                f"--layer-h, up to the {machine.BEAD_W:g}x{machine.BEAD_H:g} stacking ceiling")
         print(f"  ! flow target {flow_target:g} mm3/s would need "
               f"{_want_speed:.0f} mm/s at a {bead_w:g}x{layer_h:g} bead, and "
               f"{machine.DEFAULT_SPEED:g} is the north star CEILING — speed moves down from it, "

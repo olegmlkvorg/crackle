@@ -8,7 +8,7 @@ ratio is actually high (if it isn't, we're not making a web).
 
 Usage: python3 validate.py out/*.gcode
 """
-import re, sys, math, os
+import re, sys, math, os, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
 
@@ -690,6 +690,86 @@ def check(path):
     if _flw and not _decl_flow:
         problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "
                         "is unverifiable. Regenerate with a current generator.")
+    # R4b FILL RATIO — the property "constant flow" was only ever a proxy for.
+    # Raw flow equality and even deposition are the same thing ONLY when paths do not overlap.
+    # On a self-crossing curve they are not, and the difference destroyed a part:
+    #   * layer 1 at a 0.1 press carried the body's 1.20 mm2/mm. A 0.1 gap can hold that only if
+    #     paths sit ~12mm apart; rosetta strands sit ~2mm apart -> 6.75x over-fill.
+    #   * the body over-filled 1.72x because 91 self-crossings per layer stack two beads each.
+    # MEASURED ON THE PLATE by Oleg: five layers that should stand 2.50mm stood 4.80mm, and the
+    # part sheared off after four layers when the nozzle reached its own deposit.
+    # RAW FLOW EQUALITY PASSED THAT FILE. This is the check that refuses it.
+    #
+    # HOW FAR THIS IS ACTUALLY VALIDATED — read before trusting a number it prints:
+    #   * LAYER 1 (pressed): trustworthy in direction and roughly in size. It reads 2.40x on the
+    #     file that sheared off and 1.13x on the corrected one.
+    #   * BODY LAYERS: NOT validated. The model reads 1.13x where Oleg's ruler measured 1.72x
+    #     (five layers standing 4.80mm against a commanded 2.50mm). It under-predicts by ~1.5x,
+    #     because a union-of-footprints model does not capture how much height a bead-on-bead
+    #     crossing actually adds.
+    #   * I briefly claimed this guard "predicted Oleg's measurement". It did not. Its 1.98x was
+    #     LAYER 1 only, and his 1.92x was the whole part's height ratio -- two different
+    #     quantities that happened to land close. That is the measuring-the-easy-quantity error,
+    #     and it was published before being checked.
+    # So: use it to catch gross over-fill, do NOT use its body number to size flow. Flow
+    # corrections come from a ruler on a printed part until this model is calibrated against one.
+    if _lh:
+        _pl = collections.defaultdict(list)
+        _qx = _qy = None; _qe = 0.0; _qz = 0.0; _qin = False
+        for _r2 in _rules_txt.splitlines():
+            if 'BODY_START' in _r2: _qin = True
+            _c2 = _r2.split(';')[0].strip()
+            if not _c2.startswith(('G0', 'G1')): continue
+            _g2 = dict(re.findall(r'\b([XYEZ])(-?\d+(?:\.\d+)?)', _c2))
+            if 'Z' in _g2: _qz = float(_g2['Z'])
+            if _qin and 'X' in _g2 and 'E' in _g2 and _qx is not None:
+                _d2 = math.hypot(float(_g2['X']) - _qx, float(_g2['Y']) - _qy)
+                _de2 = float(_g2['E']) - _qe
+                if _d2 > 0.05 and _de2 > 0:
+                    _pl[round(_qz, 2)].append((float(_g2['X']), float(_g2['Y']), _de2))
+            if 'E' in _g2: _qe = float(_g2['E'])
+            if 'X' in _g2: _qx = float(_g2['X'])
+            if 'Y' in _g2: _qy = float(_g2['Y'])
+        _mbw = re.search(r'bead[ =]([\d.]+)', _rules_txt[:4000])
+        _bw2 = float(_mbw.group(1)) if _mbw else 2.0
+        _fa2 = math.pi * (1.75 / 2) ** 2
+        _ratios = []
+        for _zz, _rows in _pl.items():
+            if len(_rows) < 20: continue
+            _vol2 = sum(r[2] for r in _rows) * _fa2
+            _h2 = machine.PRESS_HARD if abs(_zz - machine.PRESS_HARD) < 1e-6 else _lh
+            # COVERAGE MUST USE THE WIDTH THE MATERIAL ACTUALLY LANDS AT, not the nominal bead.
+            # A pressed layer spreads: mm2-per-mm divided by the gap. At 1.20mm2 into 0.1mm that
+            # is 12mm wide, not 2mm. Dilating by the bead made a healthy nucleon read 25x, which
+            # is how a false positive gets a guard switched off. Measuring the deposit's own
+            # geometry instead.
+            _len2 = 0.0; _prev = None
+            for _rx, _ry, _ in _rows:
+                if _prev: _len2 += math.hypot(_rx - _prev[0], _ry - _prev[1])
+                _prev = (_rx, _ry)
+            _mm2 = _vol2 / max(_len2, 1e-9)
+            _spread = min(max(_mm2 / _h2, _bw2), 40.0)
+            _cl2 = max(_spread / 3.0, 0.3); _grid2 = set()
+            # int(), not round(): round(1.5)->2 dilated a 2.0mm bead into a 3.33mm footprint,
+            # over-stating coverage by 1.67x and under-stating every body layer's fill ratio.
+            _k2 = max(0, int(_spread / (2 * _cl2)))
+            for _rx, _ry, _ in _rows:
+                _gx2, _gy2 = int(_rx // _cl2), int(_ry // _cl2)
+                for _dx2 in range(-_k2, _k2 + 1):
+                    for _dy2 in range(-_k2, _k2 + 1): _grid2.add((_gx2 + _dx2, _gy2 + _dy2))
+            _cov2 = len(_grid2) * _cl2 * _cl2
+            _ratios.append((_zz, _vol2 / max(_cov2 * _h2, 1e-9)))
+        if _ratios:
+            _wz, _wr = max(_ratios, key=lambda t: t[1])
+            if _wr > 1.35:
+                problems.append(f"R4b fill ratio {_wr:.2f}x at Z{_wz} — this layer deposits "
+                                f"{_wr:.2f}x more than its own height can hold over the area it "
+                                f"covers. The surplus builds height until the nozzle reaches its "
+                                f"own deposit and shears the part off the plate. Overlapping "
+                                f"paths need LESS flow than a bead model predicts, not the same.")
+            else:
+                print(f"  fill ratio {_wr:.2f}x (worst layer, Z{_wz}) — 1.00 is exact")
+
     if _nlink:
         print(f"  {_nlink} declared LINK move(s) exempt from R4 (contour connectors, metered thin)")
     if _flw and _decl_flow:
