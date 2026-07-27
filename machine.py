@@ -334,12 +334,6 @@ def flow_for_duration(flow, minutes, label="", material="pla"):
               f"only the clock moves.")
         return _sus
     return flow
-    if minutes >= SUSTAINED_MINS and flow > _sus:
-        print(f"  ! flow {flow:g} mm3/s for {minutes:.0f} min of unbroken extrusion{label} — the "
-              f"K2 extruder driver over-heated and stalled at 48.6 mm3/s after 16 min (2026-07-26). "
-              f"Using {_sus:g}. Deposit per mm is unchanged; only the clock moves.")
-        return _sus
-    return flow
 
 
 def check_flow(flow, label=""):
@@ -751,17 +745,14 @@ TPU_TEMP = 200
 # Treating them as one entry is the same defect as sharing SHRINK between metal and bamboo: a number
 # that belongs to ONE material silently governing another.
 MATERIAL_TEMP = {"pla": TEMP, "pla-matte": 230, "petg": 240, "tpu": TPU_TEMP, "abs": 250}
-# pla-matte's 65 is MEASURED, not inherited — the only material entry here that is.
-#   55-65 at 230C, pressed 0.1, 15mm ribbon, spiral inward: 2.3 min, 57.4 mm3/s mean delivered,
-#          ZERO firmware stalls, and SILENT. Oleg: "test was perfecrt".
-#   70-90 under the identical conditions: the extruder CRACKED, by ear, with the firmware still
-#          reporting zero stalls and healthy flow.
-# So the BURST ceiling is between 65 and 70, and 65 is the highest figure actually demonstrated.
-# This is a BURST number over 2.3 minutes. It says nothing about a 20-minute part — see
-# SUSTAINED_FLOW, which came from a 16-minute failure and stays where it is until a soak moves it.
-# Kept in step with SUSTAINED_FLOW_BY_MATERIAL: pla-matte dropped 65 -> 60 when Oleg heard the
-# extruder crack on a real multi-minute part. Two tables disagreeing about the same filament is
-# how a stale number survives.
+# pla-matte's 60 has real provenance — the only entry here that does:
+#   55-65 burst ramp at 230C (2.3 min, 57.4 mm3/s mean delivered): SILENT. Oleg: "test was perfecrt".
+#   70-90 identical conditions: the extruder CRACKED, by ear, firmware reporting zero stalls.
+#   65 on a real multi-minute part: occasional slipping, by ear again — Oleg: "k2 crack
+#          ocasionally lets reduce flow by 5". Hence 60, not the 65 the burst ramp allowed.
+# A burst figure is not a working figure. Kept in step with SUSTAINED_FLOW_BY_MATERIAL (which
+# holds the same 60 with the full story) — two tables disagreeing about the same filament is
+# how a stale number survives, and the first version of THIS comment still said 65.
 MATERIAL_FLOW = {"pla": FLOW, "pla-matte": 60.0, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}
 
 

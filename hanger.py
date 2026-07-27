@@ -334,12 +334,16 @@ def main():
         print(f"  CLOSED ring for a {a.pole:.0f} mm pole -> modelled bore {_bore:.2f} mm "
               f"(+{2*machine.BORE_INSET_MM:.2f} bulge comp + {_slip:.2f} slip); printed bore ~"
               f"{_bore - 2*machine.BORE_INSET_MM:.2f} mm = a sliding fit")
-    _mod = bore_for(a.thread if a.style == "simple" else a.hole, a.bead_w)
-    _req = a.thread if a.style == "simple" else a.hole
+    # The pole style has no thread/hang hole — its only bore is the collar, reported above.
+    # Printing "hole: 5.0 mm wanted -> modelled 11.04" for it described a hole that does not
+    # exist in the part (review-confirmed as misleading).
     print(f"  hanger: {rmaxx-rminx:.0f} x {rmaxy-rminy:.0f} mm, {a.layers} layers = "
           f"{height:.2f} mm thick")
-    print(f"  hole: {_req:.1f} mm wanted -> modelled {_mod:.2f} mm "
-          f"(+{2*machine.BORE_INSET_MM:.2f} for bulge, measured twice)")
+    if a.style != "pole":
+        _mod = bore_for(a.thread if a.style == "simple" else a.hole, a.bead_w)
+        _req = a.thread if a.style == "simple" else a.hole
+        print(f"  hole: {_req:.1f} mm wanted -> modelled {_mod:.2f} mm "
+              f"(+{2*machine.BORE_INSET_MM:.2f} for bulge, measured twice)")
     print(f"  {a.bead_w:.2f}mm bead at {speed:.1f} mm/s -> {a.bead_w*a.layer_h*speed:.1f} mm3/s "
           f"on {a.material} ({a.printer})")
 

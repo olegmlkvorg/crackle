@@ -568,9 +568,10 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # Nothing about safety changes: TEMPERATURE_WAIT below still blocks until the plate is at
     # temperature, so layer 1 cannot start on a cold bed either way. This only reclaims the overlap.
     w(f"M140 S{bed}")
-    # Target the PROBE temperature first when homing. Setting the print temperature here and then
-    # asking M109 to wait for 150 is a no-op: the tip sails past 150 on its way to 210 and probes
-    # hot anyway. The full temperature is commanded after the probe, below.
+    # THE NOZZLE PROBES AT PRINT TEMPERATURE — R7, and the probe-at-150 experiment is REVERTED
+    # (commit 939fa86: "I got the direction wrong and it cost a first layer"). The nozzle grows
+    # DOWN when heated, so probing cold records Z zero high and the hot tip then eats into the
+    # commanded 0.1 first-layer gap. Full print temperature is set before G28, on purpose.
     w(f"M104 S{temp}")
     w("G90")
     # CLEAN NOZZLE BEFORE THE CALIBRATION TOUCH. Oleg, 2026-07-27: "also clean nozel before
@@ -1431,7 +1432,10 @@ def main():
                     help="0-255. 51 = 20%%, the PLA ceiling (machine.FAN_MAX). "
                          "Layer 1 always prints with the fan OFF regardless.")
     ap.add_argument("--aux", type=float, default=0.2)
-    ap.add_argument("--brim", type=int, default=4, help="brim rings on layer 1")
+    # NO BRIM UNLESS ASKED. Oleg, 2026-07-27: "also dont print brim uinless asked". Layer 1
+    # already over-extrudes into a 0.1mm gap and welds itself down; a default brim was material
+    # to cut off, not adhesion (review-confirmed inversion of the standing rule).
+    ap.add_argument("--brim", type=int, default=0, help="brim rings on layer 1; 0 = none (default)")
     ap.add_argument("--brim-gap", type=float, default=0.18,
                     help="mm of extra gap so the brim snaps off (0 = fused)")
     # BORE FIT. printed = model - 0.25 is CONFIRMED at ~6mm (the pulley bore is a perfect fit on a

@@ -6,13 +6,18 @@ or a wedge on a bamboo rod, and that **nobody computed cleavage**. Sockets were 
 compression perpendicular to grain (8-15 MPa). The mode that actually kills the joint is tension
 perpendicular to grain -- 2-4 MPa, lower at a node -- and it kills the PRINTED wall too, in hoop.
 
-This coupon answers it by experiment instead of by literature:
+This coupon is BUILT to answer it by experiment instead of by literature -- no coupon has been
+printed or pushed yet, so as of 2026-07-27 it has answered nothing:
 
-    a row of sockets, identical bore, wall thickness stepping 2 -> 8 beads.
+    a row of sockets, identical bore, wall thickness stepping 2 -> 6 beads by default
+    (--from-beads / --walls; the first draft of this line claimed 2 -> 8, which the defaults
+    never produced).
 
 Push a real bamboo rod into each. The thin ones split (printed wall fails in hoop) or split the
 bamboo (cleavage). The first one that survives is the minimum wall, measured on the real material
-with the real fit -- a number four structural analyses currently have to assume.
+with the real fit -- a number four structural analyses currently have to assume. NOTE: until
+2026-07-27 the coupons were silently WRONG for that job -- odd-bead walls printed with the middle
+bead missing (see solid.py contours()), a hidden void in exactly the wall being measured.
 
 Bore uses the MEASURED bamboo fit, not the metal shrink figure: STICK_FIT 0.70 on a 6.35 rod.
 That distinction already condemned ~21 parts once (see machine.py / solid.py notes).
