@@ -111,11 +111,16 @@ def main():
     w(f"; bucket {a.dia:.0f}x{a.height:.0f}, bead {bw:.2f}x{a.layer_h} at {speed:.1f} mm/s")
     w("M82")
     w(f"M140 S{machine.bed_for(a.material, a.printer):.0f}")
-    w(f"M104 S{machine.PROBE_TEMP}")
-    w(f"M109 S{machine.PROBE_TEMP}                  ; firm tip: probe metal, not a blob")
-    w("G28")
     w(f"M104 S{temp}")
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.BED_START_MIN.get(a.material,60)}")
+    w("G28")
+    # BED THRESHOLD SCALES WITH FOOTPRINT. Oleg's "you dont need to wait for 120 plate" was about
+    # a small part; this one is 200mm across -- 5.7x the rosetta's area and 5.7x the shrinkage
+    # force pulling its edges up. Starting a part this size on a 60C plate that is still climbing
+    # to 120 is asking the first layer to hold while the plate moves under it.
+    _bmin = machine.BED_START_MIN.get(a.material, 60)
+    if a.dia > 120:
+        _bmin = max(_bmin, min(machine.bed_for(a.material, a.printer) - 20, 100))
+    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={_bmin:.0f}")
     w(f"M109 S{temp}")
     w("M106 S51")
     w("G92 E0")

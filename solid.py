@@ -526,7 +526,7 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # Target the PROBE temperature first when homing. Setting the print temperature here and then
     # asking M109 to wait for 150 is a no-op: the tip sails past 150 on its way to 210 and probes
     # hot anyway. The full temperature is commanded after the probe, below.
-    w(f"M104 S{machine.PROBE_TEMP if home else temp}")
+    w(f"M104 S{temp}")
     w("G90")
     # CLEAN NOZZLE BEFORE THE CALIBRATION TOUCH. Oleg, 2026-07-27: "also clean nozel before
     # touching the middle fo calibration". G28 probes by touching the plate WITH THE NOZZLE, and
@@ -534,11 +534,15 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # whatever blob was on it went straight into the Z zero. Every layer height in the file
     # inherits that error, including the 0.1 press the whole first-layer technique depends on.
     # Probe at a temperature where PLA is firm and does not ooze; full heat comes after.
-    if home:
-        w(f"M109 S{machine.PROBE_TEMP}                     ; firm tip: probe metal, not a blob")
+    # PROBING AT A LOWER TEMPERATURE IS REVERTED. It was added today to answer "clean nozel
+    # before touching the middle fo calibration", and the very next print had ZERO adhesion.
+    # The mechanism is real and I got the direction wrong: a nozzle probed at 150 is SHORTER than
+    # at 230 by ~0.046 mm over the hotend's length, so Z zero is recorded high and the tip then
+    # grows down into the plate -- a 0.1 gap becomes ~0.054. Too tight to push 1.2 mm2/mm through,
+    # so the first layer lays little or nothing and nothing sticks. 46% of the gap is not a detail.
+    # The request stands and needs a MECHANICAL wipe, not a temperature change. Not guessed again
+    # until it can be tested against a part that is known to stick.
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
-    if home:
-        w(f"M104 S{temp}                          ; now bring it to print temperature")
     w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
