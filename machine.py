@@ -117,6 +117,30 @@ SUSTAINED_MINS = 8.0       # unbroken extrusion beyond this is a soak, not a bur
                            # stall came at 16 min; half that is the margin, not a second reading.
 
 
+# WHAT IS ACTUALLY KNOWN ABOUT FLOW ON THIS MACHINE, 2026-07-27. Read this before quoting a
+# number, because four different ones have been treated as "the" ceiling and three were wrong.
+#
+#   81.2  a spiral ramp at 230C. VOIDED — measured with a clog present or developing.
+#   55    the standing rule. Inherited, never re-measured on the current filament.
+#   48.6  SUSTAINED for 16 minutes at 210C -> the extruder DRIVER over-heated and stalled.
+#         This is the only number that ever came from a failure, and it set SUSTAINED_FLOW=27.
+#   70    commanded on a Moore lattice; DELIVERED 32.2. The lattice's mean segment is 0.292mm and
+#         reaching 58 mm/s from a corner needs 0.33mm, so the head never reached commanded speed
+#         on a single move. That run measured the SHAPE, not the hotend.
+#
+# THE THREE THINGS THAT MUST BE TRUE FOR A FLOW NUMBER TO MEAN ANYTHING, all learned the hard way:
+#   1. GEOMETRY THAT HOLDS SPEED. A spiral never turns; a lattice turns 199 times a second.
+#   2. PRESSED TO THE PLATE. A single-layer test at 0.4 lifts and curls, and measures curl.
+#      0.1 with the flow carried by WIDTH — 15mm at 90 mm3/s — is the technique, and the
+#      apparent over-extrusion is deliberate (Oleg: "do not worry of massive over extrusion,
+#      this is what we do").
+#   3. A DIRECTION THAT SEPARATES CAUSES. Ramping INWARD prints the peak first on a clean plate;
+#      ramping outward puts it last, after the hotend has soaked, so a failure there cannot be
+#      told apart from a heat-soak failure. That confusion cost a night.
+#
+# And the distinction the whole question turns on: SUSTAINED_FLOW is a FLOOR, not a ceiling. It
+# says "did not stall at 27", never "27 is the limit". Only a measurement can raise it.
+
 SOAK_OVERRIDE = False    # set True ONLY by a deliberate measurement, never by a part
 
 
