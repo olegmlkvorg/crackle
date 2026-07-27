@@ -737,6 +737,36 @@ def check(path):
     if _flw and not _decl_flow:
         problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "
                         "is unverifiable. Regenerate with a current generator.")
+    # R7 THE PROBE MUST TOUCH AT PRINT TEMPERATURE.
+    # G28 sets Z zero by touching the plate WITH THE NOZZLE, so the nozzle's length at that moment
+    # defines the gap for the whole print. A nozzle at 150 C is ~0.046 mm shorter than at 230 over
+    # the hotend's length; probe cold and the tip then grows DOWN into the plate, turning a
+    # commanded 0.1 mm first layer into ~0.054. That is 46% of the gap, and 1.2 mm2/mm will not go
+    # through it -- measured as ZERO adhesion on a bucket and ~10% scrap on a plate of hooks.
+    # I introduced that change and could not see it from the file, because the file still said
+    # Z0.100 and still metered full flow. Nothing was wrong with the artifact; the machine was
+    # being told to measure from the wrong place. So it is checked here.
+    _homes = [i for i, _l in enumerate(_lines) if _l.split(';')[0].strip() == 'G28']
+    if _homes:
+        _hot = None
+        for _l in _lines[:_homes[0]]:
+            _mt = re.match(r'M10[49] S(\d+)', _l.split(';')[0].strip())
+            if _mt:
+                _hot = int(_mt.group(1))
+        _mp = re.search(r'^; PRINT_TEMP=(\d+)', _rules_txt, re.M)
+        _printt = int(_mp.group(1)) if _mp else None
+        if _printt is None:
+            _after = [int(m.group(1)) for m in
+                      (re.match(r'M109 S(\d+)', _l.split(';')[0].strip()) for _l in _lines[_homes[0]:])
+                      if m]
+            _printt = max(_after) if _after else None
+        if _hot is not None and _printt is not None and _hot < _printt - 5:
+            problems.append(f"R7 probe temperature: G28 runs with the hotend commanded to {_hot}C "
+                            f"but the part prints at {_printt}C. The nozzle is shorter when it "
+                            f"probes, so Z zero is recorded high and the tip grows into the plate "
+                            f"-- roughly 0.046 mm per 80C, against a {machine.PRESS_HARD:g} mm "
+                            f"first layer. Probe at print temperature.")
+
     # R4b FILL RATIO — the property "constant flow" was only ever a proxy for.
     # Raw flow equality and even deposition are the same thing ONLY when paths do not overlap.
     # On a self-crossing curve they are not, and the difference destroyed a part:

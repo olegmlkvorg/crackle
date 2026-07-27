@@ -42,6 +42,72 @@ def rose(cx, cy, R_out, R_in, p=13, q=8, n=3, steps=4000):
     return pts
 
 
+def crossing_z(pts, bead_w, base, lift, skip=40, ramp=2.0, prior=None):
+    """Per-point Z: `base` normally, `lift` where the path crosses something already laid.
+
+    Oleg, 2026-07-27: "lets play z on intresections. 0.1 when no intersection and 0.5 while
+    crossin intersection (approximate)".
+
+    The rose crosses itself ~90 times a layer. At a crossing the nozzle is being asked to lay a
+    bead ON TOP of one already there, at the same Z -- so it ploughs through it, drags it, and
+    piles material exactly where the part is already tallest. Lifting over the crossing lets the
+    strand ride the one beneath it instead, which is what the nucleon's weld lift does.
+
+    A point counts as a crossing if a point laid EARLIER lies within one bead: earlier in this
+    stroke (more than `skip` indices back IN BOTH DIRECTIONS AROUND THE LOOP -- the rose is a
+    closed curve, so its last points sit on its first points by construction; that is the seam
+    every closed loop has, not a crossing, and lifting it built a 0.4mm mound exactly where the
+    rim circles start), or anywhere in `prior` -- strokes already laid in this layer, so the rim
+    rides over the rose tips it crosses instead of ploughing 13 of them per pass.
+
+    ONLY THE LATER STRAND LIFTS. The first version lifted both sides of each crossing, but at
+    the moment the earlier strand is laid there is nothing under it -- a lifted bead there is a
+    line floating over air, which is exactly what Oleg banned ("we dont want floaring lines").
+
+    Ramped over `ramp` mm so the Z move is not a step the machine has to absorb in one segment.
+    """
+    n = len(pts)
+    cell = max(bead_w, 0.5)
+    pgrid = {}
+    for px, py in (prior or ()):
+        pgrid.setdefault((int(px // cell), int(py // cell)), []).append((px, py))
+    grid = {}
+    hit = [False] * n
+    for i, (x, y) in enumerate(pts):
+        gx, gy = int(x // cell), int(y // cell)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for px, py in pgrid.get((gx + dx, gy + dy), ()):
+                    # prior-stroke material: any proximity counts, no seam to excuse
+                    if (x - px) ** 2 + (y - py) ** 2 < bead_w ** 2:
+                        hit[i] = True
+                        break
+                if not hit[i]:
+                    for j in grid.get((gx + dx, gy + dy), ()):
+                        if min(i - j, n - 1 - (i - j)) > skip \
+                                and (x - pts[j][0]) ** 2 + (y - pts[j][1]) ** 2 < bead_w ** 2:
+                            hit[i] = True
+                            break
+                if hit[i]:
+                    break
+            if hit[i]:
+                break
+        grid.setdefault((gx, gy), []).append(i)
+    # ramp: distance along the path to the nearest crossing
+    d = [0.0] * n
+    for i in range(1, n):
+        d[i] = d[i - 1] + math.hypot(pts[i][0] - pts[i-1][0], pts[i][1] - pts[i-1][1])
+    near = [1e9] * n
+    for i in range(n):
+        if hit[i]:
+            near[i] = 0.0
+    for i in range(1, n):
+        near[i] = min(near[i], near[i-1] + (d[i] - d[i-1]))
+    for i in range(n - 2, -1, -1):
+        near[i] = min(near[i], near[i+1] + (d[i+1] - d[i]))
+    return [base + (lift - base) * max(0.0, 1.0 - near[i] / ramp) for i in range(n)], sum(hit)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -85,6 +151,7 @@ def main():
     # Klipper drains its lookahead and freezes with no error at all. The floor is the only place
     # this bites, and it is the same fix the nucleon needed.
     rose_pts = machine.decimate(rose_pts, machine.CONSTANT_SPEED / 300.0 * 1.2)
+    rose_z, n_cross = crossing_z(rose_pts, bw, machine.PRESS_HARD, 0.5)
     floor = unary_union([rim_ring, LineString(rose_pts).buffer(bw / 2.0, resolution=8)])
 
     n_layers = int(round((a.height - machine.PRESS_HARD) / a.layer_h)) + 1
@@ -117,10 +184,17 @@ def main():
     # a small part; this one is 200mm across -- 5.7x the rosetta's area and 5.7x the shrinkage
     # force pulling its edges up. Starting a part this size on a 60C plate that is still climbing
     # to 120 is asking the first layer to hold while the plate moves under it.
-    _bmin = machine.BED_START_MIN.get(a.material, 60)
-    if a.dia > 120:
-        _bmin = max(_bmin, min(machine.bed_for(a.material, a.printer) - 20, 100))
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={_bmin:.0f}")
+    # Oleg, 2026-07-27: "for the bucket it was good start, lets try bed 120 there." So the
+    # bucket waits for the FULL bed target, not a floor under it.
+    _bmin = machine.bed_for(a.material, a.printer)
+    # M190 BLOCKS, AND CANNOT BE MISPARSED. The previous line was
+    #     TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM=100
+    # and the print started at 78 C anyway: Klipper does not match the QUOTED sensor name, so the
+    # wait was silently skipped. A guard that is silently skipped is worse than none, and this one
+    # was invisible because the line was right there in the file.
+    # M190 waits, then the target is raised again so the plate keeps climbing to its real setpoint.
+    w(f"M190 S{_bmin:.0f}                          ; BLOCKING: do not start below this")
+    w(f"M140 S{machine.bed_for(a.material, a.printer):.0f}   ; keep climbing to the real target")
     w(f"M109 S{temp}")
     w("M106 S51")
     w("G92 E0")
@@ -135,12 +209,13 @@ def main():
     # WITHOUT THIS MARKER several checks silently do not run. validate.py said so outright:
     # "BODY NEVER STARTED ... the Z-plough, backwards-extrusion and off-bed checks NEVER RAN.
     # This file is unchecked, not clean." An unrun check reported as a pass is the worse failure.
+    w(f"; ARCH_LIFT={0.5 - machine.PRESS_HARD:.3f}")   # Z varies WITHIN the floor layers, by design
     w("; BODY_START")
 
     e = 0.0
     pos = [None]
 
-    def stroke(pts, z, first):
+    def stroke(pts, z, first, zs=None):
         """Emit one continuous stroke, metering E from the REAL distance travelled.
 
         The first version set the pen position to pts[0] without accounting for where the head
@@ -155,18 +230,22 @@ def main():
         w(f"G1 F1800 Z{z:.3f}")
         qx, qy = pos[0]
         d0 = math.hypot(pts[0][0] - qx, pts[0][1] - qy)
+        # zs is layer-relative (PRESS_HARD..lift); the layer offset must be applied here exactly
+        # as it is in the loop below, or a layer-2 gap-close would extrude down at layer-1 Z
+        z0 = (z - machine.PRESS_HARD + zs[0]) if zs else z
         if d0 > 0.02:                      # close the gap AS EXTRUSION, properly metered
             e += d0 * e_per_mm
-            w(f"G1 F{f} X{pts[0][0]:.3f} Y{pts[0][1]:.3f} Z{z:.3f} E{e:.5f}")
+            w(f"G1 F{f} X{pts[0][0]:.3f} Y{pts[0][1]:.3f} Z{z0:.3f} E{e:.5f}")
         else:
             w(f"G1 F{f}")
         qx, qy = pts[0]
-        for X, Y in pts[1:]:
+        for i, (X, Y) in enumerate(pts[1:], 1):
             d = math.hypot(X - qx, Y - qy)
             if d < 0.02:
                 continue
             e += d * e_per_mm
-            w(f"G1 X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}")
+            zz = (z - machine.PRESS_HARD + zs[i]) if zs else z
+            w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f}")
             qx, qy = X, Y
         last[0] = (qx, qy)
         pos[0] = (qx, qy)
@@ -194,10 +273,17 @@ def main():
     for k in range(n_layers):
         z = machine.PRESS_HARD + k * a.layer_h
         if k < a.floor_layers:
-            # floor: the rose, then the rim ring passes, all at full flow
-            stroke(rose_pts, z, first); first = False
+            # floor: the rose, then the rim ring passes, all at full flow.
+            # EVERY stroke lifts over material laid EARLIER IN THIS LAYER: the rose over its own
+            # crossings, each rim pass over the rose tips it crosses (the innermost rim runs
+            # exactly through all 13 of them) and over any earlier pass it grazes.
+            stroke(rose_pts, z, first, zs=rose_z); first = False
+            prior = list(rose_pts)
             for j in range(rim_passes):
-                stroke(circle(R - bw / 2 - j * bw), z, False)
+                cpts = circle(R - bw / 2 - j * bw)
+                cz, _ = crossing_z(cpts, bw, machine.PRESS_HARD, 0.5, prior=prior)
+                stroke(cpts, z, False, zs=cz)
+                prior += cpts
         elif k < a.floor_layers + a.fillet:
             # fillet: step from the full rim down to one bead so the wall grows out of the floor
             kk = (k - a.floor_layers) / max(a.fillet - 1, 1)
@@ -211,6 +297,8 @@ def main():
     w(f"G1 Z{a.height + 30:.1f} F900")
     g = "\n".join(x for x in L if x) + "\n"
 
+    print(f"  {n_cross} of {len(rose_pts)} rose points ride over a crossing "
+          f"(Z {machine.PRESS_HARD} -> 0.5)")
     print(f"  {n_layers} layers; floor {a.floor_layers}, fillet {a.fillet} "
           f"({rim_passes} -> 1 bead), then a single-bead wall")
     grams = e * A * 1.24 / 1000.0

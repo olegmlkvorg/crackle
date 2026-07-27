@@ -455,7 +455,10 @@ def flow_for(material, requested, label=""):
 # The upper guard STAYS and is the part that matters: it is what stops a file meant for a 45C TPU
 # plate printing on a 98C one left hot by the previous job, which welds it down. Only the floor
 # moves — the bed goes on climbing to target while layer 1 prints.
-BED_START_MIN = {"pla": 60, "pla-matte": 60, "petg": 60, "tpu": 35, "abs": 90}
+# Oleg, 2026-07-27: "ok lets not start with bed below 100". Not a per-material preference and
+# not scaled by part size -- a floor. His earlier "you dont need to wait for 120 plate" set the
+# ceiling on waiting; this sets the floor on starting.
+BED_START_MIN = {"pla": 100, "pla-matte": 100, "petg": 100, "tpu": 35, "abs": 100}
 
 
 def bed_start(material, bed):

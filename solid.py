@@ -543,7 +543,8 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     # The request stands and needs a MECHANICAL wipe, not a temperature change. Not guessed again
     # until it can be tested against a part that is known to stick.
     w("G28" if home else "; NO HOME — assumes the machine is ALREADY homed; push.py verifies")
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
+    w(f"M190 S{machine.BED_START_MIN.get(material, 100)}                     ; BLOCKING bed floor")
+    w(f"M140 S{bed:.0f}")
     w(f"M109 S{temp}")
     w("M204 S8000")
     # FAN OFF FOR LAYER 1, CLAMPED BY MATERIAL AFTER. Oleg: "fans for printing pla should be only
