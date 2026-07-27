@@ -119,8 +119,13 @@ def bore_ratio(a, bore_d, fit=0.70, N=3, bead_w=1.2, speed=None):
     # layers, which are squished hardest and bulge most. The true steady-state inset is probably
     # smaller, which means this errs toward a LOOSER hole. That is the safe direction: a loose
     # bore can be shimmed or heat-formed onto the shaft, a tight one is scrap.
-    BORE_INSET_PER_BEAD = 1.373
-    target = (bore_d + fit) / 2.0 + bead_w * BORE_INSET_PER_BEAD
+    #
+    # THE PER-BEAD MODEL (1.373 x bead_w, the 2.978/2.17 above) WAS WITHDRAWN when a second
+    # measurement landed: the inset is ~3.02mm ABSOLUTE (machine.BORE_INSET_MM, mean of two),
+    # not proportional to bead width -- there is no evidence the bulge scales with the bead, and
+    # every other bore in the codebase already sizes from the absolute number. At the 2.17 bead
+    # both models agree within 0.04mm; anywhere else the proportional one drifts (review-confirmed).
+    target = (bore_d + fit) / 2.0 + machine.BORE_INSET_MM
     lo, hi = 0.05, 0.60
     for _ in range(48):
         mid = (lo + hi) / 2.0
