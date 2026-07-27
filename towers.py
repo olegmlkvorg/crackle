@@ -194,37 +194,58 @@ def main():
         nxt = (k + 1) % N
         if min(done) >= laps:
             break
-        off = OFFS[rot % 3]
+        # THREE CONNECTIONS PER LEVEL — Oleg, after v2 printed well: "lets try 3 connections
+        # per level. 5up other back other 5up continue so". The weave per gap: fly DOWN on the
+        # front line, rim-walk the lower tower, climb BACK up the center line (the ascending
+        # strand lands on the taller tower's exposed rim top — the nozzle tip grazes only the
+        # rim corner on approach), rim-walk the top, fly DOWN again on the back line. Ends on
+        # the lower tower, which then takes its 5 laps.
         tx, ty = centres[k]; ox, oy = centres[nxt]
         du = math.hypot(ox - tx, oy - ty)
         ux, uy = (ox - tx) / du, (oy - ty) / du
         px_, py_ = -uy, ux
-        launch = (tx + r_t*(ux*math.cos(off) + px_*math.sin(off)),
-                  ty + r_t*(uy*math.cos(off) + py_*math.sin(off)))
-        land = (ox + r_t*(-ux*math.cos(off) + px_*math.sin(off)),
-                oy + r_t*(-uy*math.cos(off) + py_*math.sin(off)))
-        # rim walk to the launch point, extruded, level on this tower's fresh top
-        aw0 = math.atan2(qy - ty, qx - tx)
-        aw1 = math.atan2(launch[1] - ty, launch[0] - tx)
-        daw = (aw1 - aw0 + math.pi) % (2*math.pi) - math.pi   # shortest way round
-        steps = max(1, int(abs(daw) * r_t / seg))
-        for i in range(1, steps + 1):
-            aa = aw0 + daw * i / steps
-            X, Y = tx + r_t*math.cos(aa), ty + r_t*math.sin(aa)
-            d = math.hypot(X - qx, Y - qy)
-            if d < 0.02:
-                continue
-            e += d * e_per_mm
-            w(f"G1 X{X:.3f} Y{Y:.3f} Z{qz:.3f} E{e:.5f}   ; rim walk to launch")
-            qx, qy = X, Y
-        # the flight: descending to the next tower's current top, flow never stopping
-        d3 = math.hypot(land[0] - qx, land[1] - qy, z[nxt] - qz)
-        e += d3 * e_per_mm
-        w(f"G1 X{land[0]:.3f} Y{land[1]:.3f} Z{z[nxt]:.3f} E{e:.5f}   ; BRIDGE "
-          f"{('front','center','back')[rot % 3]}, drops {qz - z[nxt]:.1f}")
-        n_bridge += 1
-        qx, qy, qz = land[0], land[1], z[nxt]
-        start_at[nxt] = land
+
+        def a_pt(off):
+            return (tx + r_t*(ux*math.cos(off) + px_*math.sin(off)),
+                    ty + r_t*(uy*math.cos(off) + py_*math.sin(off)))
+
+        def b_pt(off):
+            return (ox + r_t*(-ux*math.cos(off) + px_*math.sin(off)),
+                    oy + r_t*(-uy*math.cos(off) + py_*math.sin(off)))
+
+        def rim_walk(cx_, cy_, to, zlvl):
+            nonlocal e, qx, qy, qz
+            aw0 = math.atan2(qy - cy_, qx - cx_)
+            aw1 = math.atan2(to[1] - cy_, to[0] - cx_)
+            daw = (aw1 - aw0 + math.pi) % (2*math.pi) - math.pi
+            steps = max(1, int(abs(daw) * r_t / seg))
+            for i in range(1, steps + 1):
+                aa = aw0 + daw * i / steps
+                X, Y = cx_ + r_t*math.cos(aa), cy_ + r_t*math.sin(aa)
+                d = math.hypot(X - qx, Y - qy)
+                if d < 0.02:
+                    continue
+                e += d * e_per_mm
+                w(f"G1 X{X:.3f} Y{Y:.3f} Z{zlvl:.3f} E{e:.5f}   ; rim walk")
+                qx, qy, qz = X, Y, zlvl
+
+        def flight(to, zto, tag):
+            nonlocal e, qx, qy, qz, n_bridge
+            d3 = math.hypot(to[0] - qx, to[1] - qy, zto - qz)
+            e += d3 * e_per_mm
+            w(f"G1 X{to[0]:.3f} Y{to[1]:.3f} Z{zto:.3f} E{e:.5f}   ; BRIDGE {tag}, "
+              f"{'drops' if zto < qz else 'CLIMBS'} {abs(qz - zto):.1f}")
+            n_bridge += 1
+            qx, qy, qz = to[0], to[1], zto
+
+        FR, CE, BA = math.pi/2, 0.0, -math.pi/2
+        rim_walk(tx, ty, a_pt(FR), z[k])          # to the front launch, on A's top
+        flight(b_pt(FR), z[nxt], "front")          # down
+        rim_walk(ox, oy, b_pt(CE), z[nxt])         # along B's top rim
+        flight(a_pt(CE), z[k], "center")           # back UP to A's rim top
+        rim_walk(tx, ty, a_pt(BA), z[k])           # along A's top rim
+        flight(b_pt(BA), z[nxt], "back")           # down again — ends on B
+        start_at[nxt] = b_pt(BA)
         if nxt == 0:
             rot += 1
         k = nxt
