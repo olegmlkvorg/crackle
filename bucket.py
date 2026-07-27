@@ -170,10 +170,16 @@ def main():
                     help="closing radius for the rose envelope, mm — smallest that leaves one "
                          "clean ring; below ~10 the envelope grows necks and holes")
     ap.add_argument("--wave-amp", type=float, default=2.4,
-                    help="wave height H, mm — each lap climbs H + layer_h")
+                    help="wave height H, mm — each lap climbs H + land-gap")
     ap.add_argument("--waves", type=int, default=0,
                     help="whole waves per lap (a half wave is added for the landing stagger); "
                          "0 = derive the most waves the Z axis's speed budget allows")
+    ap.add_argument("--land-gap", type=float, default=None,
+                    help="landing gap onto the strand below, mm; default = layer height. "
+                         "0.3 = pressed landing (the bond-matrix knob)")
+    ap.add_argument("--speed", type=float, default=None,
+                    help="head speed cap mm/s, ONE speed for the whole print — slow buys the "
+                         "throws air time to freeze (bond matrix ran at 10)")
     ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--layer-h", type=float, default=0.6)
@@ -186,6 +192,9 @@ def main():
     a.flow = a.flow or machine.flow_cap(a.material, a.printer)
     a.bead_w = a.bead_w or machine.bead_for_flow(a.flow, a.layer_h)
     speed = machine.speed_for_flow(a.flow, a.bead_w, a.layer_h)
+    if a.speed:
+        speed = min(speed, a.speed)        # delivered flow follows the speed down; E/mm fixed
+    a.land_gap = a.land_gap if a.land_gap is not None else a.layer_h
     temp = machine.temp_for(a.material)
     bw = a.bead_w
     lh = a.layer_h
@@ -235,8 +244,15 @@ def main():
         m_waves = a.waves
     else:
         zv_bud = 0.8 * machine.MAX_Z_V
-        slope_star = zv_bud / math.sqrt(max(speed * speed - zv_bud * zv_bud, 1e-9))
-        m_waves = max(3, int(Lw / (H * math.pi / (0.6 * slope_star)) - 0.5))
+        if speed <= zv_bud:
+            # the head is slower than the Z budget: Z can follow ANY slope, so the budget no
+            # longer picks a wavelength — without this branch the derivation divided by ~zero
+            # and asked for 37 MILLION waves per lap. λ=20mm is CHOSEN (matrix-informed), not
+            # derived, when speed frees the constraint.
+            m_waves = max(3, int(Lw / 20.0))
+        else:
+            slope_star = zv_bud / math.sqrt(max(speed * speed - zv_bud * zv_bud, 1e-9))
+            m_waves = max(3, int(Lw / (H * math.pi / (0.6 * slope_star)) - 0.5))
     lam = Lw / (m_waves + 0.5)
     slope = H * math.pi / (0.6 * lam)
     zv = slope * speed / math.sqrt(1 + slope * slope)
@@ -339,8 +355,12 @@ def main():
             # there is no honest marker to write; the gap-close carries the whole transition.
             if qz <= z + 1e-9:
                 w(f"G1 F1800 Z{z:.3f}")
+                qz = max(qz, z)
             if d0 > 0.02:                  # close the gap AS EXTRUSION, properly metered
-                e += d0 * e_per_mm
+                # ON 3D LENGTH: a gap-close onto a LIFTED seam start is 87% vertical (dxy
+                # 0.055, dz 0.4); metered on XY it delivered 8.2 of 60 mm3/s — five starved
+                # moves per bucket, one per floor layer, invisible until R4 went 3D.
+                e += math.hypot(d0, z0 - qz) * e_per_mm
                 w(f"G1 F{f} X{pts[0][0]:.3f} Y{pts[0][1]:.3f} Z{z0:.3f} E{e:.5f}")
             else:
                 if z0 > max(qz, z) + 1e-9:
@@ -352,7 +372,7 @@ def main():
             # into the strand it just laid — validate.py caught 69 of those. Carry the descent
             # INSIDE the extruding gap-close instead: off the lifted strand, down across the
             # gap, landing on the new stroke's virgin start.
-            e += d0 * e_per_mm
+            e += math.hypot(d0, z0 - qz) * e_per_mm
             w(f"G1 F{f} X{pts[0][0]:.3f} Y{pts[0][1]:.3f} Z{z0:.3f} E{e:.5f}")
         else:
             # descending with no gap to carry it: ramp down along the new path at the same
@@ -367,10 +387,11 @@ def main():
             if d < 0.02:
                 continue
             cum += d
-            e += d * e_per_mm
+            zz_prev = zz
             zz = (base + zs[i]) if zs else z
             if ceil is not None:
                 zz = max(zz, ceil - 0.2 * cum)
+            e += math.hypot(d, zz - zz_prev) * e_per_mm   # 3D length: lift ramps carry flow too
             w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f}")
             qx, qy = X, Y
         last[0] = (qx, qy)
@@ -401,15 +422,22 @@ def main():
 
     # ---- WALL: throw-and-land wave helix, single bead, strict ----
     # Landings weld along a SEGMENT (0.2*lambda), not at a point — the point-tangency sinusoid
-    # failed on the plate (see the module docstring for Oleg's field correction). LAND+RISE =
-    # exactly half a wavelength is load-bearing: the half-wave stagger then maps every landing
-    # of lap k+1 onto a TOP of lap k for its full length,
-    #     z(t+L) - z(t) = (H + lh) + H*(prof(x+1/2) - prof(x))  =  lh on every landing,
-    # and never less anywhere (prof differences are bounded by [-1, 0] there). The climb
-    # (H+lh)*t/L is a continuous helix — a per-lap step materializes the whole climb in one
-    # 0.25mm segment at the seam (v1's 67 near-vertical moves).
+    # failed on the plate. LAND+RISE = exactly half a wavelength is load-bearing: the half-wave
+    # stagger maps every landing of lap k+1 onto a TOP of lap k for its full length.
+    #
+    # THE FIRST WAVE LAP RAMPS ITS AMPLITUDE 0->H WITH ITS LANDINGS PINNED TO THE BASE. The v2
+    # constant-amplitude climb made lap 1's landings lift linearly off the floor — welded at
+    # the lap's start, a full climb in the air by its end: a wall founded on one attachment
+    # point, the likeliest mechanism of the h60 failure (Oleg: "3 layers at least since first
+    # one is flat" is what exposed it). Construction, exact at every seam and landing:
+    #     z(t) = zbase + gap*t/L + R(i) + A(t)*prof(x)
+    # A = H*(u/L) on lap 1, H after; R(i) accumulates each finished lap's amplitude at ring
+    # position i, so a landing sits exactly `gap` above the top below it, INCLUDING over the
+    # ramp; the per-lap gap is a continuous tilt, so lap seams are continuous.
     # top floor layer's Z; with no floor, the pressed anchor lap at PRESS_HARD plays that role
     z_ft = machine.PRESS_HARD + (max(a.floor_layers, 1) - 1) * lh
+    gap = a.land_gap
+    zbase = z_ft + gap
     wall = rotate_to(wall_ring, last[0])
     n_ring = len(wall)
     ds = Lw / n_ring
@@ -426,29 +454,33 @@ def main():
         return 0.5 * (1.0 + math.cos(math.pi * (x - 0.7) / 0.3))
 
     # END ON A LANDING: an even lap count finishes the strand welded onto a top, not mid-air.
-    # No hem, no taper — the rim is wavy, which is the construction showing honestly. (A taper
-    # is where v1 grew its plough regime; the landing map above only holds at constant H.)
-    K = int((a.height - z_ft - lh - H) // (H + lh))
+    # No hem, no taper — the rim is wavy, which is the construction showing honestly.
+    # Final landing level after K laps = zbase + gap*K + H*(K-1)  (lap 1 contributes no H).
+    K = int((a.height - zbase + H) // (H + gap))
     if K % 2:
         K -= 1
     if K < 2:
         raise SystemExit(f"height {a.height:g} leaves no room for a wave wall over a "
                          f"{z_ft:g}mm floor at H={H:g}")
     w(f"; WALL_START — throw-and-land helix: land {0.2*lam:.1f}mm welded, throw "
-      f"{0.8*lam:.1f}mm airborne, climb {H+lh:g}/lap, {K} laps")
+      f"{0.8*lam:.1f}mm airborne, gap {gap:g}, climb {H+gap:g}/lap after the ramp lap, {K} laps")
     # THE CLIMB ONTO THE WALL IS A LAYER STEP, NOT AN EXTRUDING MOVE. Without this bare-Z the
-    # wave's first point carries the 0.6 rise inside a 0.25mm segment — one move at 156 mm3/s
-    # per XY-mm, an R4 FAIL (caught by validate on the floorless test, present since v2).
-    w(f"G1 F1800 Z{z_ft + lh:.3f}")
+    # wave's first point carries the rise inside a 0.25mm segment (156 mm3/s per XY-mm, R4).
+    w(f"G1 F1800 Z{zbase:.3f}")
     qx, qy, qz = pos[0]
-    qz = z_ft + lh
+    qz = zbase
     t = 0.0
     started = False
+    Rlift = [0.0] * n_ring
     for lap in range(K):
+        u = 0.0
+        Acur = [0.0] * n_ring
         for i in range(n_ring):
             X, Y = wall[i]
+            A = H * min(u / Lw, 1.0) if lap == 0 else H
+            Acur[i] = A
             x = ((m_waves + 0.5) * t / Lw) % 1.0
-            Z = z_ft + lh + (H + lh) * t / Lw + H * prof(x)
+            Z = zbase + gap * t / Lw + Rlift[i] + A * prof(x)
             dxy = math.hypot(X - qx, Y - qy)
             if dxy > 0.02:
                 d3 = math.hypot(dxy, Z - qz)   # E on TRUE 3D length: constant flow on ramps
@@ -457,8 +489,11 @@ def main():
                 started = True
                 qx, qy, qz = X, Y, Z
             t += ds
+            u += ds
+        for i in range(n_ring):
+            Rlift[i] += Acur[i]
     revs = K
-    mid = z_ft + lh + (H + lh) * K         # final landing level = top of the wall's welds
+    mid = zbase + gap * K + H * (K - 1)    # final landing level = top of the wall's welds
 
     w("M107"); w("M104 S0"); w("M140 S0")
     w(f"G0 Z{mid + 30:.1f} F900")

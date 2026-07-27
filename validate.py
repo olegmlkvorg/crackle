@@ -352,7 +352,7 @@ def check(path):
     # stayed invisible. So this one fires on ANY single move.
     _fa = math.pi * (1.75 / 2) ** 2
     _z2 = 0.0; _px2 = _py2 = None; _pe2 = 0.0; _starved = []
-    _nominal = None
+    _xall = []
     # THE PRIME IS DELIBERATELY HEAVY AND MUST NOT SET THE YARDSTICK.
     # Taking the nominal bead from the running maximum let the prime line (metered several times the
     # body bead, on purpose) define it — so on a single-layer file every real move measured as
@@ -378,11 +378,20 @@ def check(path):
             _d = math.dist((_px2, _py2), (_nx, _ny))
             if _d > 0.05:
                 _x = (_ne - _pe2) * _fa / _d
-                if _inbody and (_nominal is None or _x > _nominal): _nominal = _x
-                if _nominal and _x < 0.25 * _nominal and _d > 2.0:
-                    _starved.append((_i + 1, _d, _x, _nominal))
+                if _inbody:
+                    _xall.append((_i + 1, _d, _x))
         if _nx is not None: _px2, _py2 = _nx, _ny
         _pe2 = max(_pe2, _ne)
+    # THE FILE'S OWN BEAD IS THE MEDIAN, NOT THE MAX. The nominal used to be a running max of
+    # mm2-per-XY-mm, and a single legitimate near-vertical move (a gap-close onto a lifted seam:
+    # 0.4mm of Z over 0.055mm of XY = 8.8mm2/mm) inflated it 7x — then EVERY normal move in the
+    # file read "under a quarter of the bead" and a correct file failed with 15 phantom starved
+    # moves. The median is immune to the tails on both sides; the real starved threads this
+    # guard exists for (a 0.02mm2 drag) sit far below a quarter of any sane median.
+    if _xall:
+        _med = sorted(x for _, _, x in _xall)[len(_xall) // 2]
+        _starved = [(_i2, _d2, _x2, _med) for (_i2, _d2, _x2) in _xall
+                    if _x2 < 0.25 * _med and _d2 > 2.0]
     # thin inter-tile links are deliberate (hilbert --tile) and are stamped; everything else is not
     # Deliberate thin links are TAGGED in the source that emits them; anything untagged that is
     # starved is a bug. Tagging beats loosening the threshold — a looser threshold would have let
