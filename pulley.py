@@ -404,6 +404,10 @@ def emit(od, width, bore_d, flat_depth, crown, flange, spokes, bead_w, layer_h, 
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={layer_h}")
     w(f"; FLOW={flow:.3f}")
+    _der = machine.flow_derate_stamp(material, printer, flow)
+    if _der:
+        w(_der)   # R8: slow is allowed, silent slow is not
+        print("  " + _der.lstrip("; "))
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; PRINTER={printer}")
     w("; BODY_START")

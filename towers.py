@@ -31,10 +31,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--towers", type=int, default=4)
-    ap.add_argument("--tower-d", type=float, default=14.0, help="tower diameter, mm")
+    ap.add_argument("--tower-d", type=float, default=10.0,
+                    help="tower diameter, mm — Oleg: 'towers does not need to be this thick'")
     ap.add_argument("--ring-r", type=float, default=30.0, help="tower centres sit on this radius")
     ap.add_argument("--height", type=float, default=35.0)
-    ap.add_argument("--rung-every", type=int, default=10, help="bridge rung every N laps")
+    ap.add_argument("--laps-per-visit", type=int, default=5,
+                    help="helix laps per tower visit before the flowing transit to the next")
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--layer-h", type=float, default=0.6)
@@ -78,7 +80,7 @@ def main():
     w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     w(f"; SEQUENTIAL={N} towers rising in rotation, lifted hops between")
     w("; ARGV: " + " ".join(sys.argv))
-    w(f"; towers x{N} d{a.tower_d:g} on r{R:g}, h{a.height:g}, rung every {a.rung_every} laps")
+    w(f"; towers x{N} d{a.tower_d:g} on r{R:g}, h{a.height:g}, {a.laps_per_visit} laps/visit, bridges front/center/back")
     w(f"; ARCH_LIFT={lh:.3f}")   # helical: Z varies within a lap by design
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {laps}"); w("; HEADER_BLOCK_END")
     w("M82")
@@ -101,10 +103,12 @@ def main():
     e = 0.0
     qx = qy = qz = None
 
-    def circle_pts(k, radius, start_toward):
+    def circle_pts(k, radius, start_xy=None):
+        """Ring on tower k starting at the angle of start_xy (or facing the next tower)."""
         tx, ty = centres[k]
-        sx, sy = rim_point(k, start_toward) if radius == r_t else (tx + radius, ty)
-        a0 = math.atan2(sy - ty, sx - tx)
+        if start_xy is None:
+            start_xy = rim_point(k, (k+1) % N)
+        a0 = math.atan2(start_xy[1] - ty, start_xy[0] - tx)
         return [(tx + radius*math.cos(a0 + 2*math.pi*i/n_lap),
                  ty + radius*math.sin(a0 + 2*math.pi*i/n_lap)) for i in range(n_lap + 1)]
 
@@ -145,7 +149,7 @@ def main():
     Z1 = machine.PRESS_HARD
     for k in range(N):
         for j, rad in enumerate((r_t + 2*bw, r_t + bw, r_t)):
-            pts = circle_pts(k, rad, (k+1) % N)
+            pts = circle_pts(k, rad)
             if k == 0 and j == 0:
                 emit_path(pts, Z1, Z1, first=True)
             else:
@@ -154,45 +158,76 @@ def main():
                 emit_path(pts, Z1, Z1)
     w("M106 S51                          ; body fan 20% from layer 2")
 
-    # ---- TOWERS RISE IN ROTATION: one helix lap each, lifted hop on ----
-    # RUNGS ARE A SAME-HEIGHT CIRCUIT after the whole rotation tops out (all towers equal):
-    # gap bridge -> chord ACROSS the next tower's open bore -> gap bridge -> ... Every anchor
-    # is a rim TOP at the circuit's own height, so the circuit never extrudes under material
-    # (the first cut walked each rim one layer up and then printed the lap underneath it —
-    # 922 dives, validate caught it). Bore chords are <= tower_d of air anchored on both rim
-    # sides; the tube is hollow, there is nothing beneath to plough.
-    z = [Z1] * N                          # current top of each tower
-    for lap in range(1, laps):
-        for k in range(N):
-            pts = circle_pts(k, r_t, (k+1) % N)
+    # ---- CONTINUOUS-FLOW ROTATION. Oleg, 2026-07-27: "so you start with one tower, give it
+    # 5 layers then without stoping the flow you get to other tower, 5 layers, and so on."
+    # No hops after the feet: the transit to the next tower is EXTRUDED —
+    #   flat chord ACROSS the finished tower's open bore (rim top to rim top, air over the
+    #   tube void — descending here would plough the far rim, so it stays level), then a
+    #   descending flight across the gap, landing on the next tower's rim exactly k*lh lower
+    #   (that is the steady-state stagger: each tower is one visit behind its predecessor).
+    # The landing gets buried under the next k laps — a mechanical lock, not just a weld —
+    # which is the ROTUNDA construction the ideation review endorsed. Transit slats stack
+    # k*lh apart between the same tower pair and become the bridges.
+    # THREE BRIDGE POSITIONS — Oleg: "you can have 3 bridges on each tower level frond,
+    # center and back". Under the never-stop-flow stagger they cannot share one exact level
+    # (a level strand toward a taller tower flies into its standing wall), so the bridge
+    # azimuth CYCLES per rotation: front tangent (+90°), center chord (0°), back tangent
+    # (-90°). Every tower pair accumulates all three positions every three visits, k*lh
+    # apart — a triple-laced colonnade. The helix starts wherever the incoming flight landed;
+    # a short extruded rim walk at the top re-aims the launch when the azimuth changes.
+    kpv = a.laps_per_visit
+    OFFS = (math.pi / 2, 0.0, -math.pi / 2)   # front, center, back
+    z = [Z1] * N
+    done = [0] * N
+    k = 0
+    rot = 0                                # completed rotations -> azimuth index
+    start_at = [None] * N                  # where each tower's next helix starts
+    n_bridge = 0
+    while min(done) < laps:
+        take = min(kpv, laps - done[k])
+        for _ in range(take):
+            pts = circle_pts(k, r_t, start_at[k])
             emit_path(pts, z[k], z[k] + lh)
             z[k] += lh
-            nxt = (k + 1) % N
-            if k < N - 1:
-                hop(nxt, z[nxt], max(z) + 2.0)
-        if lap % a.rung_every == 0 and 2 < lap < laps - 1:
-            zt = z[0]                     # all towers top out equal after a full rotation
-            w(f"; RUNG circuit at Z{zt:.1f} — gaps + bore chords, all anchors are rim tops")
-            for k in range(N - 1, 2 * N - 1):
-                cur = k % N
-                nxt = (k + 1) % N
-                # gap bridge: exit rim of cur -> near rim of nxt (air)
-                gx, gy = rim_point(nxt, cur)
-                d3 = math.hypot(gx - qx, gy - qy)
-                e += d3 * e_per_mm
-                w(f"G1 X{gx:.3f} Y{gy:.3f} Z{zt:.3f} E{e:.5f}   ; RUNG gap bridge")
-                qx, qy, qz = gx, gy, zt
-                # bore chord: straight across the open tube to its exit rim point (air)
-                ex, ey = rim_point(nxt, (nxt + 1) % N)
-                d3 = math.hypot(ex - qx, ey - qy)
-                e += d3 * e_per_mm
-                w(f"G1 X{ex:.3f} Y{ey:.3f} Z{zt:.3f} E{e:.5f}   ; RUNG bore chord")
-                qx, qy = ex, ey
-            # circuit ends at tower N-1's exit; hop to tower 0 for the next rotation
-            if lap < laps - 1:
-                hop(0, z[0], max(z) + 2.0)
-        elif lap < laps - 1:
-            hop(0, z[0], max(z) + 2.0)
+            done[k] += 1
+            start_at[k] = pts[0]
+        nxt = (k + 1) % N
+        if min(done) >= laps:
+            break
+        off = OFFS[rot % 3]
+        tx, ty = centres[k]; ox, oy = centres[nxt]
+        du = math.hypot(ox - tx, oy - ty)
+        ux, uy = (ox - tx) / du, (oy - ty) / du
+        px_, py_ = -uy, ux
+        launch = (tx + r_t*(ux*math.cos(off) + px_*math.sin(off)),
+                  ty + r_t*(uy*math.cos(off) + py_*math.sin(off)))
+        land = (ox + r_t*(-ux*math.cos(off) + px_*math.sin(off)),
+                oy + r_t*(-uy*math.cos(off) + py_*math.sin(off)))
+        # rim walk to the launch point, extruded, level on this tower's fresh top
+        aw0 = math.atan2(qy - ty, qx - tx)
+        aw1 = math.atan2(launch[1] - ty, launch[0] - tx)
+        daw = (aw1 - aw0 + math.pi) % (2*math.pi) - math.pi   # shortest way round
+        steps = max(1, int(abs(daw) * r_t / seg))
+        for i in range(1, steps + 1):
+            aa = aw0 + daw * i / steps
+            X, Y = tx + r_t*math.cos(aa), ty + r_t*math.sin(aa)
+            d = math.hypot(X - qx, Y - qy)
+            if d < 0.02:
+                continue
+            e += d * e_per_mm
+            w(f"G1 X{X:.3f} Y{Y:.3f} Z{qz:.3f} E{e:.5f}   ; rim walk to launch")
+            qx, qy = X, Y
+        # the flight: descending to the next tower's current top, flow never stopping
+        d3 = math.hypot(land[0] - qx, land[1] - qy, z[nxt] - qz)
+        e += d3 * e_per_mm
+        w(f"G1 X{land[0]:.3f} Y{land[1]:.3f} Z{z[nxt]:.3f} E{e:.5f}   ; BRIDGE "
+          f"{('front','center','back')[rot % 3]}, drops {qz - z[nxt]:.1f}")
+        n_bridge += 1
+        qx, qy, qz = land[0], land[1], z[nxt]
+        start_at[nxt] = land
+        if nxt == 0:
+            rot += 1
+        k = nxt
 
     w("M107"); w("M104 S0"); w("M140 S0")
     w(f"G0 Z{max(z) + 30:.1f} F900")
@@ -201,9 +236,9 @@ def main():
 
     grams = e * A * 1.24 / 1000.0
     mins = (e / e_per_mm) / speed / 60.0
-    n_rungs = sum(1 for lap in range(1, laps) if (lap % a.rung_every in (0, 1)) and lap > 2) * N
     print(f"  {N} towers d{a.tower_d:g} on r{R:g}, {laps} laps to h{a.height:g}; "
-          f"{n_rungs} rung bridges (~{2*R*math.sin(math.pi/N) - a.tower_d:.0f}mm air each)")
+          f"{n_bridge} flowing bridges cycling front/center/back "
+          f"(~{2*R*math.sin(math.pi/N) - a.tower_d:.0f}mm air, dropping {a.laps_per_visit*lh:g})")
     print(f"  revisit cycle ~{N * (2*math.pi*r_t/speed + 0.7):.1f}s per tower "
           f"(lap {2*math.pi*r_t/speed:.1f}s + hop ~0.7s) — the cooling question the plate answers")
     print(f"  full flow {bw*lh*speed:.0f} mm3/s at {speed:g} mm/s; ~{grams:.0f} g, "

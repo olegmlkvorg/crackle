@@ -346,6 +346,10 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # R4: validate.py checks every extruding move against this, so it is the DELIVERED flow at the
     # resolved speed (bead_w * bead_h * speed), never the --flow that was asked for.
     w(f"; FLOW={flow:.1f}")
+    _der = machine.flow_derate_stamp(material, printer, flow)
+    if _der:
+        w(_der)   # R8: slow is allowed, silent slow is not
+        print("  " + _der.lstrip("; "))
     w("; ARGV: " + " ".join(_sys.argv))
     w(f"; bead {bead_w}x{bead_h} = {bead_w*bead_h:.2f}mm2 at {speed:.1f} mm/s -> flow={flow:.1f} mm3/s"
       f" (north star {machine.DEFAULT_SPEED:g}; lower is the bead crawling, never faster)")

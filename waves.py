@@ -208,6 +208,10 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w(f"; MATERIAL={material}")            # R6, and the TPU fan guard
     w(f"; LAYER_H={bead_h}")               # R2 — the Z ladder is checked against this
     w(f"; FLOW={flow:.1f}")                # R4 — every extruding move is checked against this
+    _der = machine.flow_derate_stamp(material, printer, flow)
+    if _der:
+        w(_der)   # R8: slow is allowed, silent slow is not
+        print("  " + _der.lstrip("; "))
     # THE STAMP IS THE FLOW THAT IS ACTUALLY DELIVERED, not the one that was requested — R4. It is
     # computed as bead_w * bead_h * (F/60) from the SAME rounded feedrate the body lines carry, so
     # the declaration and the moves cannot disagree. Stamping the request instead declares a number

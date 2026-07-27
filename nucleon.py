@@ -361,6 +361,10 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     # that records an ASPIRATION cannot verify anything: the check it feeds is "is this file
     # internally consistent", and an aspiration makes every honest file look starved.
     w(f"; FLOW={actual_flow:.1f}")   # R4 checks every move against this — DELIVERED, not requested
+    _der = machine.flow_derate_stamp(material, printer, actual_flow)
+    if _der:
+        w(_der)   # R8: slow is allowed, silent slow is not
+        print("  " + _der.lstrip("; "))
     w("; ARGV: " + " ".join(sys.argv))
     w(f"; flow={actual_flow:.1f} mm3/s delivered at {speed:.1f} mm/s "
       f"({'north star' if speed >= machine.DEFAULT_SPEED - 0.05 else f'below the {machine.DEFAULT_SPEED:g} north star — the bead asks for it'}), "

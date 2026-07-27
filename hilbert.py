@@ -411,6 +411,10 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     # the emitted G1 lines. Declaring the --flow that was ASKED for would be an aspiration stamped
     # as a measurement, which is the defect this project keeps catching in itself.
     w(f"; FLOW={flow:.2f}")
+    _der = machine.flow_derate_stamp(material, printer, flow)
+    if _der:
+        w(_der)   # R8: slow is allowed, silent slow is not
+        print("  " + _der.lstrip("; "))
     w(f"; SPEED={speed:.2f}   ; one speed, the north star ({machine.DEFAULT_SPEED:g}) unless the "
       f"bead or the material pulled it down")
     w(f"; bead {bead_w:.2f}x{bead_h:g} = {bead_w*bead_h:.2f}mm2 at {speed:.1f} mm/s "

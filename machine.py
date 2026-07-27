@@ -456,6 +456,18 @@ def flow_for(material, requested, label=""):
 # 5C under the machine-held target — see bed_start().
 
 
+def flow_derate_stamp(material, printer, delivered):
+    """R8 companion: the ; FLOW_DERATE= line a generator MUST emit when it delivers under 80%
+    of the material+printer figure. One source of truth so six generators cannot drift.
+    Returns None at a healthy operating point."""
+    cap = flow_cap(material, printer)
+    if cap and delivered < 0.8 * cap:
+        return (f"; FLOW_DERATE=bead pinned at the {BEAD_W:g}x{BEAD_H:g} stacking doctrine -> "
+                f"{delivered:g} of {cap:g} mm3/s at the {DEFAULT_SPEED:g} north star. "
+                f"Widening the bead is the fix if this part's walls allow it.")
+    return None
+
+
 def bed_start(material, bed):
     """Temperature the plate must actually REACH before printing may begin.
 
