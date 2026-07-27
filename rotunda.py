@@ -41,6 +41,13 @@ def main():
     ap.add_argument("--close", type=float, default=12.0)
     ap.add_argument("--tower-d", type=float, default=8.0)
     ap.add_argument("--laps-per-visit", type=int, default=5)
+    ap.add_argument("--every", type=int, default=1,
+                    help="tower at every Nth envelope turn (2 = lean: half the towers)")
+    ap.add_argument("--web", choices=("full", "wave", "front"), default="full",
+                    help="strands per gap-level: full = front+climb+wave (3), wave = the "
+                         "wave only (1), front = one straight flight only. Filament math "
+                         "2026-07-28: 26 towers + full web = 1.75x a plain wall; 13 towers + "
+                         "wave-only ~ 0.69x")
     ap.add_argument("--rim", type=float, default=None, help="floor rim band; default 3 beads")
     ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
@@ -106,6 +113,8 @@ def main():
             centres.append(wl[i])
     if math.hypot(centres[0][0] - centres[-1][0], centres[0][1] - centres[-1][1]) < 6.0:
         centres.pop()
+    if a.every > 1:
+        centres = centres[::a.every]      # lean: every Nth turn keeps the lobed rhythm
     N = len(centres)
     # order around the ring is inherited from the wall line — already sequential
 
@@ -385,13 +394,24 @@ def main():
         b_in = (ox - r_t * pxp, oy - r_t * pyp)
         a_ce = (tx + r_t * ux, ty + r_t * uy)     # this tower's rim point facing the next
         b_ce = (ox - r_t * ux, oy - r_t * uy)     # the next tower's rim point facing back
-        rim_walk(k, a_out)
-        flight(b_out, z[nxt], "front")       # straight, DOWN, outer line (v2 proven)
-        rim_walk(nxt, b_in)
-        flight(a_in, z[k], "climb")          # straight, UP, inner line (v3 printed well)
-        rim_walk(k, a_ce)
-        wave_up(k, nxt, z[nxt], r_t)         # the WAVE, laid last: down the centreline,
-        start_at[nxt] = b_ce                 # surfing line-to-line, welding at both crossings
+        if a.web == "full":
+            rim_walk(k, a_out)
+            flight(b_out, z[nxt], "front")   # straight, DOWN, outer line (v2 proven)
+            rim_walk(nxt, b_in)
+            flight(a_in, z[k], "climb")      # straight, UP, inner line (v3 printed well)
+            rim_walk(k, a_ce)
+            wave_up(k, nxt, z[nxt], r_t)     # the WAVE, laid last: down the centreline,
+            start_at[nxt] = b_ce             # surfing line-to-line, welding at both crossings
+        elif a.web == "wave":
+            # lean web: ONE strand per gap-level — the wave alone (nothing to cross, so the
+            # height-field projection is a nicety, not a collision control)
+            rim_walk(k, a_ce)
+            wave_up(k, nxt, z[nxt], r_t)
+            start_at[nxt] = b_ce
+        else:                                # "front": one straight flight
+            rim_walk(k, a_out)
+            flight(b_out, z[nxt], "front")
+            start_at[nxt] = b_out
         k = nxt
 
     w("M107"); w("M104 S0"); w("M140 S0")
