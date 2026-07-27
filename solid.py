@@ -301,7 +301,12 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
         print(f"  ~ {speed:.1f} mm/s, below the {machine.DEFAULT_SPEED:g} mm/s north star, for "
               f"{name}: a {bead_w:g}x{layer_h:g} bead delivers the full {flow:.1f} mm3/s only if "
               f"the head crawls. That is the constraint overruling the default, not a fault.")
-    layers = max(1, int(round(height / layer_h)))
+    # LAYERS COUNTED FOR THE ACTUAL Z LADDER, which further down is `z = press + k*layer_h` for
+    # k in range(layers) -- so N layers span from press to press+(N-1)*layer_h, i.e. N-1 steps.
+    # The old `round(height/layer_h)` was a STALE inversion of an earlier ladder that started at
+    # z=0; against the press-offset ladder it dropped a layer (hanger --layers 3 printed 2).
+    # Callers pass height = press + (N-1)*layer_h, so this returns N exactly.
+    layers = max(1, int(round((height - press) / layer_h)) + 1)
     e_first = (bead_w * layer_h) / area   # full flow: the body's mm2 per mm
     travel_f = int(machine.MACHINE_MAX_SPEED * 60)   # inter-object travel: machine max
     # LAYER 1 RUNS AT THE SAME ONE SPEED, and carries the flow by WIDTH instead. Laid into a
@@ -1429,6 +1434,16 @@ def main():
     # MATERIAL ROUTES THE NOZZLE AND THE FLOW TOO — see machine.MATERIAL_TEMP.
     a.temp = a.temp or machine.temp_for(a.material)
     a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for solid.py')
+    # THE MACHINE CAP COMPOSES WITH THE MATERIAL CAP. flow_for() clamps to what the FILAMENT holds
+    # and never knew which MACHINE. The k1c/f022 hotend holds machine.PRINTER_FLOW_CAP (45) where
+    # the k2plus holds 55, so a pla part built for the k1c through this path ran at the material's
+    # 55 and overran the machine by 10 mm3/s. Compose them the way machine.flow_cap() does: the
+    # lower of the two.
+    _pcap = machine.PRINTER_FLOW_CAP.get(a.printer)
+    if _pcap is not None and a.flow > _pcap + 1e-9:
+        print(f"  ! flow {a.flow:g} mm3/s is above the {a.printer} machine cap {_pcap:g} mm3/s — "
+              f"clamped to {_pcap:g}.")
+        a.flow = _pcap
     machine.check_flow(a.flow, f' for solid.py')
     if a.parts:
         return run_plate(a)

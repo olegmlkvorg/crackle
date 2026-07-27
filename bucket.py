@@ -19,27 +19,37 @@ Three parts, one continuous stroke per layer (floor) and ONE stroke for the whol
           (holes bridged at --close radius) instead of a plain circle, so the wall scallops in
           and out with the lobes.
 
-  WAVE    the wall is a single continuous helix whose Z carries a sinusoid:
-              z(t) = mid(t) + A(t) * sin(2*pi*(WAVES + 1/2) * t / L)
-          The extra HALF wave per revolution flips the phase each lap, so every crest of one
-          revolution meets a trough of the next: those tangencies are the welds, and between
-          them the strand spans a lens-shaped opening. The climb rate is derived from the weld,
-          not guessed:  dmid/dt = (A(t) + A(t+L) + layer_h) / L  makes the minimum gap between
-          vertically adjacent strands exactly one layer height at every weld. One revolution
-          then climbs 2A + layer_h instead of layer_h — at A=1.2 that is 5x less wall material.
-          A(t) ramps 0->A over one revolution after a flat anchor lap welded to the floor, and
-          tapers A->0 over TWO revolutions at the top (one would press the taper into the strand
-          below at zero gap; two leaves 0.3mm of squish) before a flat hem lap closes the rim.
+  WAVE    the wall is a single continuous helix of THROW-AND-LAND waves.
+
+          v1 was a pure sinusoid welded at crest/trough TANGENCIES — points. IT FAILED ON THE
+          PLATE (2026-07-27, K2, cancelled ~21 min in): the point welds did not adhere. Oleg,
+          from the machine: "bucket failed on adhesion of sin pattern. so you need to thow into
+          the air then land and adheeeeeese then thro again. and next layer should be on the
+          tops of prev layer sinus."
+
+          So the wave is flat-topped now, per wavelength (fractions of lambda):
+              LAND  [0.0-0.2)  flat, welded one layer height above the strand below
+              RISE  [0.2-0.5)  cosine ramp up by H, airborne
+              TOP   [0.5-0.7)  flat, in the air — it becomes the NEXT lap's landing pad
+              FALL  [0.7-1.0)  cosine ramp back down, ending exactly at the next landing
+          The extra HALF wave per lap staggers the phase, and LAND+RISE = exactly half a
+          wavelength is load-bearing: it maps every landing of lap k+1 onto a TOP of lap k for
+          its FULL length, at exactly one layer height of gap (z(t+L) - z(t) = (H+lh) +
+          H*(prof(x+1/2) - prof(x)), which is lh wherever the later lap lands). One lap climbs
+          H + layer_h instead of layer_h — at H=2.4 that is 5x less wall material. The wall
+          ends after an EVEN number of laps, i.e. ON a landing, welded — and the rim is wavy,
+          which is the construction showing honestly.
 
 Numbers and their provenance:
-  WAVES=39 per lap        CHOSEN — 3 per lobe; max Z slope A*2pi*39.5/L = 0.47 keeps Z speed at
-                          23.6 mm/s under machine.MAX_Z_V=30 at the 50 north star. Not measured.
-  A=1.2mm                 CHOSEN — one bead height of ride each way; openings ~16x4mm. Not measured.
-  weld gap = layer_h      DERIVED — the normal layer step, applied at the tangency.
+  H=2.4mm                 CHOSEN — 4 beads of climb per wave; wall openings ~lambda x H. Not measured.
+  waves/lap               DERIVED from the Z axis's speed budget: the steepest cosine-ramp slope
+                          is H*pi/(0.6*lambda); lambda is chosen so Z speed stays under 80% of
+                          machine.MAX_Z_V at the north-star head speed.
+  weld gap = layer_h      DERIVED — the normal layer step, held across the WHOLE landing.
   E per mm                metered on TRUE 3D path length (F is a 3D feedrate in Klipper), so
-                          delivered flow is constant on the slopes too. validate.py reads flow
-                          per XY mm and will see up to +11% on the steepest slope — real geometry,
-                          inside its 20% window, not an error.
+                          delivered flow is constant on the ramps too. validate.py reads flow
+                          per XY mm and sees more on the steepest ramp — real geometry, inside
+                          its 20% window, not an error.
 """
 import argparse, math, os, sys
 
@@ -159,10 +169,11 @@ def main():
     ap.add_argument("--close", type=float, default=12.0,
                     help="closing radius for the rose envelope, mm — smallest that leaves one "
                          "clean ring; below ~10 the envelope grows necks and holes")
-    ap.add_argument("--wave-amp", type=float, default=1.2,
-                    help="sinusoid amplitude A, mm; 0 = plain vase-mode wall")
-    ap.add_argument("--waves", type=int, default=39,
-                    help="whole waves per lap (a half wave is added for the weld stagger)")
+    ap.add_argument("--wave-amp", type=float, default=2.4,
+                    help="wave height H, mm — each lap climbs H + layer_h")
+    ap.add_argument("--waves", type=int, default=0,
+                    help="whole waves per lap (a half wave is added for the landing stagger); "
+                         "0 = derive the most waves the Z axis's speed budget allows")
     ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--layer-h", type=float, default=0.6)
@@ -216,11 +227,22 @@ def main():
                          f"inset half a bead. Raise --close.")
     wall_ring = ring_of(wall_poly.exterior, seg)
     Lw = wall_poly.exterior.length
-    slope = a.wave_amp * 2 * math.pi * (a.waves + 0.5) / Lw
-    zv = slope * speed
+    H = a.wave_amp
+    # WAVELENGTH FROM THE Z AXIS'S SPEED BUDGET, derived not picked. The steepest point of the
+    # cosine ramp is H*pi/(2*ramp_len) with ramp_len = 0.3*lambda; F is a 3D feedrate, so the
+    # Z component is speed*slope/sqrt(1+slope^2), held under 80% of machine.MAX_Z_V.
+    if a.waves:
+        m_waves = a.waves
+    else:
+        zv_bud = 0.8 * machine.MAX_Z_V
+        slope_star = zv_bud / math.sqrt(max(speed * speed - zv_bud * zv_bud, 1e-9))
+        m_waves = max(3, int(Lw / (H * math.pi / (0.6 * slope_star)) - 0.5))
+    lam = Lw / (m_waves + 0.5)
+    slope = H * math.pi / (0.6 * lam)
+    zv = slope * speed / math.sqrt(1 + slope * slope)
     if zv > machine.MAX_Z_V * 0.85:
-        raise SystemExit(f"wave slope {slope:.2f} needs {zv:.1f} mm/s of Z at {speed:g} mm/s — "
-                         f"over 85% of machine.MAX_Z_V={machine.MAX_Z_V:g}. Fewer --waves or "
+        raise SystemExit(f"wave ramp slope {slope:.2f} needs {zv:.1f} mm/s of Z at {speed:g} mm/s "
+                         f"— over 85% of machine.MAX_Z_V={machine.MAX_Z_V:g}. Fewer --waves or "
                          f"less --wave-amp.")
 
     # floor rim: inward offsets of the SAME envelope, so the band sits exactly under the wall
@@ -243,7 +265,7 @@ def main():
     w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     w("; ARGV: " + " ".join(sys.argv))
     w(f"; bucket d{a.dia:.0f}xh{a.height:.0f}, bead {bw:.2f}x{lh} at {speed:.1f} mm/s")
-    w(f"; wall = rose envelope (close {a.close:g}), wave A={a.wave_amp:g} x {a.waves}.5/lap")
+    w(f"; wall = rose envelope (close {a.close:g}), throw-and-land wave H={H:g} x {m_waves}.5/lap")
     w("M82")
     w(f"M140 S{machine.bed_for(a.material, a.printer):.0f}")
     w(f"M104 S{temp}")
@@ -278,7 +300,7 @@ def main():
     # WITHOUT THIS MARKER several checks silently do not run (validate.py: "BODY NEVER STARTED
     # ... This file is unchecked, not clean."). ARCH_LIFT declares that Z varies inside layers
     # BY DESIGN — the floor's crossing lifts and the wall's wave both live under it.
-    w(f"; ARCH_LIFT={max(0.5 - machine.PRESS_HARD, 2 * a.wave_amp):.3f}")
+    w(f"; ARCH_LIFT={max(0.5 - machine.PRESS_HARD, H):.3f}")
     # The wave wall descends on purpose at up to this dz/dxy. validate.py's per-cell dive check
     # uses it to raise its in-cell threshold PAST self-descent (slope * cell diagonal) while
     # staying UNDER one layer height — so a real collision with the lap below still fails.
@@ -369,76 +391,60 @@ def main():
         if k == 0:
             w("M106 S51                        ; body fan from layer 2 — layer 1 welds unchilled")
 
-    # ---- WALL: one continuous wave helix, single bead, strict ----
-    # THE CLIMB IS A RECURSION, NOT A RATE. mid(t) = mid(t-L) + lh + A(t) + A(t-L) makes the
-    # minimum gap between vertically adjacent strands EXACTLY one layer height at every
-    # tangency, whatever the amplitude is doing:
-    #     gap(t) = z(t) - z(t-L) = lh + (A(t) + A(t-L)) * (1 + sin(PHI*t))  >=  lh,  = lh at
-    # the tangencies (the half-wave per lap flips sin's sign between laps -- that is the weld).
-    # An integral climb rate is only exact for constant A; on the amplitude ramps its error
-    # reaches A/2 -- a full plough at the taper. The recursion has no such regime.
+    # ---- WALL: throw-and-land wave helix, single bead, strict ----
+    # Landings weld along a SEGMENT (0.2*lambda), not at a point — the point-tangency sinusoid
+    # failed on the plate (see the module docstring for Oleg's field correction). LAND+RISE =
+    # exactly half a wavelength is load-bearing: the half-wave stagger then maps every landing
+    # of lap k+1 onto a TOP of lap k for its full length,
+    #     z(t+L) - z(t) = (H + lh) + H*(prof(x+1/2) - prof(x))  =  lh on every landing,
+    # and never less anywhere (prof differences are bounded by [-1, 0] there). The climb
+    # (H+lh)*t/L is a continuous helix — a per-lap step materializes the whole climb in one
+    # 0.25mm segment at the seam (v1's 67 near-vertical moves).
     z_ft = machine.PRESS_HARD + (a.floor_layers - 1) * lh    # top floor layer's Z
     wall = rotate_to(wall_ring, last[0])
     n_ring = len(wall)
     ds = Lw / n_ring
-    PHI = 2.0 * math.pi * (a.waves + 0.5) / Lw
 
-    w(f"; WALL_START — wave helix, {n_ring} pts/lap, weld gap {lh:g} at every tangency")
-    # The lh part of the pitch is a CONTINUOUS helix (lh * t / L), like vase mode — adding it
-    # per-lap inside the recursion made the whole layer height appear as a 0.6mm step at the lap
-    # seam, in one 0.25mm segment: 67 near-vertical extruding moves, R4 read them at 3x flow.
-    # Only the amplitude part S(t) = S(t-L) + A(t) + A(t-L) is recursive; it is continuous at
-    # the seam by construction (its within-lap gradient carries the growth).
-    S_prev = [0.0] * n_ring                # lap -1 is the floor's top surface: flat, no wave
-    A_prev = [0.0] * n_ring
+    def prof(x):
+        """z fraction within one wave, x in [0,1): LAND flat (welded), RISE cosine, TOP flat
+        (airborne — the next lap's landing pad), FALL cosine into the next landing."""
+        if x < 0.2:
+            return 0.0
+        if x < 0.5:
+            return 0.5 * (1.0 - math.cos(math.pi * (x - 0.2) / 0.3))
+        if x < 0.7:
+            return 1.0
+        return 0.5 * (1.0 + math.cos(math.pi * (x - 0.7) / 0.3))
+
+    # END ON A LANDING: an even lap count finishes the strand welded onto a top, not mid-air.
+    # No hem, no taper — the rim is wavy, which is the construction showing honestly. (A taper
+    # is where v1 grew its plough regime; the landing map above only holds at constant H.)
+    K = int((a.height - z_ft - lh - H) // (H + lh))
+    if K % 2:
+        K -= 1
+    if K < 2:
+        raise SystemExit(f"height {a.height:g} leaves no room for a wave wall over a "
+                         f"{z_ft:g}mm floor at H={H:g}")
+    w(f"; WALL_START — throw-and-land helix: land {0.2*lam:.1f}mm welded, throw "
+      f"{0.8*lam:.1f}mm airborne, climb {H+lh:g}/lap, {K} laps")
     qx, qy, qz = pos[0]
-    lap = 0
     t = 0.0
     started = False
-    top = z_ft + lh
-    hem = None                             # set to the remaining laps once the taper starts
-    while hem is None or hem > 0:
-        # amplitude per lap: 0 (anchor lap, welded to the floor the whole way round), ramp
-        # 0->A over lap 1, constant A, one taper lap A->0, then a flat hem lap for the rim
-        if lap == 0:
-            ampf = lambda u: 0.0
-        elif lap == 1:
-            ampf = lambda u: a.wave_amp * u
-        elif hem is not None and hem <= 1:
-            ampf = lambda u: 0.0
-        elif hem is not None:              # the taper lap
-            ampf = lambda u: a.wave_amp * (1.0 - u)
-        else:
-            ampf = lambda u: a.wave_amp
-        S_cur = [0.0] * n_ring
-        A_cur = [0.0] * n_ring
+    for lap in range(K):
         for i in range(n_ring):
             X, Y = wall[i]
-            u = i / n_ring
-            A_cur[i] = ampf(u)
-            S_cur[i] = S_prev[i] + A_cur[i] + A_prev[i]
-            mid = z_ft + lh + lh * t / Lw + S_cur[i]
-            Z = mid + A_cur[i] * math.sin(PHI * t)
+            x = ((m_waves + 0.5) * t / Lw) % 1.0
+            Z = z_ft + lh + (H + lh) * t / Lw + H * prof(x)
             dxy = math.hypot(X - qx, Y - qy)
             if dxy > 0.02:
-                d3 = math.hypot(dxy, Z - qz)   # E on TRUE 3D length: constant flow on slopes
+                d3 = math.hypot(dxy, Z - qz)   # E on TRUE 3D length: constant flow on ramps
                 e += d3 * e_per_mm
                 w(f"G1 {'F%d ' % f if not started else ''}X{X:.3f} Y{Y:.3f} Z{Z:.3f} E{e:.5f}")
                 started = True
                 qx, qy, qz = X, Y, Z
             t += ds
-        top = z_ft + lh + lh * t / Lw + S_cur[-1]
-        S_prev, A_prev = S_cur, A_cur
-        lap += 1
-        if hem is not None:
-            hem -= 1
-        # start the taper when one taper lap (~lh + A avg climb) + one hem lap still fits
-        elif top >= a.height - (2 * a.wave_amp + 3 * lh):
-            hem = 2                        # the next lap tapers, the one after is the flat hem
-        if top >= a.height:                # backstop: never build past the asked height
-            break
-    revs = lap
-    mid = top
+    revs = K
+    mid = z_ft + lh + (H + lh) * K         # final landing level = top of the wall's welds
 
     w("M107"); w("M104 S0"); w("M140 S0")
     w(f"G0 Z{mid + 30:.1f} F900")
@@ -449,10 +455,10 @@ def main():
     print(f"  {n_cross} of {len(rose_pts)} rose points ride over a crossing "
           f"(Z {machine.PRESS_HARD} -> 0.5)")
     print(f"  floor {a.floor_layers} layers (rose + {rim_passes} envelope passes); wall "
-          f"{revs:.1f} laps of {Lw:.0f}mm, climbing {2*a.wave_amp + lh:g}/lap vs {lh:g} solid "
-          f"= {(2*a.wave_amp + lh)/lh:.1f}x less wall material")
-    print(f"  wave: A={a.wave_amp:g}, {a.waves}.5 waves/lap, welds every "
-          f"{Lw/(a.waves+0.5):.1f}mm, max Z speed {zv:.1f} mm/s (limit {machine.MAX_Z_V:g})")
+          f"{revs} laps of {Lw:.0f}mm, climbing {H + lh:g}/lap vs {lh:g} solid "
+          f"= {(H + lh)/lh:.1f}x less wall material")
+    print(f"  wave: H={H:g}, {m_waves}.5 waves/lap — land {0.2*lam:.1f}mm welded / throw "
+          f"{0.8*lam:.1f}mm airborne; max Z speed {zv:.1f} mm/s (limit {machine.MAX_Z_V:g})")
     print(f"  top of wall at Z{mid:.1f} (asked {a.height:g}); ~{grams:.0f} g, ~{mins:.0f} min")
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out,

@@ -77,7 +77,9 @@ def main():
                    machine.bed_for(a.material, a.printer), 1.75, (bx, by),
                    True, machine.PRESS_HARD, 100,
                    a.bead_w * a.layer_h / machine.PRESS_HARD,   # layer 1: full flow, wide line
-                   True, a.printer, f"CLEAVAGE {a.walls} walls",
+                   # aux (side/chassis) fans at the PLA house norm 0.2, NOT True (== 1.0 = 100%),
+                   # which chilled the first layer; emit()'s aux_for() still forces full for TPU.
+                   0.2, a.printer, f"CLEAVAGE {a.walls} walls",
                    material=a.material, brim=a.brim, centre=False)
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"cleavage_{a.printer}_s{a.stick:g}_w{a.walls}_T{temp:g}.gcode")

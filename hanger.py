@@ -194,7 +194,17 @@ def pole_region(pole_d, ring, drop, hook_r, thick, tip, bead_w):
     the ring cants and jams against the pole under load, which is how a real pole hook works.
     """
     r = thick / 2.0
-    bore = machine.bore_model(pole_d)           # modelled so the PRINTED bore clears the pole
+    # SLIDING FIT, not line-to-line. bore_model() only compensates the inward bead bulge, so on its
+    # own it lands the PRINTED bore AT the pole diameter -- zero clearance, i.e. a press/grip fit.
+    # Measured: the k1c inset is 3.060 against the 3.02 mean baked into bore_model, so it is really
+    # ~0.08mm of INTERFERENCE at the pole. This collar must SLIDE onto the pole and be held by
+    # canting under load (see the docstring), so add a diametral slip clearance on top of the bulge
+    # compensation. 0.25mm is the repo's own "slip" value from solid.py's --clearance scale
+    # ("0 grip, 0.25 slip, 0.5 loose") -- an engineering convention, CHOSEN, NOT a measured fit for
+    # any particular pole (and deliberately NOT STICK_FIT, which is the measured *bamboo* number, or
+    # SHRINK, which is a metal *grip* fit). Net printed clearance after the ~0.08 gap is ~0.17mm.
+    SLIP_CLEAR = 0.25
+    bore = machine.bore_model(pole_d) + SLIP_CLEAR   # modelled for a sliding fit over the pole
     outer = bore / 2.0 + ring
     parts = [Point(0.0, 0.0).buffer(outer, resolution=64)]
 
@@ -309,8 +319,10 @@ def main():
     bx, by = machine.BED[a.printer]
     rminx, rminy, rmaxx, rmaxy = region.bounds
     if _bore is not None:
+        _slip = _bore - machine.bore_model(a.pole)          # the slip term added on top of bulge comp
         print(f"  CLOSED ring for a {a.pole:.0f} mm pole -> modelled bore {_bore:.2f} mm "
-              f"(+{2*machine.BORE_INSET_MM:.2f} so the printed bore clears it)")
+              f"(+{2*machine.BORE_INSET_MM:.2f} bulge comp + {_slip:.2f} slip); printed bore ~"
+              f"{_bore - 2*machine.BORE_INSET_MM:.2f} mm = a sliding fit")
     _mod = bore_for(a.thread if a.style == "simple" else a.hole, a.bead_w)
     _req = a.thread if a.style == "simple" else a.hole
     print(f"  hanger: {rmaxx-rminx:.0f} x {rmaxy-rminy:.0f} mm, {a.layers} layers = "
@@ -331,7 +343,11 @@ def main():
                    # carries the same mm2 per mm as the body. The overlap is deliberate: that is
                    # what welds the part to the plate.
                    True, machine.PRESS_HARD, 100, a.bead_w * a.layer_h / machine.PRESS_HARD,
-                   True, a.printer, f"HANGER x{a.n}", material=a.material,
+                   # AUX (side/chassis) FANS AT THE PLA HOUSE NORM, 0.2. A positional True here set
+                   # them to 100% (True == 1.0, the full aux fraction) and chilled the first layer
+                   # on a material that must not be cooled hard. emit() runs this through aux_for(),
+                   # which still forces full aux for materials that require it (e.g. TPU).
+                   0.2, a.printer, f"HANGER x{a.n}", material=a.material,
                    # NO BRIM UNLESS ASKED. Oleg, 2026-07-27: "also dont print brim uinless asked".
                    # Layer 1 already over-extrudes into a 0.1mm gap and welds itself down; a brim
                    # on top of that is material to cut off, not adhesion.
