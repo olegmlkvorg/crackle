@@ -224,7 +224,9 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # M190 only waits for HEATING; a bed already hotter than target returns instantly, so a part
     # meant for a 45C plate can print on a 98C one left over from the previous job. TEMPERATURE_WAIT
     # blocks in BOTH directions.
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
+    # SENSOR NAME UNQUOTED — Klipper does not match the QUOTED form and skips the wait
+    # SILENTLY (empirical: a 100C-floor part started at 78C; bucket.py hit the same bug).
+    w(f"TEMPERATURE_WAIT SENSOR=heater_bed MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
     # fan: clamped to the material ceiling, and OFF on layer 1 unless the material needs it

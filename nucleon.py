@@ -366,7 +366,9 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w("G28" if home else "; NO HOME — direct to print (fails safely if the machine lost home)")
     # M190 only waits for HEATING; a hotter bed returns instantly and the part prints on
     # whatever the last job left. TEMPERATURE_WAIT blocks both ways.
-    w(f"TEMPERATURE_WAIT SENSOR='heater_bed' MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
+    # SENSOR NAME UNQUOTED — Klipper does not match the QUOTED form and skips the wait
+    # SILENTLY (empirical: a 100C-floor part started at 78C; bucket.py hit the same bug).
+    w(f"TEMPERATURE_WAIT SENSOR=heater_bed MINIMUM={machine.bed_start(material, bed)} MAXIMUM={bed+5}")
     w(f"M109 S{temp}")
     w("M204 S8000")
     # FANS OFF FOR LAYER 1, ALWAYS. Cooling the first layer chills the bead before it can wet the

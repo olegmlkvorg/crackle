@@ -250,17 +250,25 @@ def main():
     w("G28")
     # BED THRESHOLD SCALES WITH FOOTPRINT. Oleg's "you dont need to wait for 120 plate" was about
     # a small part; this one is 200mm across. Oleg, 2026-07-27: "for the bucket it was good
-    # start, lets try bed 120 there." So the bucket waits for the FULL bed target.
+    # start, lets try bed 120 there." So ON THE K2 the bucket waits for the FULL 120 target —
+    # the K2 provably reaches it (printed today). Any other machine gets machine.bed_start():
+    # the K1C pins at ~87-91, and a blocking M190 at an unreachable target is an infinite stall,
+    # not a rule (review-confirmed).
     # M190 BLOCKS, AND CANNOT BE MISPARSED (a quoted TEMPERATURE_WAIT sensor name was silently
     # skipped once — the print started at 78C). Target is re-raised after so the plate keeps
     # climbing while the part starts.
-    w(f"M190 S{machine.bed_for(a.material, a.printer):.0f}   ; BLOCKING: do not start below this")
-    w(f"M140 S{machine.bed_for(a.material, a.printer):.0f}")
+    _bed = machine.bed_for(a.material, a.printer)
+    _floor = _bed if a.printer == "k2plus" else machine.bed_start(a.material, _bed)
+    w(f"M190 S{_floor:.0f}   ; BLOCKING: do not start below this")
+    w(f"M140 S{_bed:.0f}")
     w(f"M109 S{temp}")
-    w("M106 S51")
+    # fan LOW/OFF for layer 1 (it only has to weld to the plate); body fan from layer 2
+    _fan_l1 = int(round(machine.fan_first_layer(a.material) * 255))
+    w(f"M106 S{_fan_l1}" if _fan_l1 else "M107")
     w("G92 E0")
-    # prime in the clear, then break the bead off at an angle so no tail rides onto the part
-    px0, py0 = 20.0, cy - R - 14.0
+    # prime in the clear, then break the bead off at an angle so no tail rides onto the part;
+    # py0 clamped on-bed — cy-R-14 lands at Y-4 on the K1C's 220 bed (review-confirmed)
+    px0, py0 = 20.0, max(6.0, cy - R - 14.0)
     w(f"G1 Z{machine.PRESS_HARD:.3f} F600")
     w(f"G0 F9000 X{px0:.3f} Y{py0:.3f}")
     w("G1 E20 F300                      ; PRIME stationary purge")
@@ -358,6 +366,8 @@ def main():
             cz, _ = crossing_z(cpts, bw, machine.PRESS_HARD, 0.5, prior=prior)
             stroke(cpts, z, False, zs=cz)
             prior += cpts
+        if k == 0:
+            w("M106 S51                        ; body fan from layer 2 — layer 1 welds unchilled")
 
     # ---- WALL: one continuous wave helix, single bead, strict ----
     # THE CLIMB IS A RECURSION, NOT A RATE. mid(t) = mid(t-L) + lh + A(t) + A(t-L) makes the

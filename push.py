@@ -17,7 +17,7 @@ Usage:
   python3 push.py out/crackle_A_*.gcode       # upload to the K2 Plus (default)
   python3 push.py FILE --printer k1c          # or another machine
 """
-import argparse, json, os, sys, urllib.request, uuid
+import argparse, json, os, sys, time, urllib.request, uuid
 import machine
 
 PRINTERS = {            # discovered from Creality Print's own deviceInfo on this laptop
