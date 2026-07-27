@@ -165,7 +165,7 @@ MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the hea
 # changes; nothing else should carry a material or printer name as a literal default.
 LOADED = {
     "k2plus": "pla-matte",   # matte gray, 230C, loaded 2026-07-27
-    "k1c":    "pla",
+    "k1c":    "pla-matte",   # Oleg swapped 2026-07-27 late: "k1 is now wth pla 230 filament"
     "f022":   "pla",
 }
 DEFAULT_PRINTER = "k2plus"
