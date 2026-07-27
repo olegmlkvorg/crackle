@@ -18,6 +18,7 @@ Usage:
   python3 push.py FILE --printer k1c          # or another machine
 """
 import argparse, json, os, sys, urllib.request, uuid
+import machine
 
 PRINTERS = {            # discovered from Creality Print's own deviceInfo on this laptop
     "k2plus": "192.168.3.140",
