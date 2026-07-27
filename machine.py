@@ -651,3 +651,41 @@ def check_spool(printer, material):
         print(f"  !! {printer} has {want} loaded, but this part is being generated for {material}. "
               f"Either load {material}, or drop --material and let it follow the printer.")
     return material
+
+
+def decimate(pts, min_seg=0.02):
+    """Drop points closer than `min_seg` to the last kept point.
+
+    WHY THIS EXISTS. Curvature-adaptive sampling emits runs of points a few microns apart. XY are
+    written to 0.001mm but E to 0.00001mm, so a segment shorter than the XY rounding grid has its
+    length quantised away while its extrusion survives intact -- and the IMPLIED flow explodes.
+    Measured on a 120mm N=5 nucleon: 1240 of 12240 extruding moves (10.1%) were under 0.01mm,
+    contributing 4.08mm of path in total, and 421 of them implied over 65 mm3/s. One asked for
+    115 mm3/s, which validate.py correctly refused.
+
+    The moves are not wrong about material -- E per mm of real path is right -- but the printer
+    executes what is written, and a 0.001mm move carrying a full segment's extrusion is a
+    discontinuity the firmware has to absorb.
+
+    min_seg is 0.02mm: 20x the XY rounding grid, and ~1% of a 2.17mm bead, so the path cannot
+    move visibly. Endpoints are always kept so a closed loop stays closed.
+    """
+    if len(pts) < 3:
+        return pts
+    out = [pts[0]]
+    for p in pts[1:-1]:
+        if (p[0] - out[-1][0]) ** 2 + (p[1] - out[-1][1]) ** 2 >= min_seg * min_seg:
+            out.append(p)
+    # CLOSING THE LOOP WITHOUT RE-CREATING THE DEFECT. Appending the final point unconditionally
+    # makes a micro-segment whenever it lands within min_seg of the last kept point -- which is
+    # exactly the artifact this function removes, reintroduced once per closed loop. Measured: it
+    # left 40 such moves in a 40-layer nucleon, one of which implied 68.9 mm3/s against a 65 cap.
+    # If the endpoint is too close, MOVE the last kept point onto it instead of adding one.
+    if (pts[-1][0] - out[-1][0]) ** 2 + (pts[-1][1] - out[-1][1]) ** 2 < min_seg * min_seg:
+        if len(out) > 1:
+            out[-1] = pts[-1]
+        else:
+            out.append(pts[-1])
+    else:
+        out.append(pts[-1])
+    return out

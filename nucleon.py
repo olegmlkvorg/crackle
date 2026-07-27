@@ -155,7 +155,7 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_
                 t = 2 * math.pi * i / n_per
                 x, y = a * math.cos(t), b * math.sin(t)
                 pts.append((cx + x * c - y * s, cy + x * s + y * c))
-        return pts
+        return machine.decimate(pts)
     accel = accel or machine.ACCEL
     jd = 5.0 ** 2 * (math.sqrt(2.0) - 1.0) / accel
     kk = speed ** 2 / (jd * accel)
@@ -200,7 +200,7 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_
     if speed:
         r_min = speed * speed / (accel or machine.ACCEL)
         pts = smooth.fillet(pts, max(2.0 * r_min, 2.0), speed=speed, accel=accel or machine.ACCEL)
-    return pts
+    return machine.decimate(pts)
 
 
 def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_win,
@@ -528,7 +528,8 @@ if __name__ == "__main__":
     ap.add_argument("--N", type=int, default=8, help="ellipse count; junctions = 2N(N-1)")
     ap.add_argument("--a", type=float, default=25.0, help="semi-major axis mm")
     ap.add_argument("--ratio", type=float, default=0.55, help="b/a — fatter prints faster")
-    ap.add_argument("--origin", type=float, default=40.0)
+    ap.add_argument("--origin", type=float, default=None,
+                    help="edge margin; default centres the part on the plate")
     ap.add_argument("--layers", type=int, default=12)
     ap.add_argument("--layer_h", type=float, default=machine.BEAD_H)   # stacking ceiling
     ap.add_argument("--strand_w", type=float, default=machine.BEAD_W)  # stacking ceiling.
@@ -543,8 +544,8 @@ if __name__ == "__main__":
     ap.add_argument("--lift", type=float, default=0.5)
     ap.add_argument("--lift-win", type=float, default=12.0)
     ap.add_argument("--temp", type=int, default=0)
-    ap.add_argument("--material", choices=sorted(machine.MATERIAL_TEMP), default="pla")
-    ap.add_argument("--printer", choices=sorted(machine.BED), default="k2plus")
+    ap.add_argument("--material", choices=sorted(machine.MATERIAL_TEMP), default=None)
+    ap.add_argument("--printer", choices=sorted(machine.BED), default=machine.DEFAULT_PRINTER)
     ap.add_argument("--bed", type=int, default=0,
                     help="0 = ask machine.bed_for(material, printer). A hardcoded 120 is what gave\n"
                          "the K1C two klippy_shutdowns: it cannot HOLD 120 under load (90 measured),\n"
@@ -572,6 +573,12 @@ if __name__ == "__main__":
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+    a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
+    # CENTRE ON THE PLATE BY DEFAULT. A literal 40mm margin put a 120mm part at (100,100)
+    # on a 350mm bed -- off-centre, unevenly cooled, and nearer one edge than the other. The
+    # plate size is already known per printer; derive from it rather than from a constant.
+    if a.origin is None:
+        a.origin = machine.BED[a.printer][0] / 2.0 - a.a
     # MATERIAL ROUTES THE NOZZLE AND THE FLOW TOO — see machine.MATERIAL_TEMP.
     a.temp = a.temp or machine.temp_for(a.material)
     a.flow = machine.flow_for(a.material, a.flow or machine.FLOW, ' for nucleon.py')

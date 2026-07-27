@@ -259,7 +259,7 @@ if __name__ == "__main__":
                     # 120 mm/s in fixed-speed mode, which starves the bead to a thread
                     # at low flow — it reads as "not extruding at all".
                     help="hold this speed and ramp WIDTH instead (0 = ramp speed)")
-    ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
+    ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED))
     ap.add_argument("--aux", type=float, default=1.0, help="side/chamber fans 0-1")
     ap.add_argument("--bed-size", default=None, help="X,Y bed size, e.g. 229,225 for the K1C")
     ap.add_argument("--no-home", action="store_true")

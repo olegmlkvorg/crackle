@@ -40,7 +40,7 @@ ap.add_argument("--rib", type=float, default=6.0)
 ap.add_argument("--cell", type=float, default=30.0)
 ap.add_argument("--style", default="ribbed")
 ap.add_argument("--flow", type=float, default=machine.SUSTAINED_FLOW_BY_MATERIAL[machine.DEFAULT_MATERIAL])
-ap.add_argument("--printer", default="k2plus")
+ap.add_argument("--printer", default=machine.DEFAULT_PRINTER)
 ap.add_argument("--out", default="/private/tmp/claude-501/-Users-olegmalkov-dev-Assist/"
                                  "36659e1b-82c9-403f-979a-79971579343d/scratchpad/out")
 A = ap.parse_args()

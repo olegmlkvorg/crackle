@@ -189,7 +189,7 @@ def upload(ip, path, force=False, skip_validate=False):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="*")
-    ap.add_argument("--printer", default="k2plus", choices=list(PRINTERS))
+    ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=list(PRINTERS))
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--force", action="store_true", help="upload even if that printer is mid-print")
     ap.add_argument("--no-start", action="store_true", help="upload only, do not start")

@@ -383,7 +383,7 @@ if __name__ == "__main__":
     ap.add_argument("--material", default=machine.DEFAULT_MATERIAL,
                     choices=sorted(machine.MATERIAL_TEMP),
                     help="stamped into the file; TPU is fan-guarded")
-    ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
+    ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED))
     ap.add_argument("--no-home", action="store_true")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
