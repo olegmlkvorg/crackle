@@ -133,15 +133,21 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     # ask for more than 50 — a lower --flow, or a narrower bead, silently produced an off-speed file
     # and nothing said so. Pinning it removes the accident.
     speed = machine.CONSTANT_SPEED
+    # WITH SPEED AND BEAD BOTH FIXED, FLOW IS FULLY DETERMINED — so --flow is ADVISORY here, and it
+    # has to say so in BOTH directions. A cap that silently rewrites your input is indistinguishable
+    # from a bug (machine.speed_for says exactly this), and the old code rewrote it in silence: it
+    # recomputed `flow` from the capped speed and printed the result as if it had been asked for.
     delivered = bead_w * bead_h * speed
-    if delivered < flow * 0.999:
-        # SAY IT, DO NOT SILENTLY REWRITE IT. Flow is now the OUTPUT; the way to raise it is the
-        # bead, not the head — but widening past machine.BEAD_W (1.5x nozzle) makes the bead land
-        # TALLER than the Z step on stacked runs, so the suggestion is a suggestion, not a default.
-        print(f"  ! flow target {flow:g} mm3/s would need {flow/(bead_w*bead_h):.0f} mm/s, but "
-              f"speed is FIXED at {speed:g} (machine.CONSTANT_SPEED) — running {delivered:.1f} "
-              f"mm3/s ({delivered/flow*100:.0f}% of target). Widen the bead to close the gap: "
-              f"--bead-w {machine.bead_for_flow(flow, bead_h):.2f} (check it still stacks).")
+    if abs(delivered - flow) > flow * 0.001:
+        _dir = "under" if delivered < flow else "OVER"
+        # The way to move flow is the BEAD, not the head. But widening past machine.BEAD_W
+        # (1.5x nozzle) makes the bead land TALLER than the Z step and the part climbs into the
+        # nozzle on a stacked run — so the width is printed as a suggestion, never applied.
+        print(f"  ! flow is an OUTPUT here: {bead_w:g}x{bead_h:g} at a fixed {speed:g} mm/s "
+              f"(machine.CONSTANT_SPEED) delivers {delivered:.1f} mm3/s, {_dir} the {flow:g} "
+              f"requested ({delivered/flow*100:.0f}%). Speed may not move — R3. To hit {flow:g} "
+              f"exactly, set --bead-w {machine.bead_for_flow(flow, bead_h):.2f} "
+              f"(machine.BEAD_W is {machine.BEAD_W:g}; check it still stacks before going wider).")
     flow = delivered
     f = round(speed * 60)
     s = cell

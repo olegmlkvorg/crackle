@@ -217,6 +217,29 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
         print(f"  ! --flow {flow_target:g} mm3/s is not what a {bead_w:g}x{bead_h:g} bead delivers "
               f"at the {speed:g} mm/s constant speed — running {flow:.1f}. Speed is fixed (R3); to "
               f"hit {flow_target:g} set --bead-w {machine.bead_for_flow(flow_target, bead_h):.2f}.")
+    # UNDER A FIXED SPEED, WIDTH *IS* FLOW — AND THAT INVERTS THE WIDE-BEAD TRICK.
+    # Oleg's technique was "you can do line width 10mm to compensate for the flow ... we know it is
+    # not going to make 10mm, but it will extrude enough": a huge commanded bead bought material per
+    # millimetre so the HEAD COULD CRAWL and still hit the flow target. The old code did exactly
+    # that — --bead-w 10 solved to 9.2 mm/s.
+    # With speed pinned at the north star the same command means 10 x 0.6 x 50 = 300 mm3/s, five
+    # times the highest flow this machine has ever been shown to hold. Replaying the archived
+    # commands proved it: moore_k1c_o4_190mm_L3 emitted a move implying 301 mm3/s.
+    # REFUSE, DO NOT QUIETLY RESIZE. Narrowing 10mm to 1.83mm to satisfy the ceiling would return a
+    # lattice instead of the fused sheet that was asked for, and machine.speed_for already records
+    # why that is unacceptable: "a cap that silently rewrites your input is indistinguishable from
+    # a bug". Say what the arithmetic is and let the operator choose.
+    _mcap = machine.MATERIAL_FLOW.get(material, machine.FLOW)
+    if flow > _mcap + 1e-9:
+        _wmax = machine.bead_for_flow(_mcap, bead_h, speed)
+        raise SystemExit(
+            f"a {bead_w:g}x{bead_h:g} bead at the fixed {speed:g} mm/s delivers {flow:.0f} mm3/s; "
+            f"{material}'s measured ceiling is {_mcap:g}.\n"
+            f"  Speed is an INPUT now (R3), so width is flow: the widest bead {material} can take "
+            f"at {speed:g} mm/s is --bead-w {_wmax:.2f}"
+            + (f",\n  which is under the {machine.NOZZLE:g}mm nozzle — {material} cannot be run at "
+               f"the {speed:g} mm/s north star at all on this hotend."
+               if _wmax < machine.NOZZLE else "."))
 
     # Every order that will appear on the plate must clear the fuse check, not just the default.
     orders = list(mix) if mix else [order]
@@ -274,7 +297,19 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     first_w = first_area / first_h      # what it SPREADS to, not a second commanded bead
     e_first_mm = e_per_mm
 
-    shapes = [round_corners(curve(o, span, closed), fillet) for o in orders]
+    # THE MOVE-RATE CEILING IS A FUNCTION OF SPEED, AND THE SPEED JUST TREBLED.
+    # round_corners samples every 90-degree corner by ANGLE (6 deg per point), so a small-span, high
+    # -order lattice emits sub-0.2mm segments. That was harmless while --flow 13 solved to 18 mm/s;
+    # at the fixed 50 it is 2.8x the segments per second, and replaying the archived commands caught
+    # it: moore_k2plus_o3_40mm_L17 asked for 380 moves/s against machine.MAX_MOVES_PER_SEC=300, the
+    # rate at which Klipper drains its lookahead and the head FREEZES with no error to read.
+    # The threshold is derived, not chosen — a segment shorter than speed/MAX_MOVES_PER_SEC cannot
+    # be executed at this speed, so it is not geometry, it is a request the host cannot serve.
+    # machine.decimate exists for exactly this and keeps endpoints, so closed loops stay closed.
+    # 1.2x margin because the rate is measured over a 24-move window, not per segment.
+    _min_seg = machine.CONSTANT_SPEED / machine.MAX_MOVES_PER_SEC * 1.2
+    shapes = [machine.decimate(round_corners(curve(o, span, closed), fillet), _min_seg)
+              for o in orders]
     pts = shapes[0]
 
     # TILE THE WHOLE PLATE. Oleg: "use entire area to print everything needed not a tiny thing".
@@ -323,13 +358,15 @@ def emit(order, span, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home, pres
     _mins_all = _len1 * layers / speed / 60.0
     _fc = machine.flow_for_duration(flow, _mins_all, " for this part", material)
     if _fc < flow - 1e-9:
-        bead_w = _fc / (speed * bead_h)
-        e_per_mm = e_first_mm = (bead_w * bead_h) / area
-        first_area = bead_w * bead_h
-        first_w = first_area / first_h
-        flow = speed * bead_w * bead_h
-        print(f"  ! bead narrowed to {bead_w:.2f}mm to hold {flow:.1f} mm3/s at the fixed "
-              f"{speed:g} mm/s — the head does not slow down (R3).")
+        # flow_for_duration's own advice is "deposit per mm is unchanged; only the clock moves" —
+        # true when the answer was to SLOW DOWN, which R3 no longer permits. The only lever left is
+        # the bead, and moving that DOES change the part, so this refuses instead of resizing.
+        raise SystemExit(
+            f"a {bead_w:g}x{bead_h:g} bead at {speed:g} mm/s holds {flow:.1f} mm3/s for "
+            f"{_mins_all:.0f} min of unbroken extrusion, above the {_fc:g} mm3/s maintained figure "
+            f"for {material}.\n"
+            f"  Speed is fixed (R3), so the only lever is the bead: --bead-w "
+            f"{machine.bead_for_flow(_fc, bead_h, speed):.2f}, or fewer layers / a smaller span.")
 
     L = []
     w = L.append

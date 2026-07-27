@@ -87,3 +87,24 @@ measurement files should not need it: `validate.py` already exempts files stampi
 from the flow cap, because a flow ramp deliberately exceeds it.
 
 Verified 2026-07-27: pushing a file with a starved first layer is **refused**.
+
+## What an independent audit found wrong with THIS file's claims
+
+An auditor re-ran every generator with its own parser and checked specifically whether anyone made
+a file pass by bending the checker. It cleared the five generators — the fixes are real deltas, and
+the baseline defects reproduce to the digit — and it caught two things about the guards themselves.
+
+**1. `solid.py` passes BECAUSE of the LINK exemption, not on its own merit.** Strip only the
+`; LINK thin` tag from its emitted gcode and it fails: *33 extruding moves under 80% of declared
+flow*. The physical reason for thinning a contour connector is real, and the exemption is declared,
+counted, printed and documented — but the honest statement is that this compliance was **granted by
+a checker edit**, not earned by the generator. Anyone reading a green tick on `solid.py` should know
+that.
+
+**2. RULES.md claimed "a missing stamp is itself a failure" and that was only true of `; FLOW=`.**
+The auditor proved it: delete `; LAYER_H=` and R2 died silently — a deliberately injected **1.9 mm
+Z jump, 3× the layer height and a textbook floating line, PASSED**. Delete `; MATERIAL=` and R6 died
+silently. Both now fail loudly, verified against stamp-stripped files.
+
+A guard that switches itself off when its input goes missing is worse than no guard, because the
+green tick is indistinguishable from a real pass. This file asserted the fix before it existed.

@@ -195,6 +195,26 @@ def emit(length, width, belt_w, n_cleats, cleat_h, cleat_w, bead_w, layer_h, flo
         print(f"  ! --flow {flow:g} mm3/s is not what a {bead_w}x{layer_h} bead delivers at the "
               f"{speed:g} mm/s constant speed — running {delivered:.1f}. Speed is fixed (R3); to "
               f"hit {flow:g} set --bead-w {machine.bead_for_flow(flow, layer_h):.2f}.")
+    # A FIXED SPEED AND A MATERIAL'S FLOW CEILING CAN GENUINELY CONFLICT — REFUSE, DO NOT SPLIT
+    # THE DIFFERENCE. With speed pinned by R3, the bead is the only free variable, and a nozzle
+    # cannot lay one narrower than its own orifice. TPU is the case that exists: measured 15.2
+    # mm3/s, so a 50 mm/s head would need a 0.51mm bead through a 0.8mm hole. There is no answer,
+    # and the old code's answer — drop the head to 21 mm/s — is exactly the R3 violation that
+    # started this. Printing 36 on a 15.2 material instead would be worse still, so the file is
+    # not emitted at all and the arithmetic is stated.
+    _cap = machine.flow_for(material, delivered, ' for belt.py')
+    if delivered > _cap + 1e-9:
+        _bead = machine.bead_for_flow(_cap, layer_h, speed)
+        _fix = (f"use --bead-w {_bead:.2f}" if _bead >= machine.NOZZLE else
+                f"no bead works at this layer height — {_bead:.2f}mm is under the "
+                f"{machine.NOZZLE}mm orifice; drop --layer-h to "
+                f"{_cap / (speed * machine.NOZZLE):.2f} and --bead-w to {machine.NOZZLE}, "
+                f"or print this belt in a material with more flow")
+        raise SystemExit(
+            f"a {bead_w}x{layer_h} bead at the fixed {speed:g} mm/s delivers {delivered:.1f} "
+            f"mm3/s, but {material}'s measured ceiling is {_cap:g}. Speed is not the variable "
+            f"here (R3: \"50 is our north star for moving\") — the bead is. To hit {_cap:g}, "
+            f"{_fix}.")
     flow = delivered
     f = round(speed * 60)
     layers = max(1, int(round(belt_w / layer_h)))

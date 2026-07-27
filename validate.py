@@ -36,6 +36,12 @@ def check(path):
     # Z-ladder block where it used to be read. A stamp read late is a stamp that is missing early.
     _mlh0 = re.search(r'^; LAYER_H=([\d.]+)', open(path).read()[:4000], re.M)
     _lh = float(_mlh0.group(1)) if _mlh0 else None
+    # A MISSING STAMP IS A FAILURE. RULES.md already CLAIMED this, but it was only implemented for
+    # '; FLOW='. An independent audit proved the claim false for the other two: delete '; LAYER_H='
+    # and R2 dies silently (a 1.9mm Z jump -- 3x the layer height, a floating line -- passed);
+    # delete '; MATERIAL=' and R6 dies silently. A guard that switches itself off when its input
+    # goes missing is worse than no guard, because the green tick is indistinguishable.
+    _stamp_missing = []
     BED = bed_for(path) or DEFAULT_BED
     _unstamped = bed_for(path) is None
     # The machine start block (START_PRINT + Creality's own prime) legitimately lifts to Z3 and
@@ -838,6 +844,12 @@ def check(path):
     if _fmat and _fmat not in machine.SUSTAINED_FLOW_BY_MATERIAL:
         problems.append(f"R6 unknown material '{_fmat}': no maintained flow figure exists for it, "
                         f"so nothing about this file's flow can be checked")
+
+    if _lh is None:
+        problems.append("no '; LAYER_H=' stamp — R2 (Z ladder / floating lines) cannot be checked "
+                        "at all. Regenerate with a current generator.")
+    if not _fmat:
+        problems.append("no '; MATERIAL=' stamp — R6 and the flow cap cannot be checked at all.")
 
     mins = secs / 60.0        # from the real F values (ignores accel, so it's a lower bound)
     print(f"\n{path}")
