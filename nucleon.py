@@ -49,6 +49,26 @@ import smooth
 from pathstats import crossings as find_crossings
 
 
+# WHAT A NUCLEON SPACER IS, AND IS NOT — measured 2026-07-27, before anyone builds one.
+#
+# WORKS: as a spacer. It carries compression along the post (a 3-ellipse rosette at a=17 is 426mm2
+# of cross-section), it threads on with N-point contact and millimetres of relief for a hot bulge,
+# and it is ONE continuous stroke — 434 dry moves and 10.4m on the round-bore shell it replaces
+# became 1 move.
+#
+# DOES NOT WORK: as a fillable vessel, which is what the bamboo-shelf spacers are for. The lobes
+# are OPEN at the outside near the ellipse major-axis tips — measured at r = 0.92a, the outer band
+# is open at 166 of 360 angles for N=3, 134 for N=4, 85 for N=6, 56 for N=8. Gypsum runs straight
+# out. More ellipses close it slowly and never fully.
+#
+# It does have 15 (N=3) to 56 (N=8) SEALED internal cells between crossings, so it is not that
+# there is nowhere to put fill — it is that the outermost lobes leak.
+#
+# THE FIX ALREADY EXISTS IN THIS FILE: nested_path() draws a core plus an outer CAGE as one
+# continuous run. An outer ring at r = a is tangent to every ellipse at its major-axis tips, so the
+# ring and the rosette meet naturally and the path can walk ring -> ellipse -> ring without lifting.
+# That closes the perimeter while keeping the continuous stroke and the lobed bore. Not built yet.
+
 def bore_ratio(a, bore_d, fit=0.70, N=3, bead_w=1.2, speed=58.0):
     """Solve b/a so the emitted central void MEASURES `bore_d + fit` across.
 
