@@ -22,8 +22,16 @@ import re, sys, math, os
 
 
 def read_path(path):
+    """Parse a gcode file into drawable segments.
+
+    NO PHANTOM FIRST SEGMENT. Position starts unknown, not at (0,0,0). Seeding it at the origin
+    invented a segment from the plate corner to the first real move -- which then stretched the
+    drawing's X range to 0..235 on a part that lives at 115..235, AND, because that phantom sat at
+    Z=0.0, it became "layer 1" in the layer index, so `--layers=1` rendered exactly one bogus line
+    instead of the first layer. A diagram that disagrees with the file is worse than no diagram.
+    """
     segs = []                     # (x0,y0,z0, x1,y1,z1, extruding)
-    x = y = z = 0.0; e = 0.0
+    x = y = z = None; e = 0.0
     for ln in open(path):
         t = ln.split(';')[0].strip()
         if not t.startswith(('G0', 'G1')):
@@ -34,10 +42,11 @@ def read_path(path):
         mz = re.search(r'Z([-\d.]+)', t); me = re.search(r'E([-\d.]+)', t)
         nx = float(mx.group(1)) if mx else x
         ny = float(my.group(1)) if my else y
-        nz = float(mz.group(1)) if mz else z
+        nz = float(mz.group(1)) if mz else (z if z is not None else 0.0)
         ext = bool(me) and float(me.group(1)) > e + 1e-9
         if me: e = float(me.group(1))
-        if (nx, ny, nz) != (x, y, z):
+        known = None not in (x, y, z)
+        if known and (nx, ny, nz) != (x, y, z):
             segs.append((x, y, z, nx, ny, nz, ext))
         x, y, z = nx, ny, nz
     return segs
