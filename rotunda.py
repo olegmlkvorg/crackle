@@ -196,7 +196,18 @@ def main():
             b1 = brim_rings[1] + [brim_rings[1][0]]
             stroke(b1, z, first=True)
             stroke(nearest_start(brim_rings[0]), z)
-        stroke(rose_pts, z, first=False, zs=rose_z)
+        # THE ROSE STARTS WHERE THE PEN IS. Its parameter start is the angle-0 outer tip; on
+        # layer 1 the brim ends on the OPPOSITE side, and stroke()'s extruded gap-close then
+        # drew a 197mm chord straight through the centre of the rosette (Oleg, from the plate:
+        # "solid line in the middle of the base intersecting our beautiful rosetta"). Rotating
+        # the START kills the chord — and the crossing ladder must be RECOMPUTED, not rotated:
+        # which strand of a crossing lifts depends on laying ORDER, and a rotated start flips
+        # earlier/later at every crossing behind it (a rotated ladder = floating lines).
+        j = min(range(len(rose_pts) - 1),
+                key=lambda i: (rose_pts[i][0]-pos[0])**2 + (rose_pts[i][1]-pos[1])**2)
+        rpts = rose_pts[j:-1] + rose_pts[:j] + [rose_pts[j]]
+        rz, _ = crossing_z(rpts, bw, machine.PRESS_HARD, 0.5)
+        stroke(rpts, z, first=False, zs=rz)
         prior = list(rose_pts)
         for ring in rim_rings:
             cpts = nearest_start(ring)
