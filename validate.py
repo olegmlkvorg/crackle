@@ -646,7 +646,10 @@ def check(path):
         _islink = 'LINK' in _raw.upper()
         if _islink:
             _nlink += 1
-        if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime and not _islink:
+        _l1decl = re.search(r'^; SPEED_LAYER1=([\d.]+)', _rules_txt, re.M)
+        _isl1 = bool(_l1decl) and _fr is not None and abs(_fr/60.0 - float(_l1decl.group(1))) < 0.6
+        if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime and not _islink \
+                and not _isl1:
             _d = math.hypot(float(_g['X']) - _xr, float(_g['Y']) - _yr)
             _de = float(_g['E']) - _er
             if _d > 0.05 and _de > 0:
@@ -669,10 +672,26 @@ def check(path):
     # Failing on "not exactly 50" made the wide-bead trick impossible and made me report TPU as
     # unprintable when it simply runs at 21 mm/s.
     if _spd:
-        _fast = {k: v for k, v in _spd.items() if k > machine.MAX_SPEED + 0.6}
+        _ovr = re.search(r'^; SPEED_OVERRIDE=([\d.]+)', _rules_txt, re.M)
+        _ceil = float(_ovr.group(1)) if _ovr else machine.MAX_SPEED
+        if _ovr:
+            print(f"  speed ceiling raised to {_ceil:g} mm/s by an explicit '; SPEED_OVERRIDE=' "
+                  f"stamp — the north star is {machine.MAX_SPEED:g}")
+        _fast = {k: v for k, v in _spd.items() if k > _ceil + 0.6}
         if _fast:
             problems.append(f"R3 speed ceiling: {sum(_fast.values())} extruding moves exceed the "
-                            f"{machine.MAX_SPEED:g} mm/s north star (found {sorted(_fast)[:4]})")
+                            f"{_ceil:g} mm/s ceiling (found {sorted(_fast)[:4]})")
+        # A DECLARED FIRST-LAYER SPEED IS LEGITIMATE. Oleg, 2026-07-27: "lets also try first layer
+        # normal speed and ret layers double speed". Layer 1 is already a different cross-section
+        # (pressed to PRESS_HARD), so it is a different regime, not a wobble inside one. What R3
+        # protects is constancy WITHIN the body. The file must declare it: '; SPEED_LAYER1='.
+        _decl_l1 = re.search(r'^; SPEED_LAYER1=([\d.]+)', _rules_txt, re.M)
+        if _decl_l1 and len(_spd) == 2:
+            _l1v = round(float(_decl_l1.group(1)), 1)
+            if _l1v in _spd:
+                print(f"  layer 1 declared at {_l1v:g} mm/s, body at "
+                      f"{[k for k in _spd if k != _l1v][0]:g} mm/s — two declared regimes")
+                _spd = {k: v for k, v in _spd.items() if k != _l1v}
         if len(_spd) > 1:
             _main = max(_spd, key=_spd.get)
             _other = {k: v for k, v in _spd.items() if k != _main}
@@ -838,12 +857,14 @@ def check(path):
         if _ln.startswith('G1') and ' E' in _ln and ('X' in _ln or 'Y' in _ln):
             if _f > _worst[0]:
                 _worst = (_f, _i + 1)
-    if _worst[0] > machine.MAX_SPEED + 0.5:
+    _ovr2 = re.search(r'^; SPEED_OVERRIDE=([\d.]+)', open(path).read(), re.M)
+    _cap2 = float(_ovr2.group(1)) if _ovr2 else machine.MAX_SPEED
+    if _worst[0] > _cap2 + 0.5:
         problems.append(f"extruding move at line {_worst[1]} runs at {_worst[0]:.0f} mm/s — the hard "
-                        f"cap is {machine.MAX_SPEED:.0f} (machine.MAX_SPEED). Lower --flow or widen "
+                        f"cap is {_cap2:.0f}. Lower --flow or widen "
                         f"the bead: speed = flow / (bead_w * layer_h).")
     else:
-        print(f"  peak extruding speed {_worst[0]:.1f} mm/s (cap {machine.MAX_SPEED:.0f})")
+        print(f"  peak extruding speed {_worst[0]:.1f} mm/s (cap {_cap2:.0f})")
 
     # MOVE RATE. Klipper stalls when the host cannot feed segments fast enough; the machine simply
     # FREEZES mid-print, with no error to read. A coupler shipped at 3354 moves/s because shapely
