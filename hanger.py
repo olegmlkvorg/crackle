@@ -66,9 +66,67 @@ def hook_region(shank, hook_r, thick, hole_d, gap_deg, tip):
     return body.difference(Point(0.0, top).buffer(eye_r - thick / 2.0, resolution=48))
 
 
+def lip_region(wall, grip, shank, hook_r, thick, hole_d, tip):
+    """An over-the-edge hook: hangs on a vertical wall by hooking OVER its top.
+
+    Different animal from the J. The J hangs FROM something by its eye. This one grips a lip:
+      * a short back leg drops down the far side of the wall
+      * a 180-degree arc passes over the top, its inner clearance sized to the WALL THICKNESS
+      * the front leg (shank) descends on the near side
+      * the load hook curls forward off the bottom
+
+    The mouth is `wall` wide at the inside of the arc, so the part sits on the lip rather than
+    being sprung onto it -- a printed part sprung over an edge is a part loaded in cleavage
+    along its layer lines, which is the weak direction.
+    """
+    r = thick / 2.0
+    inner = wall / 2.0                       # arc centreline radius: half the wall + half a wall
+    cr = inner + r                           # centreline of the stroke going over the lip
+    parts = []
+
+    # back leg: down the far side
+    bx = -cr
+    parts.append(LineString([(bx, 0.0), (bx, -grip)]).buffer(r, resolution=16))
+
+    # the arc over the top of the wall
+    pts = []
+    n = 48
+    for i in range(n + 1):
+        a = math.pi - math.pi * i / n        # 180deg -> 0deg
+        pts.append((cr * math.cos(a), cr * math.sin(a)))
+    parts.append(LineString(pts).buffer(r, resolution=16))
+
+    # front leg / shank: down the near side
+    fx = cr
+    parts.append(LineString([(fx, 0.0), (fx, -shank)]).buffer(r, resolution=16))
+
+    # load hook: curls FORWARD off the bottom of the shank
+    cx, cy = fx + hook_r, -shank
+    arc = []
+    for i in range(37):
+        a = math.radians(180.0 - 150.0 * i / 36.0)
+        arc.append((cx + hook_r * math.cos(a), cy + hook_r * math.sin(a)))
+    parts.append(LineString(arc).buffer(r, resolution=16))
+    if tip > 0:
+        ax, ay = arc[-1]; bx2, by2 = arc[-2]
+        dx, dy = ax - bx2, ay - by2
+        m = math.hypot(dx, dy) or 1.0
+        parts.append(LineString([(ax, ay), (ax + dx / m * tip, ay + dy / m * tip)])
+                     .buffer(r, resolution=16))
+
+    body = unary_union(parts)
+    if hole_d > 0:                            # optional eye through the back leg
+        body = body.difference(Point(bx, -grip + hole_d).buffer(hole_d / 2.0, resolution=32))
+    return body
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--style", choices=("j", "lip"), default="j",
+                    help="j = hangs from its eye; lip = hooks OVER a vertical wall")
+    ap.add_argument("--wall", type=float, default=25.0, help="lip style: wall thickness to grip")
+    ap.add_argument("--grip", type=float, default=20.0, help="lip style: how far down the far side")
     ap.add_argument("--shank", type=float, default=45.0, help="straight length above the hook")
     ap.add_argument("--hook-r", type=float, default=13.0, help="hook inner curl radius")
     ap.add_argument("--thick", type=float, default=6.0, help="wall thickness of the stroke")
@@ -103,7 +161,10 @@ def main():
         print(f"  thickness {a.thick:g} -> {snapped:.2f} mm ({n_beads} x {a.bead_w:.2f} bead)")
         a.thick = snapped
 
-    one = hook_region(a.shank, a.hook_r, a.thick, a.hole, a.gap, a.tip)
+    if a.style == "lip":
+        one = lip_region(a.wall, a.grip, a.shank, a.hook_r, a.thick, a.hole, a.tip)
+    else:
+        one = hook_region(a.shank, a.hook_r, a.thick, a.hole, a.gap, a.tip)
     minx, miny, maxx, maxy = one.bounds
     w = maxx - minx
     pitch = a.spacing or (w + 12.0)
@@ -129,7 +190,7 @@ def main():
                    True, machine.PRESS_HARD, 100, a.bead_w,
                    True, a.printer, f"HANGER x{a.n}", material=a.material)
     os.makedirs(a.out, exist_ok=True)
-    fn = os.path.join(a.out, f"hanger_{a.printer}_x{a.n}_h{a.hole:g}_T{temp:g}.gcode")
+    fn = os.path.join(a.out, f"hanger{a.style}_{a.printer}_x{a.n}_h{a.hole:g}_T{temp:g}.gcode")
     open(fn, "w").write(g)
     print(f"{fn}")
 
