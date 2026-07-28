@@ -57,7 +57,8 @@ def main():
     ap.add_argument("--stub", type=float, default=8.0, help="floor: stub wall height")
     ap.add_argument("--floor-layers", type=int, default=5)
     ap.add_argument("--close", type=float, default=12.0)
-    ap.add_argument("--segments", type=int, default=2)
+    ap.add_argument("--segments", type=int, default=3,
+                help="3 fits the 334mm printable width at d200; 2 does not")
     ap.add_argument("--segment", type=int, default=1, help="which wall panel (1-based)")
     ap.add_argument("--taper", type=float, default=2.0, help="bucket flare, degrees")
     ap.add_argument("--rail", type=float, default=None, help="rail width; default 3 beads")
