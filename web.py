@@ -292,39 +292,34 @@ def main():
             else:
                 w(f"G1 F{f}")
         qx, qy, qz = pos[0], pos[1], pos[2]
-        # TWO gentle regimes share the slow speed (pocket_f = speed/4): the bore POCKETS (half
-        # flow, Oleg's "4x slow down rthere") and the Z RIDE-OVERS (NO flow — Oleg 2026-07-28:
-        # "when you jump over the lines with Z, make it more gentle with slowdown and fillament
-        # pause extrusuin"). A ride-over is a point lifted well above this stroke's floor to cross
-        # an existing strand; the strand BELOW already covers that ground, so the upper line
-        # bridges the crossing without extruding (no blob) and resumes extruding on the descent.
-        _slow = False   # head is at the gentle pocket_f (either regime)
+        # THE BORE POCKETS get half flow + quarter speed (Oleg's "4x slow down rthere" + "50%
+        # fillament flow"), declared ; SPEED_POCKET and enforced by R3b. CROSSINGS just EXTRUDE
+        # THROUGH: Oleg 2026-07-28 chose "lower the crossing lift instead" over pausing extrusion —
+        # the earlier extrusion-pause put all 1635 pauses on the PRESSED FLOOR (the wall has no
+        # self-crossings), Swiss-cheesing the one solid layer and tripping the AI camera. The floor
+        # stays solid now; crossing_z's reduced lift (0.2, was 0.5) keeps the ride-over bumps small.
+        _in_pocket = False
         for i, (X, Y) in enumerate(pts[1:], 1):
             d = math.hypot(X - qx, Y - qy)
             if d < 0.02:
                 continue
             zz = (base + zs[i]) if zs else z
-            _pocket = pflags is not None and pflags[i]
-            _ride = (not _pocket) and (zz - z) > 0.12
-            if _pocket or _ride:
-                if not _slow:
-                    w(f"G1 F{pocket_f}   ; gentle — {'bore zone' if _pocket else 'lifting over a strand'}")
-                    _slow = True
-                if _pocket:
-                    e += math.hypot(d, zz - qz) * e_per_mm * 0.5
-                    w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f} ; LINK pocket 50% flow 4x-slow")
-                else:
-                    w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} ; LINK ride-over gentle (extrusion paused)")
+            if pflags is not None and pflags[i]:
+                if not _in_pocket:
+                    w(f"G1 F{pocket_f}   ; 4x slowdown — entering bore zone")
+                    _in_pocket = True
+                e += math.hypot(d, zz - qz) * e_per_mm * 0.5
+                w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f} ; LINK pocket 50% flow 4x-slow")
                 qx, qy, qz = X, Y, zz
                 continue
-            if _slow:
-                w(f"G1 F{f}   ; restore body speed")
-                _slow = False
+            if _in_pocket:
+                w(f"G1 F{f}   ; restore body speed — leaving bore zone")
+                _in_pocket = False
             e += math.hypot(d, zz - qz) * e_per_mm
             w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f}")
             qx, qy, qz = X, Y, zz
-        if _slow:
-            w(f"G1 F{f}   ; restore body speed — slow zone ran to stroke end")
+        if _in_pocket:
+            w(f"G1 F{f}   ; restore body speed — pocket ran to stroke end")
         pos[0], pos[1], pos[2] = qx, qy, qz
 
     def hop(x, y, z, clear):
@@ -590,7 +585,7 @@ def main():
         j = min(range(len(rose_pts) - 1),
                 key=lambda i: (rose_pts[i][0] - (cx + R)) ** 2 + (rose_pts[i][1] - cy) ** 2)
         rpts = rose_pts[j:-1] + rose_pts[:j] + [rose_pts[j]]
-        rz, _ = crossing_z(rpts, bw, machine.PRESS_HARD, 0.5)
+        rz, _ = crossing_z(rpts, bw, machine.PRESS_HARD, 0.2)   # lift 0.5->0.2 (Oleg: lower the crossing lift)
         stroke(rpts, z1, first=True, zs=rz)
         prior = list(rpts)
         # the band's ground pass, entered at the mid-gap point nearest the rim's end so
@@ -601,10 +596,10 @@ def main():
         entry = min(mids, key=lambda p: (p[0] - pos[0]) ** 2 + (p[1] - pos[1]) ** 2)
         band0 = start_nearest(band0, entry)
         chord = densify([(pos[0], pos[1]), band0[0]], 0.8)
-        czs, _ = crossing_z(chord, bw, machine.PRESS_HARD, 0.5, prior=prior, skip=4)
+        czs, _ = crossing_z(chord, bw, machine.PRESS_HARD, 0.2, prior=prior, skip=4)
         stroke(chord, z1, zs=czs)
         prior += chord
-        bz, bcross = crossing_z(band0, bw, machine.PRESS_HARD, 0.5, prior=prior)
+        bz, bcross = crossing_z(band0, bw, machine.PRESS_HARD, 0.2, prior=prior)
         stroke(band0, z1, zs=bz)
         w("M106 S51                        ; 20% fan from layer 2")
         _bpts, _bfl = pocket_band(cx, cy, True)
