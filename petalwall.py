@@ -107,8 +107,14 @@ def main():
         w(f"M140 S{machine.bed_for(a.material, a.printer):.0f}")
         w(f"M104 S{temp}")
         w("G28")
-        w(f"M190 S{machine.bed_start(a.material, machine.bed_for(a.material, a.printer)):.0f}")
-        w(f"M140 S{machine.bed_for(a.material, a.printer):.0f}")
+        # THE FOOTPRINT RULE, INHERITED FROM THE FLOOR THAT STUCK: a 200mm part waits for the
+        # FULL held target, not the start-early floor — petalfloor started at 115 on a climbing
+        # cold plate and PEELED at ~7min (Oleg: "baking to plate failed"); the emitted layer-1
+        # numbers were correct (0.1 press, 12mm spread), the wait was the deviation.
+        _bed = machine.bed_for(a.material, a.printer)
+        _floor_wait = _bed if a.printer == "k2plus" else machine.bed_start(a.material, _bed)
+        w(f"M190 S{_floor_wait:.0f}")
+        w(f"M140 S{_bed:.0f}")
         w(f"M109 S{temp}")
         w("G92 E0")
         w(f"G1 Z{machine.PRESS_HARD:.3f} F600")
@@ -372,7 +378,11 @@ def main():
                    f"banks {nl}+{nl-1} petals interleaved (amp {Ai:.0f}, nest {a.nest:g}), "
                    f"2 layers; ~{grams:.1f} g, ~{mins:.0f} min")
 
-    w("M107"); w("M104 S0"); w("M140 S0")
+    # KEEP THE BED AT TARGET after the part — Oleg: "keep printer bed 120 so you dont need
+    # to wait when you start". Multi-part builds (floor + 3 panels) chain with zero re-heat;
+    # the bed only goes cold when he turns it off.
+    w("M107"); w("M104 S0")
+    w(f"M140 S{machine.bed_for(a.material, a.printer):.0f}   ; bed STAYS hot between parts (Oleg)")
     w("G0 Z40 F900")
     w(f"G0 X{min(10.0, bx-10):.0f} Y{by-10:.0f} F9000")
     os.makedirs(a.out, exist_ok=True)
