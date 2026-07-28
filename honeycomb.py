@@ -343,6 +343,9 @@ def emit(cell, cols, rows, bead_w, bead_h, flow, temp, bed, fil_d, bed_xy, home,
     w(f"; PRINTER={printer}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={bead_h}")     # R2: validate.py checks the Z ladder against this
+    # R4b exemption stamp: layer 1 is pressed to `press` and over-fills on purpose (the
+    # plate weld); unstamped, R4b read 2.49x as a failure (review-confirmed)
+    w(f"; PRESSED_LAYER1={press:g}")
     # R4: validate.py checks every extruding move against this, so it is the DELIVERED flow at the
     # resolved speed (bead_w * bead_h * speed), never the --flow that was asked for.
     w(f"; FLOW={flow:.1f}")

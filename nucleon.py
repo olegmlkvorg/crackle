@@ -354,6 +354,10 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
     w(f"; PRINTER={printer}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={layer_h}")   # validate.py checks the Z ladder against this
+    # R4b exemption stamp: layer 1 IS pressed to PRESS_HARD here (see the prime line and
+    # z_lo) and its over-fill is the plate weld, by doctrine. Without the stamp R4b read
+    # the deliberate 3.23x layer-1 fill as a shear-off warning (review-confirmed).
+    w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     # THE STAMP IS WHAT THE FILE DELIVERS, NOT WHAT IT WANTED. This declared `flow` — the REQUEST
     # — while every move carried strand_w*layer_h*speed. At a 1.2x0.6 bead against a 55 request the
     # north star caps the head at 50 and the file delivers 36.0, so the stamp overstated the file
