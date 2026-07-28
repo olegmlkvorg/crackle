@@ -10,16 +10,19 @@ and a printed coil ring caps the drum and swallows the stick tops.
 V4 (2026-07-28, he cancelled the solid-band base mid-print): "looks bad. letd do everything
 single layer / single wall thick. instad of doing round boars. just design the boars as part
 of continious path" + "flow max at all times" + base "10 layers in total ... with single
-layer botton itself". Base and topper are now single-bead: one closed line draws wall AND
-sockets (spring-C detours at each stick, pocket_band()); the coupon's closed-bore numbers
-below no longer size them.
+layer botton itself". Base and topper are single-bead: one closed line draws wall AND
+sockets (spring-C detours at each stick); the coupon's closed-bore numbers below no longer
+size them. V5 (2026-07-29) moved the BASE off pocket_band() to rose_sockets(): the sockets
+are now detours on the rose itself, no wall-ring circle; the topper still uses pocket_band().
 
   --part coupon   THE FIT GATE (k1c). Six socket/clip variants for a 3.175 stick, indexed
                   by edge notches (1 notch = V1 ... 6 = V6). Sized the SOLID-boss parts;
                   V4 single-bead pockets are a different fit regime (see pocket_band).
-  --part base     V4: ONE pressed layer draws the whole floor (rosette + band ground,
-                  no rim ring), then 9 single-bead laps of one closed wave line with 12
-                  spring-C pockets. Sockets are blind — the pressed pad is their bottom.
+  --part base     V5 (Oleg field orders 2026-07-29): the 12 sockets ARE the rose — a
+                  12-fold rhodonea (one non-self-crossing lap) detours into a spring-C
+                  around each stick as it passes. NO wall-ring circle. Layer 1 is dead-flat
+                  at 0.1 (no crossing lift — the adhesion bug); 10 layers stacked on a
+                  height field; bores printed first. See rose_sockets().
   --part web      one wall panel (print two, --segment 1/2 varies the net organically).
                   2 layers of web + snap-clip channels at every stick line it owns.
   --part topper   V4: printed show-face-down; 3 cap layers as ONE continuous multi-lap
@@ -160,6 +163,85 @@ def pocket_band(cx, cy, pockets):
         flags.append(any((px_ - sx) ** 2 + (py_ - sy) ** 2 < (POCKET_RC + 1.2) ** 2
                          for sx, sy in sticks))
     return out, flags
+
+
+def rose_sockets(cx, cy, R, bw):
+    """V5 base floor (Oleg field orders 2026-07-29): the 12 sockets are formed BY the rose
+    itself — no separate wall-ring circle. A 12-fold rhodonea (p=12,q=1,n=3 -> ONE lap, so
+    NON-self-crossing, with a petal tip landing on each of the 12 stick angles) detours into
+    a spring-C around each stick as the path passes it, then flows on. The whole flower is
+    one continuous stroke.
+
+    WHY 12-FOLD AND NOT THE APPROVED p13q8n3: the sockets are 12 evenly-spaced points at
+    r=R_STICK. A 13-fold rose approaches those 12 points at wildly uneven distances
+    (measured 0.4mm..8.0mm), so detouring to the far ones would draw 6-8mm radial spurs —
+    exactly the "ugly" scars Oleg forbade. A 12-fold rose approaches ALL 12 sticks
+    identically (~3.8mm), so every detour is the same short bulge and reads as the flower
+    reaching out to cradle each stick. One petal per stick, 12 sticks — the figure is now
+    12-fold like the socket ring it carries.
+
+    Returns (pts, pflags); pflags[i] marks the bore-precision moves (the C arc + its short
+    entry/exit connectors) that get half flow + 4x slowdown in stroke()."""
+    N = N_STICKS
+    GAP = 2 * math.pi / N
+    R_out = R - bw / 2.0
+    rp = rose(cx, cy, R_out, R_out * 0.11, p=12, q=1, n=3, steps=2400)
+    rp = machine.decimate(rp, machine.CONSTANT_SPEED / 300.0 * 1.2)
+    if rp and rp[0] == rp[-1]:
+        rp = rp[:-1]
+    n = len(rp)
+    # a petal tip sits at each (k+1)*GAP; the socket rides that petal at r=R_STICK
+    sticks = [(cx + R_STICK * math.cos((k + 1) * GAP),
+               cy + R_STICK * math.sin((k + 1) * GAP)) for k in range(N)]
+    idx = [min(range(n), key=lambda j: (rp[j][0] - sx) ** 2 + (rp[j][1] - sy) ** 2)
+           for (sx, sy) in sticks]
+    # START THE STROKE AT SOCKET 0 (Oleg: "start with printing the bores"): rotate the rose
+    # so its first point is socket 0's approach, so the very first extrusion is a bore.
+    shift = idx[0]
+    rp = rp[shift:] + rp[:shift]
+    idx = [(i - shift) % n for i in idx]
+    order = sorted(range(N), key=lambda k: idx[k])
+
+    rc = POCKET_RC
+    gap_half = math.radians(10.0)     # ~20deg mouth -> ~340deg loop; the ~1mm-apart legs
+    #                                   touch-weld, so the socket is a closed tube in practice
+
+    def c_loop(S, P):
+        """A ~340deg spring-C around S, mouth facing the approach point P (radially outward,
+        toward the petal tip) so the C BACK is on the inward side — the panels wrap OUTSIDE
+        the sticks and press each stick inward, seating it into the C back."""
+        ux, uy = P[0] - S[0], P[1] - S[1]
+        d = math.hypot(ux, uy) or 1.0
+        ux, uy = ux / d, uy / d
+        tx, ty = -uy, ux
+        out = []
+        na = 74
+        for j in range(na + 1):
+            a = gap_half + (2 * math.pi - 2 * gap_half) * j / na
+            dx = math.cos(a) * ux + math.sin(a) * tx
+            dy = math.cos(a) * uy + math.sin(a) * ty
+            out.append((S[0] + rc * dx, S[1] + rc * dy))
+        return out
+
+    pts, flags = [], []
+    last = 0
+    for k in order:
+        i = idx[k]
+        for j in range(last, i + 1):          # rose arc up to the approach point
+            pts.append(rp[j]); flags.append(False)
+        S, P = sticks[k], rp[i]
+        cl = densify(c_loop(S, P), 0.6)
+        for p in densify([P, cl[0]], 0.6)[1:]:      # short connector into the C
+            pts.append(p); flags.append(True)
+        for p in cl[1:]:                            # the C arc itself
+            pts.append(p); flags.append(True)
+        for p in densify([cl[-1], P], 0.6)[1:]:     # short connector back to the rose
+            pts.append(p); flags.append(True)
+        last = i + 1
+    for j in range(last, n):
+        pts.append(rp[j]); flags.append(False)
+    pts.append(pts[0]); flags.append(flags[0])       # close the flower
+    return pts, flags
 
 
 def sheet_t():
@@ -550,74 +632,76 @@ def main():
 
     # ------------------------------------------------------------------ BASE (k2plus)
     elif a.part == "base":
-        # V4 (client, 2026-07-28, cancelled the solid-band base mid-print): "looks bad.
-        # letd do everything single layer / single wall thick. instad of doing round
-        # boars. just design the boars as part of continious path" + "10 layers in total
-        # ... with single layer botton itself" + "flow max at all times".
-        # So: ONE pressed layer draws the whole floor — the rosette and the band's
-        # ground pass (no rim ring) — then NINE single-bead laps of ONE closed line draw the wall AND
-        # the 12 stick sockets: at each stick the line detours into a spring-C arc
-        # tangent to its trajectory and flows on. No region fills, no bosses; every
-        # layer is one continuous stroke at the full 60 mm3/s bead.
+        # V5 (Oleg field orders, 2026-07-29). Four orders, all honored here:
+        #  1. LAYER 1 IS DEAD-FLAT AT 0.1 EVERYWHERE. "the first line does not seem to be
+        #     0.1mm ... we MUST NOT move the lines breaking the adhesion." V4's crossing_z
+        #     LIFTED the pressed floor at self-crossings, raising ~1/3 of layer 1 off the
+        #     plate — that was the adhesion bug. There is no crossing lift now; the pressed
+        #     rose self-crossings simply OVERLAP at 0.1 ("do not worry of massive over
+        #     extrusion, this is what we do").
+        #  2. HEIGHT FIELD. "you will be having many overlaping lines you need to keep track
+        #     of the height." A 2.5D per-cell accumulation map (below): a segment on any
+        #     layer ABOVE the first rests on the top already deposited beneath it, so the
+        #     nozzle never ploughs; an already-laid line is never lowered. (The 12-petal
+        #     rose is non-self-crossing, so for this figure the map resolves to a clean flat
+        #     ladder — each cell +lh/layer — which is the correct plough-free result; the
+        #     map's raising behaviour is what keeps the C-mouth touch-welds honest.)
+        #  3. BORES FIRST. rose_sockets() rotates the flower so the stroke STARTS at socket 0.
+        #  4. SOCKETS ARE THE ROSE. No separate wall-ring circle (deleted). The 12 sockets
+        #     are spring-C detours ON the continuous rose trajectory — see rose_sockets(),
+        #     which also documents why the flower is now 12-fold instead of p13q8n3.
         cx, cy = bx / 2.0, by / 2.0
         R = a.dia / 2.0
-        BAND_LAPS = 9            # client: 10 layers total, layer 1 is the floor
-        R_W = R_STICK - POCKET_DW
-        GAP = 2 * math.pi / N_STICKS
-        # (pocket/wave numbers + reasoning live at pocket_band(); the pressed band
-        #  ribbon (±6) peaks at r 97.3 < rim ribbon edge, env min 95.85 measured +5)
+        LAYERS = 10             # Oleg: "10 layers in total ... with single layer botton itself"
+        pts, pflags = rose_sockets(cx, cy, R, bw)
+        lap_mm = sum(math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(pts, pts[1:]))
 
-        # NO RIM RING. Oleg, 2026-07-28, watching layer 1: "why you creatd a cicle inside our
-        # beautifuyl rosetta?" The rim was a smooth closed loop (the rose morphologically closed,
-        # buffer +12/-12) stroked OVER the rose interior — a geometric primitive laid on top of the
-        # figure, exactly what the holistic-trajectory doctrine forbids ("traced holistically not
-        # directly. maintain the beautgy"). The rosette IS the floor and its own outer boundary is
-        # the edge; the wall rises from the band at r~88. The floor is now the rose alone, one stroke.
-        rose_pts = rose(cx, cy, R - bw / 2, (R - bw / 2) * 0.11)
-        rose_pts = machine.decimate(rose_pts, machine.CONSTANT_SPEED / 300.0 * 1.2)
-
-        n_layers = 1 + BAND_LAPS
-        header(f"base V4 d{a.dia:g}, 1 pressed floor + {BAND_LAPS} band laps, "
-               f"{N_STICKS} spring-C pockets ID {2*(POCKET_RC-bw/2):.1f}", n_layers, arch=True,
-               has_pockets=True)
+        n_layers = LAYERS
+        # arch=False: the non-self-crossing rose stacks to a genuinely FLAT ladder (the height
+        # field resolves to +lh/layer everywhere), so Z does NOT vary within a layer — declaring
+        # ARCH_LIFT would be a false stamp that skips the overhang check. Instead the overhang
+        # check RUNS and confirms 0% unsupported.
+        header(f"base V5 d{a.dia:g}, 12-petal rose with {N_STICKS} rose-integrated spring-C "
+               f"sockets (ID {2*(POCKET_RC-bw/4):.1f}), {LAYERS} layers, height-field stacked",
+               n_layers, arch=False, has_pockets=True)
         w("M107                              ; layer 1 bonds uncooled")
-        z1 = machine.PRESS_HARD
-        j = min(range(len(rose_pts) - 1),
-                key=lambda i: (rose_pts[i][0] - (cx + R)) ** 2 + (rose_pts[i][1] - cy) ** 2)
-        rpts = rose_pts[j:-1] + rose_pts[:j] + [rose_pts[j]]
-        rz, _ = crossing_z(rpts, bw, machine.PRESS_HARD, 0.2)   # lift 0.5->0.2 (Oleg: lower the crossing lift)
-        stroke(rpts, z1, first=True, zs=rz)
-        prior = list(rpts)
-        # the band's ground pass, entered at the mid-gap point nearest the rim's end so
-        # the seam (and every lap's Z step) lives mid-gap, never at a pocket
-        band0, _bf0 = pocket_band(cx, cy, False)
-        mids = [(cx + R_W * math.cos(GAP / 2 + k * GAP), cy + R_W * math.sin(GAP / 2 + k * GAP))
-                for k in range(N_STICKS)]
-        entry = min(mids, key=lambda p: (p[0] - pos[0]) ** 2 + (p[1] - pos[1]) ** 2)
-        band0 = start_nearest(band0, entry)
-        chord = densify([(pos[0], pos[1]), band0[0]], 0.8)
-        czs, _ = crossing_z(chord, bw, machine.PRESS_HARD, 0.2, prior=prior, skip=4)
-        stroke(chord, z1, zs=czs)
-        prior += chord
-        bz, bcross = crossing_z(band0, bw, machine.PRESS_HARD, 0.2, prior=prior)
-        stroke(band0, z1, zs=bz)
-        w("M106 S51                        ; 20% fan from layer 2")
-        _bpts, _bfl = pocket_band(cx, cy, True)
-        _i0 = min(range(len(_bpts)),
-                  key=lambda k: (_bpts[k][0]-entry[0])**2 + (_bpts[k][1]-entry[1])**2)
-        band = _bpts[_i0:-1] + _bpts[:_i0] + [_bpts[_i0]]
-        bfl = _bfl[_i0:-1] + _bfl[:_i0] + [_bfl[_i0]]
-        lap_mm = sum(math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(band, band[1:]))
-        for lap in range(1, BAND_LAPS + 1):
-            stroke(band, machine.PRESS_HARD + lap * lh, pflags=bfl)
+
+        # HEIGHT FIELD — a 2.5D map keyed by XY cell holding the top Z deposited so far.
+        CELL = 0.8
+        hf = {}
+
+        def cof(x, y):
+            return (round(x / CELL), round(y / CELL))
+
+        for li in range(LAYERS):
+            Zabs = []
+            for (x, y) in pts:
+                if li == 0:
+                    Zabs.append(machine.PRESS_HARD)        # pressed floor: FLAT, never lifted
+                else:
+                    # rest on the stack already beneath; a virgin cell (does not occur, the
+                    # path is identical each layer) would be first-contact ground at 0.1
+                    Zabs.append(hf.get(cof(x, y), machine.PRESS_HARD))
+            newtop = {}
+            for (x, y), z in zip(pts, Zabs):
+                c = cof(x, y)
+                newtop[c] = max(newtop.get(c, 0.0), z)     # RAISE only, never lower a laid line
+            for c, zt in newtop.items():
+                hf[c] = zt + lh
+            base_z = machine.PRESS_HARD + li * lh
+            zs = [z - li * lh for z in Zabs]                # stroke() wants PRESS_HARD-relative Z
+            stroke(pts, base_z, first=(li == 0), zs=zs, pflags=pflags)
+            if li == 0:
+                w("M106 S51                        ; 20% fan from layer 2")
+
         grams = e * A * 1.24 / 1000.0
         mins = (e / e_per_mm) / speed / 60.0
         fn = os.path.join(a.out, f"web_base_{a.printer}_d{a.dia:g}_T{temp:g}.gcode")
-        summary = (f"  base V4: 1 pressed floor layer (rosette + band ground, no rim, {bcross}"
-                   f"ride-over points) + {BAND_LAPS} single-bead laps of one {lap_mm:.0f}mm "
-                   f"line ({N_STICKS} spring-C pockets ID {2*(POCKET_RC-bw/4):.1f} modelled at the "
-                   f"half-flow strand, "
-                   f"{BAND_LAPS*lh:.1f}mm grip); ~{grams:.0f} g, ~{mins:.0f} min")
+        summary = (f"  base V5: 12-petal rose + {N_STICKS} rose-integrated spring-C sockets "
+                   f"(ID {2*(POCKET_RC-bw/4):.1f} modelled at the half-flow strand), one "
+                   f"{lap_mm:.0f}mm stroke x {LAYERS} height-field-stacked layers, layer 1 flat "
+                   f"at {machine.PRESS_HARD:g}; {(LAYERS-1)*lh:.1f}mm socket grip above the floor; "
+                   f"~{grams:.0f} g, ~{mins:.0f} min")
 
     # ------------------------------------------------------------------ WEB PANEL (k2plus)
     elif a.part == "web":
