@@ -429,13 +429,20 @@ def check(path):
     # only BETWEEN consecutive layers. Sampled, because the exact computation is O(n*m) per pair
     # and these files run to a quarter-million lines.
     _ly = {}
+    _ply = {}          # the same points, split by part: {label: {z: [pts]}}
     _zz = 0.0
+    _cpart = "part 1"
     for _l in _lines:
+        if _l.startswith('; ---- part'):
+            _cpart = _l.strip('; -').split(':')[0].strip()
         _b = _l.split(';')[0]
         _m = re.search(r'Z([\d.]+)', _b)
         if _b.startswith(('G0 ', 'G1 ')) and _m: _zz = round(float(_m.group(1)), 3)
         _mm = re.match(r'^G1 .*X([-\d.]+) Y([-\d.]+).*E[\d.]', _b)
-        if _mm: _ly.setdefault(_zz, []).append((float(_mm.group(1)), float(_mm.group(2))))
+        if _mm:
+            _pt = (float(_mm.group(1)), float(_mm.group(2)))
+            _ly.setdefault(_zz, []).append(_pt)
+            _ply.setdefault(_cpart, {}).setdefault(_zz, []).append(_pt)
     # ARCH GEOMETRY CANNOT BE READ BY A LAYER-PAIR CHECK, and pretending otherwise is what taught
     # everyone to ignore this validator. Binning layers by Z assumes Z is piecewise constant. Where
     # the generator varies Z WITHIN a layer on purpose (nucleon's weld lift, the wave), the file has
@@ -448,18 +455,34 @@ def check(path):
         print(f"  overhang check SKIPPED — file declares ARCH_LIFT={_arch.group(1)}mm, so Z varies "
               f"within a layer by design and layer-pair support is not measurable this way. "
               f"The per-XY-cell dive check still applies and did run.")
-        _zs = []
+        _ogroups = []
+    elif _seq and len(_ply) > 1:
+        # ON A SEQUENTIAL PLATE, A LAYER IS SUPPORTED BY ITS OWN PART — NOT BY ITS Z BIN.
+        # Binning Z across the whole file assumes every part shares one ladder. A sequential plate
+        # breaks that assumption outright: parts printed one after another can sit at different
+        # heights, so the bin above a part's layer holds ANOTHER part's material, somewhere else on
+        # the plate entirely. Measured on presstest (eight independent ribbons lying flat on the
+        # glass, nothing stacked anywhere): "100% of layer Z0.15 has no material within one bead of
+        # it on layer Z0.1" — a true statement about two unrelated ribbons and a meaningless one
+        # about support. Wrong FRAME, not a wrong threshold, which is the fourth time that same
+        # mistake has produced a phantom failure in this file. The guard's question is "does this
+        # layer sit on the layer below it IN THIS PART", so that is what is now asked.
+        _ogroups = [(_lab, sorted(_d)) for _lab, _d in _ply.items()]
     else:
-        _zs = sorted(_ly)
-    if len(_zs) > 2:
-        _bead = 1.2
-        _mb = re.search(r'bead ([\d.]+)x', open(path).read()[:4000])
-        if _mb: _bead = float(_mb.group(1))
-        _worstz, _worstf = None, 0.0
+        _ogroups = [(None, sorted(_ly))]
+    _bead = 1.2
+    _mb = re.search(r'bead ([\d.]+)x', open(path).read()[:4000])
+    if _mb: _bead = float(_mb.group(1))
+    _worstz, _worstf, _opairs = None, 0.0, 0
+    for _plab, _zs in _ogroups:
+        _src = _ply[_plab] if _plab is not None else _ly
+        if len(_zs) <= 2:
+            continue
         for _a, _bz in zip(_zs, _zs[1:]):
-            _A = _ly[_a]
-            _B = _ly[_bz][::max(1, len(_ly[_bz]) // 400)]
+            _A = _src[_a]
+            _B = _src[_bz][::max(1, len(_src[_bz]) // 400)]
             if len(_A) < 3 or len(_B) < 3: continue
+            _opairs += 1
             # INDEX THE LOWER LAYER IN FULL. Sampling it to 250 points spread over a 315mm plate
             # put the nearest sample far from every query point and reported 94% of a perfectly
             # supported layer as overhanging — the same measure-the-easy-quantity error this guard
@@ -488,12 +511,21 @@ def check(path):
                            for _dx in (-1, 0, 1) for _dy in (-1, 0, 1))
             _un = sum(1 for _p in _B if not _supported(_p))
             _frac = _un / len(_B)
-            if _frac > _worstf: _worstf, _worstz = _frac, (_a, _bz)
-        if _worstf > 0.05:
-            problems.append(
-                f"OVERHANG: {_worstf*100:.0f}% of layer Z{_worstz[1]} has no material within one "
-                f"bead ({_bead}mm) of it on layer Z{_worstz[0]} — that fraction of the layer is "
-                f"being extruded onto nothing. Ramp the change over more layers.")
+            if _frac > _worstf: _worstf, _worstz = _frac, (_a, _bz, _plab)
+    if _worstf > 0.05:
+        problems.append(
+            f"OVERHANG: {_worstf*100:.0f}% of layer Z{_worstz[1]} has no material within one "
+            f"bead ({_bead}mm) of it on layer Z{_worstz[0]}"
+            f"{' in ' + _worstz[2] if _worstz[2] else ''} — that fraction of the layer is "
+            f"being extruded onto nothing. Ramp the change over more layers.")
+    elif _ogroups and not _opairs:
+        # SAY IT OUT LOUD. A check that had nothing to measure must not read as a check that passed
+        # — that is the same silence the missing-stamp failures were added to break.
+        print(f"  overhang: nothing to check — no part in this file has two layers "
+              f"({len(_ogroups)} part(s), so nothing is stacked on anything)")
+    elif _opairs:
+        print(f"  overhang: worst layer pair {_worstf*100:.0f}% unsupported across {_opairs} "
+              f"layer pair(s){' , checked per part' if len(_ogroups) > 1 else ''}")
 
     # STARVED MOVES. Feedrates PERSIST in gcode, so a slow press or a stationary dab leaves every
     # following move crawling until something sets F again — long stretches ran at 24 mm3/s against
@@ -734,7 +766,9 @@ def check(path):
     _l1v_decl = float(_m_l1.group(1)) if _m_l1 else None
     _m_pv = re.search(r'^; PRESSED_LAYER1=([\d.]+)', _rules_txt, re.M)
     _pv_decl = float(_m_pv.group(1)) if _m_pv else None
-    _spd, _flw, _nlink = {}, [], 0
+    _m_pkt = re.search(r'^; SPEED_POCKET=([\d.]+)', _rules_txt, re.M)
+    _pkt_decl = float(_m_pkt.group(1)) if _m_pkt else None
+    _spd, _flw, _nlink, _pspd = {}, [], 0, {}
     _area = math.pi * (1.75 / 2) ** 2
     for _raw in _rules_txt.splitlines():
         _code = _raw.split(';')[0].strip()
@@ -755,6 +789,15 @@ def check(path):
         _islink = 'LINK' in _raw.upper()
         if _islink:
             _nlink += 1
+        # THE BORE SLOWDOWN IS A DECLARED REGIME, SO IT MUST BE CHECKED, NOT IGNORED. Pocket moves
+        # (Oleg's "4x slow down rthere") are LINK-tagged, so the body-speed histogram below skips
+        # them — correct, they are a second regime. But "skipped" must not mean "unverified": the
+        # slowdown silently failing to apply is the exact 5x-repeated flow-guard failure. So the
+        # pocket moves' own speed is collected here and checked against ; SPEED_POCKET (R3b below).
+        _ispocket = _islink and 'POCKET' in _raw.upper()
+        if _ispocket and 'X' in _g and 'E' in _g and _fr:
+            _psp = round(_fr / 60.0, 1)
+            _pspd[_psp] = _pspd.get(_psp, 0) + 1
         _isl1 = bool(_l1v_decl) and _fr is not None and abs(_fr/60.0 - _l1v_decl) < 0.6
         if _pv_decl is not None and abs(_zr - _pv_decl) < 1e-6:
             _isl1 = True
@@ -821,6 +864,38 @@ def check(path):
                 print(f"  runs at {_only:g} mm/s, below the {machine.MAX_SPEED:g} north star "
                       f"— legitimate if a constraint requires it (fat bead / low-flow material)")
 
+    # R3b — THE DECLARED BORE SLOWDOWN MUST ACTUALLY APPEAR IN THE MOVES.
+    # Oleg, 2026-07-28: "you are not slowing down on bores - big problem ... 4x slow down rthere."
+    # Cutting flow alone left precision low; a '; SPEED_POCKET=' stamp declares a second, slower
+    # regime for the pocket arcs, and this verifies the emitted pocket moves run AT it — so the
+    # slowdown can never be stamped-but-not-applied, the way the flow guard was five times.
+    if _pspd or _pkt_decl is not None:
+        _body_sp = max(_spd, key=_spd.get) if _spd else None
+        if _pspd and _pkt_decl is None:
+            problems.append(f"{sum(_pspd.values())} pocket-precision moves run at {sorted(_pspd)} "
+                            f"mm/s but the file declares no '; SPEED_POCKET=' — an undeclared "
+                            f"second speed regime. Declare it, or the slowdown is unverifiable.")
+        elif _pkt_decl is not None and not _pspd:
+            problems.append(f"'; SPEED_POCKET={_pkt_decl:g}' is declared but NO pocket move runs "
+                            f"at it — the bore slowdown was stamped and never applied. This is the "
+                            f"silent-non-application failure the stamp exists to catch.")
+        elif _pspd:
+            _pv2 = round(_pkt_decl, 1)
+            _wrong = {k: v for k, v in _pspd.items() if abs(k - _pv2) > 0.6}
+            if _wrong:
+                problems.append(f"pocket moves declared at {_pv2:g} mm/s but {sum(_wrong.values())} "
+                                f"run at {sorted(_wrong)} — the declared bore slowdown does not "
+                                f"match the emitted speed.")
+            elif _body_sp and _pkt_decl > _body_sp - 0.6:
+                problems.append(f"'; SPEED_POCKET={_pkt_decl:g}' is not slower than the body speed "
+                                f"{_body_sp:g} mm/s — a slowdown that does not slow down. Oleg "
+                                f"asked for 4x at the bores.")
+            else:
+                _ratio = (_body_sp / _pkt_decl) if _body_sp and _pkt_decl else 0
+                print(f"  R3b: {sum(_pspd.values())} pocket moves at the declared {_pkt_decl:g} "
+                      f"mm/s" + (f" ({_ratio:.1f}x slower than the {_body_sp:g} mm/s body)"
+                                 if _ratio else "") + " — bore slowdown applied")
+
     if _flw and not _decl_flow:
         problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "
                         "is unverifiable. Regenerate with a current generator.")
@@ -879,7 +954,7 @@ def check(path):
     # corrections come from a ruler on a printed part until this model is calibrated against one.
     if _lh:
         _pl = collections.defaultdict(list)
-        _qx = _qy = None; _qe = 0.0; _qz = 0.0; _qin = False
+        _qx = _qy = None; _qe = 0.0; _qz = 0.0; _qin = False; _qext = False
         for _r2 in _rules_txt.splitlines():
             if 'BODY_START' in _r2: _qin = True
             _c2 = _r2.split(';')[0].strip()
@@ -890,7 +965,15 @@ def check(path):
                 _d2 = math.hypot(float(_g2['X']) - _qx, float(_g2['Y']) - _qy)
                 _de2 = float(_g2['E']) - _qe
                 if _d2 > 0.05 and _de2 > 0:
-                    _pl[round(_qz, 2)].append((float(_g2['X']), float(_g2['Y']), _de2))
+                    # THE FOURTH FLAG SAYS "THIS POINT CONTINUES THE LAST ONE". Without it the
+                    # length below runs the tape measure straight through every inter-part hop:
+                    # on the presstest plate that added 1091mm of travel to 420mm of ribbon and
+                    # reported a 3.41x fill ratio for a plate whose real figure is 0.9x. The
+                    # PRESSED_LAYER1 stamp happened to excuse it, so a wrong number was printed
+                    # next to the word "ON PURPOSE" — which is how a real over-fill gets waved
+                    # through later.
+                    _pl[round(_qz, 2)].append((float(_g2['X']), float(_g2['Y']), _de2, _qext))
+            _qext = 'E' in _g2 and 'X' in _g2
             if 'E' in _g2: _qe = float(_g2['E'])
             if 'X' in _g2: _qx = float(_g2['X'])
             if 'Y' in _g2: _qy = float(_g2['Y'])
@@ -908,8 +991,8 @@ def check(path):
             # is how a false positive gets a guard switched off. Measuring the deposit's own
             # geometry instead.
             _len2 = 0.0; _prev = None
-            for _rx, _ry, _ in _rows:
-                if _prev: _len2 += math.hypot(_rx - _prev[0], _ry - _prev[1])
+            for _rx, _ry, _, _cont in _rows:
+                if _prev and _cont: _len2 += math.hypot(_rx - _prev[0], _ry - _prev[1])
                 _prev = (_rx, _ry)
             _mm2 = _vol2 / max(_len2, 1e-9)
             _spread = min(max(_mm2 / _h2, _bw2), 40.0)
@@ -917,7 +1000,7 @@ def check(path):
             # int(), not round(): round(1.5)->2 dilated a 2.0mm bead into a 3.33mm footprint,
             # over-stating coverage by 1.67x and under-stating every body layer's fill ratio.
             _k2 = max(0, int(_spread / (2 * _cl2)))
-            for _rx, _ry, _ in _rows:
+            for _rx, _ry, _, _ in _rows:
                 _gx2, _gy2 = int(_rx // _cl2), int(_ry // _cl2)
                 for _dx2 in range(-_k2, _k2 + 1):
                     for _dy2 in range(-_k2, _k2 + 1): _grid2.add((_gx2 + _dx2, _gy2 + _dy2))

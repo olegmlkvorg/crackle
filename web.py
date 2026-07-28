@@ -218,16 +218,28 @@ def main():
     e_per_mm = bw * lh / A
     f = round(speed * 60)
     seg = max(0.25, speed / 250.0)
+    # 4X SLOWDOWN AT THE BORES. Oleg, 2026-07-28: "you are not slowing down on bores - big
+    # problem. persision low. 4x slow down rthere." Cutting flow to 50% (below) was not enough —
+    # precision around a bamboo socket is set by how accurately the head can trace a tight arc,
+    # and at 50 mm/s the toolhead overshoots the small radius. Speed is INDEPENDENT of deposit
+    # (E is per mm of path), so quartering it costs only seconds and buys accuracy directly.
+    # This is a DECLARED second speed regime (like layer 1): stamped ; SPEED_POCKET and checked
+    # by validate.py R3, so the slowdown can never silently fail to apply — which is the exact
+    # failure mode of the flow guard that Oleg had to catch five times.
+    pocket_speed = speed / 4.0
+    pocket_f = round(pocket_speed * 60)
 
     L = []
     w = L.append
 
-    def header(name, layers, arch):
+    def header(name, layers, arch, has_pockets=False):
         w(f"; MATERIAL={a.material}")
         w(f"; LAYER_H={lh}")
         w(f"; FLOW={bw*lh*speed:.4f}")
         w(f"; PRINTER={a.printer}")
         w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
+        if has_pockets:
+            w(f"; SPEED_POCKET={pocket_speed:.4f}")
         w("; ARGV: " + " ".join(sys.argv))
         w(f"; WEB {name}")
         if arch:
@@ -279,6 +291,7 @@ def main():
             else:
                 w(f"G1 F{f}")
         qx, qy, qz = pos[0], pos[1], pos[2]
+        _in_pocket = False
         for i, (X, Y) in enumerate(pts[1:], 1):
             d = math.hypot(X - qx, Y - qy)
             if d < 0.02:
@@ -286,15 +299,25 @@ def main():
             zz = (base + zs[i]) if zs else z
             if pflags is not None and pflags[i]:
                 # Oleg 2026-07-28: "critical percision around bores and 50% fillament flow
-                # there only" — half metering in the pocket zone, declared per-move (LINK
-                # semantics: deliberate, counted, R4-exempt)
+                # there only" AND "4x slow down rthere". Half metering AND quarter speed in the
+                # pocket zone. The F is emitted once on entry and is sticky, so every pocket move
+                # runs at pocket_f until the body speed is restored on exit; declared per-move
+                # (LINK semantics: deliberate, counted, R4-exempt) and stamped ; SPEED_POCKET.
+                if not _in_pocket:
+                    w(f"G1 F{pocket_f}   ; 4x slowdown — entering bore zone")
+                    _in_pocket = True
                 e += math.hypot(d, zz - qz) * e_per_mm * 0.5
-                w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f} ; LINK pocket 50% precision")
+                w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f} ; LINK pocket 50% flow 4x-slow")
                 qx, qy, qz = X, Y, zz
                 continue
+            if _in_pocket:
+                w(f"G1 F{f}   ; restore body speed — leaving bore zone")
+                _in_pocket = False
             e += math.hypot(d, zz - qz) * e_per_mm
             w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f}")
             qx, qy, qz = X, Y, zz
+        if _in_pocket:
+            w(f"G1 F{f}   ; restore body speed — pocket ran to stroke end")
         pos[0], pos[1], pos[2] = qx, qy, qz
 
     def hop(x, y, z, clear):
@@ -542,7 +565,15 @@ def main():
         # (pocket/wave numbers + reasoning live at pocket_band(); the pressed band
         #  ribbon (±6) peaks at r 97.3 < rim ribbon edge, env min 95.85 measured +5)
 
-        rim_passes = max(2, round(3 * bw / bw))
+        # ONE pressed rim ring, not three. At the 0.1 press a full-flow ring lands mm2/0.1 =
+        # ~12mm wide, so a SINGLE ring already IS a 12mm solid rim. The old max(2, round(3*bw/bw))
+        # = 3 laid three rings pitched one bead (2mm) apart while each landed ~12mm — a ~2.3x
+        # over-extruded ridge piled into a 4mm band at r88-99 that the wall laps then ploughed
+        # through. That ridge, not the interior, was the base's un-pressed edge (2026-07-28
+        # root-cause hunt: the rosette interior metered at exactly the 0.1 gap, only the rim over-
+        # extruded). The rosette already fills everything inside the ring, so extra rings only
+        # re-cover ground that is already down.
+        rim_passes = 1
         rose_pts = rose(cx, cy, R - bw / 2, (R - bw / 2) * 0.11)
         rose_pts = machine.decimate(rose_pts, machine.CONSTANT_SPEED / 300.0 * 1.2)
         rose_region = LineString(rose_pts).buffer(bw / 2.0, resolution=8)
@@ -558,7 +589,8 @@ def main():
 
         n_layers = 1 + BAND_LAPS
         header(f"base V4 d{a.dia:g}, 1 pressed floor + {BAND_LAPS} band laps, "
-               f"{N_STICKS} spring-C pockets ID {2*(POCKET_RC-bw/2):.1f}", n_layers, arch=True)
+               f"{N_STICKS} spring-C pockets ID {2*(POCKET_RC-bw/2):.1f}", n_layers, arch=True,
+               has_pockets=True)
         w("M107                              ; layer 1 bonds uncooled")
         z1 = machine.PRESS_HARD
         j = min(range(len(rose_pts) - 1),
@@ -793,7 +825,7 @@ def main():
         #   open centre at z0.7 (caught by the long-move probe on the emitted file).
         n_layers = CAP_LAYERS + TOP_LAPS
         header(f"topper V4 coil r{r_in:.0f}-{r_out:.0f} + {TOP_LAPS} pocket laps",
-               n_layers, arch=False)
+               n_layers, arch=False, has_pockets=True)
         w("M107                              ; layer 1 bonds uncooled")
         for k in range(CAP_LAYERS):
             z = machine.PRESS_HARD + k * lh
