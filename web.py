@@ -81,7 +81,8 @@ EDGE_L, EDGE_R = 10.0, 5.0   # panel margins past its first / before its last st
 BAND_Y_FRAC = (0.085, 0.5, 0.915)   # clip bands: near bottom, middle, near top
 
 # ---- V4 single-bead pocket band (base + topper share it) -------------------------
-POCKET_RC = 2.45         # CHOSEN -> modelled pocket ID 3.9 = 2*(rc - strand/2) with the
+POCKET_RC = 2.70         # +10% (Oleg 2026-07-28 "bores R can be increased by 10%"), was 2.45.
+                         #   modelled pocket ID = 2*(rc - strand/2) with the
                          # HALF-FLOW pocket strand (~1.0mm wide): Oleg 2026-07-28 "critical
                          # percision around bores and 50% fillament flow there only" — less
                          # material = less bulge = truer bore. Was 2.95 with the full bead. Free-
@@ -565,27 +566,14 @@ def main():
         # (pocket/wave numbers + reasoning live at pocket_band(); the pressed band
         #  ribbon (±6) peaks at r 97.3 < rim ribbon edge, env min 95.85 measured +5)
 
-        # ONE pressed rim ring, not three. At the 0.1 press a full-flow ring lands mm2/0.1 =
-        # ~12mm wide, so a SINGLE ring already IS a 12mm solid rim. The old max(2, round(3*bw/bw))
-        # = 3 laid three rings pitched one bead (2mm) apart while each landed ~12mm — a ~2.3x
-        # over-extruded ridge piled into a 4mm band at r88-99 that the wall laps then ploughed
-        # through. That ridge, not the interior, was the base's un-pressed edge (2026-07-28
-        # root-cause hunt: the rosette interior metered at exactly the 0.1 gap, only the rim over-
-        # extruded). The rosette already fills everything inside the ring, so extra rings only
-        # re-cover ground that is already down.
-        rim_passes = 1
+        # NO RIM RING. Oleg, 2026-07-28, watching layer 1: "why you creatd a cicle inside our
+        # beautifuyl rosetta?" The rim was a smooth closed loop (the rose morphologically closed,
+        # buffer +12/-12) stroked OVER the rose interior — a geometric primitive laid on top of the
+        # figure, exactly what the holistic-trajectory doctrine forbids ("traced holistically not
+        # directly. maintain the beautgy"). The rosette IS the floor and its own outer boundary is
+        # the edge; the wall rises from the band at r~88. The floor is now the rose alone, one stroke.
         rose_pts = rose(cx, cy, R - bw / 2, (R - bw / 2) * 0.11)
         rose_pts = machine.decimate(rose_pts, machine.CONSTANT_SPEED / 300.0 * 1.2)
-        rose_region = LineString(rose_pts).buffer(bw / 2.0, resolution=8)
-        env = rose_region.buffer(12.0, resolution=64).buffer(-12.0, resolution=64)
-        if env.geom_type == 'MultiPolygon':
-            env = max(env.geoms, key=lambda g: g.area)
-        rim_rings = []
-        for j in range(rim_passes):
-            rp = env.buffer(-(bw / 2.0 + j * bw))
-            if rp.geom_type == 'MultiPolygon':
-                rp = max(rp.geoms, key=lambda g: g.area)
-            rim_rings.append(ring_of(rp.exterior, seg))
 
         n_layers = 1 + BAND_LAPS
         header(f"base V4 d{a.dia:g}, 1 pressed floor + {BAND_LAPS} band laps, "
@@ -599,11 +587,6 @@ def main():
         rz, _ = crossing_z(rpts, bw, machine.PRESS_HARD, 0.5)
         stroke(rpts, z1, first=True, zs=rz)
         prior = list(rpts)
-        for ring in rim_rings:
-            cpts = start_nearest(ring + [ring[0]], (pos[0], pos[1]))
-            cz, _ = crossing_z(cpts, bw, machine.PRESS_HARD, 0.5, prior=prior)
-            stroke(cpts, z1, zs=cz)
-            prior += cpts
         # the band's ground pass, entered at the mid-gap point nearest the rim's end so
         # the seam (and every lap's Z step) lives mid-gap, never at a pocket
         band0, _bf0 = pocket_band(cx, cy, False)
@@ -629,7 +612,7 @@ def main():
         grams = e * A * 1.24 / 1000.0
         mins = (e / e_per_mm) / speed / 60.0
         fn = os.path.join(a.out, f"web_base_{a.printer}_d{a.dia:g}_T{temp:g}.gcode")
-        summary = (f"  base V4: 1 pressed floor layer (rosette+rim+band ground, {bcross} "
+        summary = (f"  base V4: 1 pressed floor layer (rosette + band ground, no rim, {bcross}"
                    f"ride-over points) + {BAND_LAPS} single-bead laps of one {lap_mm:.0f}mm "
                    f"line ({N_STICKS} spring-C pockets ID {2*(POCKET_RC-bw/4):.1f} modelled at the "
                    f"half-flow strand, "

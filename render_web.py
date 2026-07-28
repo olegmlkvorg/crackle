@@ -111,7 +111,7 @@ def render_base():
         a_ = 2 * math.pi * k / 12
         ax.add_patch(Circle((cx + W.R_STICK * math.cos(a_), cy + W.R_STICK * math.sin(a_)),
                             3.175 / 2, fill=False, color="#b7a184", lw=1.2, ls=":"))
-    note(ax, "ONE pressed layer is the whole floor:\nrosette + rim + the band's ground pass",
+    note(ax, "ONE pressed layer is the whole floor:\nrosette + the band's ground pass (no rim ring)",
          (cx + 20, cy - 35), (cx - 40, cy - 150))
     note(ax, "9 single-bead laps of ONE closed line:\n12-lobe wave wall + 12 spring-C\n"
              "sockets, drawn in the same stroke", (cx, cy + 91.3), (cx - 170, cy + 100))
@@ -135,7 +135,7 @@ def render_base():
                                       alpha=0.35, capstyle="round"))
     ax2.add_patch(Circle(S, 3.175 / 2, fill=True, color="#b7a184", alpha=0.95))
     ax2.text(S[0], S[1], "stick\n3.175", color=BG, fontsize=8.5, ha="center", va="center")
-    note(ax2, "spring-C: 278 deg of the SAME wall\nline, modelled ID 3.9",
+    note(ax2, "spring-C: 278 deg of the SAME wall\nline, modelled ID 4.4 (bores +10%)",
          (S[0] + 2.0, S[1] + 2.2), (S[0] + 3.5, S[1] + 8.5))
     note(ax2, "mouth faces the wall — clip pressure\nseats the stick INTO the C back",
          (S[0] - 2.8, S[1] + 0.5), (S[0] - 11.5, S[1] - 7.5))
@@ -143,7 +143,7 @@ def render_base():
              "is its blind floor", color=INK, fontsize=10)
     ax2.text(S[0] - 11.5, S[1] - 11.7,
              "FIT IS WHAT THIS PRINT TESTS: free single-bead shrink is UNMEASURED.\n"
-             "ID 3.9 bets on ~1.0 of it (thick bosses measured ~1.7); the C splays ~±0.4.\n"
+             "ID 4.4 bets on ~1.0 of it (thick bosses measured ~1.7); the C splays ~±0.4.\n"
              "Loose or split -> one constant (POCKET_RC) moves, 4-min reprint.",
              color=CLIPC, fontsize=9)
     ax2.set_xlim(S[0] - 12, S[0] + 12)
