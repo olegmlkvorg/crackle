@@ -96,6 +96,8 @@ def main():
                     help="lobed if coupon V4 wins: clearance bore + 3 contact bumps")
     ap.add_argument("--lobe-inscribed", type=float, default=5.6,
                     help="lobed socket: modelled circle the 3 bumps inscribe (coupon V4)")
+    ap.add_argument("--span", action="store_true",
+                    help="coupon: six round bores 3.9-9.9 (zero-inset..full-inset), no clips")
     ap.add_argument("--clip-cavity", type=float, default=4.3,
                     help="snap channel width at the stick (coupon V5/V6 test this bulged)")
     ap.add_argument("--clip-mouth", type=float, default=2.9,
@@ -307,16 +309,23 @@ def main():
         #   V5 channel mouth 2.9   V6 channel mouth 2.5   (lay stick in, press down)
         PL, PH = 130.0, 20.0
         ox, oy = (bx - PL) / 2.0, (by - PH) / 2.0
-        bores = [(16.0, 9.0), (36.0, 9.9), (56.0, 10.8)]
-        LOBE_X = 76.0
-        CH = [(96.0, 2.9), (118.0, 2.5)]     # (centre x, mouth)
+        # ROUND 2 (Oleg's photo: K1C coupon bores printed ~3x the stick — the 3.02 inset
+        # measured on big hot K2 parts did NOT appear on a small K1C coupon; a fit constant
+        # does not cross printers/beads/part sizes). --span widens the sweep to SIX round
+        # bores from zero-inset snug to full-inset prediction, to be printed ON THE K2.
+        bores = ([(16.0, 9.0), (36.0, 9.9), (56.0, 10.8)] if not a.span else
+                 [(14.0, 3.9), (34.0, 5.1), (54.0, 6.3), (74.0, 7.5), (94.0, 8.7), (114.0, 9.9)])
+        LOBE_X = None if a.span else 76.0
+        CH = [] if a.span else [(96.0, 2.9), (118.0, 2.5)]     # (centre x, mouth)
         CAV = a.clip_cavity
         yc = PH / 2.0
 
         def plate_region():
             r = box(ox, oy, ox + PL, oy + PH)
             n = 0
-            for site_x, count in [(16, 1), (36, 2), (56, 3), (76, 4), (96, 5), (118, 6)]:
+            sites = ([(16, 1), (36, 2), (56, 3), (76, 4), (96, 5), (118, 6)] if not a.span
+                     else [(14, 1), (34, 2), (54, 3), (74, 4), (94, 5), (114, 6)])
+            for site_x, count in sites:
                 for k in range(count):
                     nx = ox + site_x + (k - (count - 1) / 2.0) * 3.2
                     r = r.difference(Point(nx, oy).buffer(1.2, 8))
@@ -338,8 +347,15 @@ def main():
                 from shapely import affinity
                 parts[-1] = affinity.translate(parts[-1], ox + sx, oy + yc)
                 holes.append(Point(ox + sx, oy + yc).buffer(bm / 2.0, 24))
-            # V4 lobed
+            # V4 lobed (skipped in --span mode: round-bore sweep only)
             from shapely import affinity
+            if LOBE_X is None:
+                reg = unary_union(parts)
+                for h in holes:
+                    reg = reg.difference(h)
+                if reg.geom_type != "Polygon":
+                    raise SystemExit("span coupon region is not one connected piece")
+                return reg, unary_union(holes)
             # +1.2 pad: the bump bites thin the wall to ~1.6 beads; padding restores a
             # full 2-bead wall at the bumps (an under-filled strip elsewhere is the safe
             # direction, a doubled bead is not)
@@ -389,9 +405,11 @@ def main():
             emit_region_layer(reg, z, holes=None if k == 0 else holes_body.buffer(-0.4))
         grams = e * A * 1.24 / 1000.0
         mins = (e / e_per_mm) / speed / 60.0
-        if grams > 10.0 or mins > 8.0:
+        if grams > 14.0 or mins > 8.0:
+            # cap raised 10->14g for --span: six bores at the K2's 2.0 bead legitimately
+            # weigh more than three at the K1C's 1.5 (the budget is a scope guard, not physics)
             raise SystemExit(f"coupon budget blown: {grams:.1f}g / {mins:.1f}min "
-                             f"(caps 10g / 8min) — shrink it")
+                             f"(caps 14g / 8min) — shrink it")
         fn = os.path.join(a.out, f"web_coupon_{a.printer}_T{temp:g}.gcode")
         summary = (f"  coupon: V1-3 bores 9.0/9.9/10.8, V4 lobed 10.8/{a.lobe_inscribed:g}, "
                    f"V5-6 channels cav {CAV:g} mouth 2.9/2.5; ~{grams:.1f} g, ~{mins:.1f} min")
@@ -584,7 +602,10 @@ def main():
             for x in xs:
                 net.append((x, yr + sgn * amp * math.sin(2 * math.pi * (x - ox - EDGE_L) / pitch + ph)))
             going = -going
-        net = machine.decimate(net, 0.3)
+        # densify BEFORE the crossing scan: the row-to-row connectors arrive as single
+        # 30mm segments, and a one-segment span turns crossing_z's 2mm ramp into a 30mm
+        # shallow float (caught by measuring the emitted file, not by any guard)
+        net = machine.decimate(densify(net, 0.8), 0.3)
         nzs, ncross = crossing_z(net, bw, machine.PRESS_HARD, 0.5, prior=prior2, skip=60)
         stroke(net, z2, zs=nzs)
 
@@ -637,7 +658,7 @@ def main():
         fn = os.path.join(a.out,
                           f"web_panel{a.segment}_{a.printer}_w{W:.0f}_h{H:.0f}_T{temp:g}.gcode")
         summary = (f"  panel {a.segment}: {W:.0f}x{H:.0f}, ground grid + {NROWS}-row net "
-                   f"({ncross} ridden crossings), {len(pieces)} clip pieces x{CLIP_LAYERS} layers "
+                   f"({ncross} path points in ride-over zones), {len(pieces)} clip pieces x{CLIP_LAYERS} layers "
                    f"(cavity {CAV:g}, mouth {MOUTH:g}); ~{grams:.0f} g, ~{mins:.0f} min")
 
     # ------------------------------------------------------------------ TOPPER (k2plus)
