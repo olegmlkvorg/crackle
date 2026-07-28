@@ -7,16 +7,24 @@ Four parts, one skeleton: 12 vertical bamboo sticks (1/8" = 3.175mm) stand in so
 the proven rosette floor, two flat-printed WEB panels wrap around and SNAP onto the sticks,
 and a printed coil ring caps the drum and swallows the stick tops.
 
+V4 (2026-07-28, he cancelled the solid-band base mid-print): "looks bad. letd do everything
+single layer / single wall thick. instad of doing round boars. just design the boars as part
+of continious path" + "flow max at all times" + base "10 layers in total ... with single
+layer botton itself". Base and topper are now single-bead: one closed line draws wall AND
+sockets (spring-C detours at each stick, pocket_band()); the coupon's closed-bore numbers
+below no longer size them.
+
   --part coupon   THE FIT GATE (k1c). Six socket/clip variants for a 3.175 stick, indexed
-                  by edge notches (1 notch = V1 ... 6 = V6). Every fit number in the other
-                  three parts keys off which variant Oleg reports snug. Print this FIRST.
-  --part base     rosette floor (petalwall machinery, unchanged) + 12 socket bosses merged
-                  into the 2-bead stub band. Sockets are blind — the floor is their bottom.
+                  by edge notches (1 notch = V1 ... 6 = V6). Sized the SOLID-boss parts;
+                  V4 single-bead pockets are a different fit regime (see pocket_band).
+  --part base     V4: ONE pressed layer draws the whole floor (rosette + rim + band
+                  ground), then 9 single-bead laps of one closed wave line with 12
+                  spring-C pockets. Sockets are blind — the pressed pad is their bottom.
   --part web      one wall panel (print two, --segment 1/2 varies the net organically).
                   2 layers of web + snap-clip channels at every stick line it owns.
-  --part topper   the coil: printed show-face-down; 3 cap layers laid as ONE continuous
-                  multi-lap spiral, then socket bosses. Flipped at assembly, the sockets
-                  open downward onto the stick tops and the boss ring seats on the panels.
+  --part topper   V4: printed show-face-down; 3 cap layers as ONE continuous multi-lap
+                  spiral, then 9 laps of the same spring-C pocket line. Flipped at
+                  assembly, the C's open downward and swallow the stick tops.
 
 Numbers with provenance:
   STICK_D 3.175            MEASURED — 1/8" bamboo stock
@@ -33,9 +41,10 @@ Numbers with provenance:
   coupon bead 1.5 x 0.6    DERIVED — flow_cap(pla-matte,k1c)=45 at the 50 north star
   layer-1 ribbon ~12mm     DERIVED — full flow pressed to 0.1 spreads bw*lh/0.1; the web
                            ground layer is drawn AT this width: cells must clear it
-  panel H 177.6            DERIVED — 200 total - base band 13.9 - topper 8.5
-  stick cut 195mm          DERIVED — base floor z2.5 to topper bore ceiling z198.7, minus
-                           1.2 float so the topper seats on the panel rim, not the sticks
+  panel H 177.6            DERIVED pre-V4 (200 - band 13.9 - topper 8.5) and now PINNED:
+                           the V4 stack (band 5.5, topper 6.7) sums ~190 with these
+                           panels; regenerate at H 187.8 if the 200 total should hold
+  stick cut ~187mm         V4 ESTIMATE (was 195 pre-V4) — recut after the fit test
 
 Honest unknowns (the coupon closes the first two; the rest only a print can):
   * bore inset below 6mm modelled hole — extrapolated, never measured
@@ -43,8 +52,10 @@ Honest unknowns (the coupon closes the first two; the rest only a print can):
   * coupon prints on the K1C (bead 1.5) but base/topper/panels print on the K2 (bead 2.0);
     the inset is measured ABSOLUTE (2.98 vs 3.06 across beads 1.5/2.17), so it should
     transfer — "should" is the word
-  * L2 net strands bridge up to ~36mm between pressed ribbons at z0.7 — they will sag and
-    kiss the 120C plate; expected to release on cooldown, UNTESTED
+  * L2 net strands bridge between pressed ribbons at z0.7 — MEASURED from the emitted
+    files: worst span 55-58mm (the sine-row net this replaced measured 46-47, not the
+    ~36 once claimed here); they will sag and kiss the 120C plate; expected to release
+    on cooldown, UNTESTED
   * clip grip per 12mm channel — 3 channels per stick; if loose, the fix is more/longer
     channels, parametric below
 """
@@ -68,6 +79,86 @@ WALL_LAYERS = 2          # the web sheet: pressed ground + net
 CLIP_LAYERS = 8          # snap channels rise layers 3..10 (4.8mm)
 EDGE_L, EDGE_R = 10.0, 5.0   # panel margins past its first / before its last stick line
 BAND_Y_FRAC = (0.085, 0.5, 0.915)   # clip bands: near bottom, middle, near top
+
+# ---- V4 single-bead pocket band (base + topper share it) -------------------------
+POCKET_RC = 2.45         # CHOSEN -> modelled pocket ID 3.9 = 2*(rc - strand/2) with the
+                         # HALF-FLOW pocket strand (~1.0mm wide): Oleg 2026-07-28 "critical
+                         # percision around bores and 50% fillament flow there only" — less
+                         # material = less bulge = truer bore. Was 2.95 with the full bead. Free-
+#   single-bead shrink is UNMEASURED; thick-boss data (4.9 modelled gripped, ~1.7
+#   shrink) does not transfer. Bet: ~1.0 effective shrink -> printed ~2.9 = stick
+#   - 0.28 spring grip; the C splays ~±0.4 so grip survives shrink 0.7..1.5.
+POCKET_DW = 2.2          # CHOSEN — wall circle passes 2.2 inside stick centres: the C
+#   mouth faces the wall, so clip pressure seats a stick INTO the C back.
+WAVE_A = 3.0             # CHOSEN — 12-lobe outward wave between sticks (hoop stiffness
+#   + 12v13 answer to the rose); flat ±6 deg at sticks so pockets sit on the circle.
+WAVE_FLAT = math.radians(6.0)
+
+
+def pocket_band(cx, cy, pockets):
+    """The V4 band as ONE closed line from mid-gap: 12-lobe wave wall, and at each
+    stick a spring-C arc (the same trajectory detouring around the stick). With
+    pockets=False the pockets are plain chords — layer 1 lays it that way: its
+    pressed 12mm ribbon IS each socket's blind floor, and a full-flow 0.1 press
+    around a 3mm loop would pile onto itself."""
+    R_W = R_STICK - POCKET_DW
+    GAP = 2 * math.pi / N_STICKS
+    _d = R_STICK
+    _a = (R_W ** 2 - POCKET_RC ** 2 + _d ** 2) / (2 * _d)
+    _h = math.sqrt(max(R_W ** 2 - _a ** 2, 0.0))
+    PSI_GEO = math.atan2(_h, _a - _d)      # geometric intersection half-span (~138deg)
+    # ALMOST CLOSED — Oleg: "make them allmost closed... the lines can touch eachother".
+    # Half-span 170deg -> 340deg loop; the ~1.0mm mouth is narrower than the strand, so the
+    # entry/exit legs TOUCH and weld: the pocket is a closed tube in practice, and the stick
+    # cannot escape. The legs crossing the old splice window is allowed contact by his word.
+    PSI = math.radians(170.0)
+    DTH = math.atan2(_h, _a)               # splice half-window on the wall (~1.3deg)
+
+    def wave_r(th):
+        g = th % GAP
+        lo, hi = WAVE_FLAT, GAP - WAVE_FLAT
+        if g <= lo or g >= hi:
+            return R_W
+        u = (g - lo) / (hi - lo)
+        return R_W + WAVE_A * math.sin(math.pi * u) ** 2
+
+    pts = []
+    th0 = GAP / 2.0
+    n_gap = 130
+    for k in range(N_STICKS):
+        base_th = th0 + k * GAP
+        end = base_th + GAP / 2.0 - (DTH if pockets else 0.0)
+        for i_ in range(n_gap + 1):
+            th = base_th + (end - base_th) * i_ / n_gap
+            r = wave_r(th)
+            pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
+        phi = base_th + GAP / 2.0            # the stick this gap runs into
+        Sx = cx + R_STICK * math.cos(phi)
+        Sy = cy + R_STICK * math.sin(phi)
+        if pockets:
+            ux, uy = math.cos(phi), math.sin(phi)
+            tx, ty = -math.sin(phi), math.cos(phi)
+            for i_ in range(1, 60):
+                psi = -PSI + 2 * PSI * i_ / 60
+                pts.append((Sx + POCKET_RC * (math.cos(psi) * ux + math.sin(psi) * tx),
+                            Sy + POCKET_RC * (math.cos(psi) * uy + math.sin(psi) * ty)))
+        start = phi + (DTH if pockets else 0.0)
+        end = base_th + GAP
+        for i_ in range(0 if pockets else 1, n_gap + 1):
+            th = start + (end - start) * i_ / n_gap
+            r = wave_r(th)
+            pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
+    pts.append(pts[0])
+    out = machine.decimate(densify(pts, 0.8), 0.25)
+    if not pockets:
+        return out, [False] * len(out)
+    sticks = [(cx + R_STICK * math.cos(th0 + k * GAP + GAP / 2.0),
+               cy + R_STICK * math.sin(th0 + k * GAP + GAP / 2.0)) for k in range(N_STICKS)]
+    flags = []
+    for (px_, py_) in out:
+        flags.append(any((px_ - sx) ** 2 + (py_ - sy) ** 2 < (POCKET_RC + 1.2) ** 2
+                         for sx, sy in sticks))
+    return out, flags
 
 
 def sheet_t():
@@ -166,7 +257,7 @@ def main():
     e = 0.0
     pos = [None, None, None]
 
-    def stroke(pts, z, first=False, zs=None, meter=1.0):
+    def stroke(pts, z, first=False, zs=None, meter=1.0, pflags=None):
         nonlocal e
         base = z - machine.PRESS_HARD
         z0 = (base + zs[0]) if zs else z
@@ -193,6 +284,14 @@ def main():
             if d < 0.02:
                 continue
             zz = (base + zs[i]) if zs else z
+            if pflags is not None and pflags[i]:
+                # Oleg 2026-07-28: "critical percision around bores and 50% fillament flow
+                # there only" — half metering in the pocket zone, declared per-move (LINK
+                # semantics: deliberate, counted, R4-exempt)
+                e += math.hypot(d, zz - qz) * e_per_mm * 0.5
+                w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f} ; LINK pocket 50% precision")
+                qx, qy, qz = X, Y, zz
+                continue
             e += math.hypot(d, zz - qz) * e_per_mm
             w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f}")
             qx, qy, qz = X, Y, zz
@@ -426,8 +525,23 @@ def main():
 
     # ------------------------------------------------------------------ BASE (k2plus)
     elif a.part == "base":
+        # V4 (client, 2026-07-28, cancelled the solid-band base mid-print): "looks bad.
+        # letd do everything single layer / single wall thick. instad of doing round
+        # boars. just design the boars as part of continious path" + "10 layers in total
+        # ... with single layer botton itself" + "flow max at all times".
+        # So: ONE pressed layer draws the whole floor — rosette, rim, and the band's
+        # ground pass — then NINE single-bead laps of ONE closed line draw the wall AND
+        # the 12 stick sockets: at each stick the line detours into a spring-C arc
+        # tangent to its trajectory and flows on. No region fills, no bosses; every
+        # layer is one continuous stroke at the full 60 mm3/s bead.
         cx, cy = bx / 2.0, by / 2.0
         R = a.dia / 2.0
+        BAND_LAPS = 9            # client: 10 layers total, layer 1 is the floor
+        R_W = R_STICK - POCKET_DW
+        GAP = 2 * math.pi / N_STICKS
+        # (pocket/wave numbers + reasoning live at pocket_band(); the pressed band
+        #  ribbon (±6) peaks at r 97.3 < rim ribbon edge, env min 95.85 measured +5)
+
         rim_passes = max(2, round(3 * bw / bw))
         rose_pts = rose(cx, cy, R - bw / 2, (R - bw / 2) * 0.11)
         rose_pts = machine.decimate(rose_pts, machine.CONSTANT_SPEED / 300.0 * 1.2)
@@ -441,70 +555,53 @@ def main():
             if rp.geom_type == 'MultiPolygon':
                 rp = max(rp.geoms, key=lambda g: g.area)
             rim_rings.append(ring_of(rp.exterior, seg))
-        centers = [(cx + R_STICK * math.cos(2 * math.pi * k / N_STICKS),
-                    cy + R_STICK * math.sin(2 * math.pi * k / N_STICKS))
-                   for k in range(N_STICKS)]
-        boss_r = (a.bore_mod + 4 * bw + (1.2 if a.socket == "lobed" else 0)) / 2.0
-        from shapely import affinity
-        boss_discs = [affinity.translate(circle(boss_r, seg=0.4), px, py)
-                      for px, py in centers]
-        boss_rings = [contours(d, bw) for d in boss_discs]
-        # socket band: the two stub rings the panels register on, with the bosses merged in
-        band = env.difference(env.buffer(-2 * bw))
-        band_reg = unary_union([band] + boss_discs)
-        holes = unary_union(sockets_at(centers, a.bore_mod))
-        band_reg = band_reg.difference(holes)
-        if band_reg.geom_type != "Polygon":
-            raise SystemExit("base socket band is not one connected region")
 
-        n_layers = FLOOR_LAYERS + BAND_LAYERS
-        header(f"base d{a.dia:g} + {N_STICKS} sockets bore {a.bore_mod:g}", n_layers, arch=True)
+        n_layers = 1 + BAND_LAPS
+        header(f"base V4 d{a.dia:g}, 1 pressed floor + {BAND_LAPS} band laps, "
+               f"{N_STICKS} spring-C pockets ID {2*(POCKET_RC-bw/2):.1f}", n_layers, arch=True)
         w("M107                              ; layer 1 bonds uncooled")
-        for k in range(FLOOR_LAYERS):
-            z = machine.PRESS_HARD + k * lh
-            j = min(range(len(rose_pts) - 1),
-                    key=lambda i: (rose_pts[i][0] - (pos[0] or cx + R)) ** 2
-                                + (rose_pts[i][1] - (pos[1] or cy)) ** 2)
-            rpts = rose_pts[j:-1] + rose_pts[:j] + [rose_pts[j]]
-            rz, _ = crossing_z(rpts, bw, machine.PRESS_HARD, 0.5)
-            stroke(rpts, z, first=(k == 0), zs=rz)
-            prior = list(rpts)
-            for ring in rim_rings:
-                cpts = start_nearest(ring + [ring[0]], (pos[0], pos[1]))
-                cz, _ = crossing_z(cpts, bw, machine.PRESS_HARD, 0.5, prior=prior)
-                stroke(cpts, z, zs=cz)
-                prior += cpts
-            # socket bosses, walked around the stick circle; the chords between them lie
-            # over the rose lace and ride its strands exactly as the rim rings do
-            order = sorted(range(N_STICKS),
-                           key=lambda i: (centers[i][0] - pos[0]) ** 2 + (centers[i][1] - pos[1]) ** 2)
-            first_b = order[0]
-            seq = [(first_b + s) % N_STICKS for s in range(N_STICKS)]
-            for bi in seq:
-                entry = min(boss_rings[bi][0], key=lambda p: (p[0] - pos[0]) ** 2 + (p[1] - pos[1]) ** 2)
-                chord = densify([(pos[0], pos[1]), entry], 0.8)
-                czs, _ = crossing_z(chord, bw, machine.PRESS_HARD, 0.5, prior=prior, skip=4)
-                stroke(chord, z, zs=czs)
-                prior += chord
-                for ring in boss_rings[bi]:
-                    cpts = start_nearest(ring, (pos[0], pos[1]))
-                    cpts = loop_decimate(densify(cpts, 0.8), 0.3)
-                    czs, _ = crossing_z(cpts, bw, machine.PRESS_HARD, 0.5, prior=prior)
-                    stroke(cpts, z, zs=czs)
-                    prior += cpts
-            if k == 0:
-                w("M106 S51                        ; 20% fan from layer 2")
-        z_ft = machine.PRESS_HARD + (FLOOR_LAYERS - 1) * lh
-        for s_ in range(BAND_LAYERS):
-            # band layer 1 lies on the solid boss tops; the bores only become voids above it
-            emit_region_layer(band_reg, z_ft + (s_ + 1) * lh,
-                              holes=None if s_ == 0 else holes.buffer(-0.4))
+        z1 = machine.PRESS_HARD
+        j = min(range(len(rose_pts) - 1),
+                key=lambda i: (rose_pts[i][0] - (cx + R)) ** 2 + (rose_pts[i][1] - cy) ** 2)
+        rpts = rose_pts[j:-1] + rose_pts[:j] + [rose_pts[j]]
+        rz, _ = crossing_z(rpts, bw, machine.PRESS_HARD, 0.5)
+        stroke(rpts, z1, first=True, zs=rz)
+        prior = list(rpts)
+        for ring in rim_rings:
+            cpts = start_nearest(ring + [ring[0]], (pos[0], pos[1]))
+            cz, _ = crossing_z(cpts, bw, machine.PRESS_HARD, 0.5, prior=prior)
+            stroke(cpts, z1, zs=cz)
+            prior += cpts
+        # the band's ground pass, entered at the mid-gap point nearest the rim's end so
+        # the seam (and every lap's Z step) lives mid-gap, never at a pocket
+        band0, _bf0 = pocket_band(cx, cy, False)
+        mids = [(cx + R_W * math.cos(GAP / 2 + k * GAP), cy + R_W * math.sin(GAP / 2 + k * GAP))
+                for k in range(N_STICKS)]
+        entry = min(mids, key=lambda p: (p[0] - pos[0]) ** 2 + (p[1] - pos[1]) ** 2)
+        band0 = start_nearest(band0, entry)
+        chord = densify([(pos[0], pos[1]), band0[0]], 0.8)
+        czs, _ = crossing_z(chord, bw, machine.PRESS_HARD, 0.5, prior=prior, skip=4)
+        stroke(chord, z1, zs=czs)
+        prior += chord
+        bz, bcross = crossing_z(band0, bw, machine.PRESS_HARD, 0.5, prior=prior)
+        stroke(band0, z1, zs=bz)
+        w("M106 S51                        ; 20% fan from layer 2")
+        _bpts, _bfl = pocket_band(cx, cy, True)
+        _i0 = min(range(len(_bpts)),
+                  key=lambda k: (_bpts[k][0]-entry[0])**2 + (_bpts[k][1]-entry[1])**2)
+        band = _bpts[_i0:-1] + _bpts[:_i0] + [_bpts[_i0]]
+        bfl = _bfl[_i0:-1] + _bfl[:_i0] + [_bfl[_i0]]
+        lap_mm = sum(math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(band, band[1:]))
+        for lap in range(1, BAND_LAPS + 1):
+            stroke(band, machine.PRESS_HARD + lap * lh, pflags=bfl)
         grams = e * A * 1.24 / 1000.0
         mins = (e / e_per_mm) / speed / 60.0
         fn = os.path.join(a.out, f"web_base_{a.printer}_d{a.dia:g}_T{temp:g}.gcode")
-        summary = (f"  base: rosette floor {FLOOR_LAYERS} layers + {BAND_LAYERS}-layer socket band "
-                   f"({BAND_LAYERS * lh:.1f}mm grip, {N_STICKS} sockets bore {a.bore_mod:g} "
-                   f"{a.socket}); ~{grams:.0f} g, ~{mins:.0f} min")
+        summary = (f"  base V4: 1 pressed floor layer (rosette+rim+band ground, {bcross} "
+                   f"ride-over points) + {BAND_LAPS} single-bead laps of one {lap_mm:.0f}mm "
+                   f"line ({N_STICKS} spring-C pockets ID {2*(POCKET_RC-bw/4):.1f} modelled at the "
+                   f"half-flow strand, "
+                   f"{BAND_LAPS*lh:.1f}mm grip); ~{grams:.0f} g, ~{mins:.0f} min")
 
     # ------------------------------------------------------------------ WEB PANEL (k2plus)
     elif a.part == "web":
@@ -589,33 +686,40 @@ def main():
             stroke(cp, z2, zs=czs)
             prior2 += cp
 
-        # THE NET: one serpentine of sine rows; adjacent rows carry opposite phase and an
-        # amplitude larger than half the row pitch, so each pair CROSSES twice per cell —
-        # long shallow lens overlaps, ridden via crossing_z. Junctions are lens welds and
-        # ribbon-riding welds, never point kisses (the v1 failure).
-        NROWS = 8
-        row_pitch = (H - 52.0) / (NROWS - 1)
-        AMP = 0.72 * row_pitch
-        nx0, nx1 = ox + 6.0, ox + W - 6.0
-        rows = [oy + 26.0 + r_ * row_pitch for r_ in range(NROWS)]
-        if pos[1] > by / 2.0:            # start on the row nearest where the comb ended
-            rows = rows[::-1]
-        going = 1 if abs(pos[0] - nx0) < abs(pos[0] - nx1) else -1
+        # THE NET: ONE closed Lissajous loop, traced holistically across the whole panel
+        # (Oleg, 2026-07-28: "trajecoty between poles need to be traced holistically not
+        # direclty"). x = sin(5t), y = sin(8t): 5:8, the pair directly below the floor
+        # rose's 13:8 in the same Fibonacci run — the wall is drawn from the floor's own
+        # numbers, as one unbroken figure with no gap-closes at all. The six stick lines
+        # are crossed in passing (MEASURED: 10 contact runs each, 5 on line 1 whose
+        # ribbon the hairpins ride along), never terminals. Every turnaround lands on
+        # ground: the 10 x-hairpins sit ON
+        # the pressed frame ribbon and the y-envelope kisses the outer clip-band hoops.
+        # Junctions are lens welds ridden via crossing_z, never point kisses (v1 failure).
+        # Panels differ structurally: 1 is the crisp weave (delta 2pi/5), 2 is its mirror
+        # drawn with a breathing envelope — a damped-harmonograph member of the family.
+        # delta values are CHOSEN by two measurements on the emitted files: every stick
+        # line keeps >=2 of its 3 clip zones directly net-welded (a delta-0 panel 2 left
+        # sticks 2-3 with none), and the weave reads distinct per panel.
+        AX_ = W / 2.0 - 6.0                  # hairpins stay on the 12mm frame ribbon
+        AY_ = (BAND_Y_FRAC[2] - 0.5) * H     # envelope tangent to the outer clip hoops
+        delta = 2 * math.pi / 5 if a.segment == 1 else 3 * math.pi / 16
+        mirror = 1.0 if a.segment == 1 else -1.0
+        breathe = (0.05 if a.segment == 1 else 0.16) + rng.uniform(-0.02, 0.02)
+        psi = rng.uniform(0.0, 2 * math.pi)
+        ncx, ncy = ox + W / 2.0, oy + H / 2.0
+        NPT = 4400
         net = []
-        for r_, yr in enumerate(rows):
-            amp = AMP * rng.uniform(0.85, 1.15)
-            ph = rng.uniform(-0.5, 0.5)
-            sgn = 1 if r_ % 2 == 0 else -1
-            xs = [nx0 + t * (nx1 - nx0) / 240 for t in range(241)]
-            if going < 0:
-                xs = xs[::-1]
-            for x in xs:
-                net.append((x, yr + sgn * amp * math.sin(2 * math.pi * (x - ox - EDGE_L) / pitch + ph)))
-            going = -going
-        # densify BEFORE the crossing scan: the row-to-row connectors arrive as single
-        # 30mm segments, and a one-segment span turns crossing_z's 2mm ramp into a 30mm
-        # shallow float (caught by measuring the emitted file, not by any guard)
+        for i_ in range(NPT + 1):
+            t = 2 * math.pi * i_ / NPT
+            ay = AY_ * (1.0 - breathe * (1.0 + math.sin(t + psi)) / 2.0)
+            net.append((ncx + mirror * AX_ * math.sin(5 * t),
+                        ncy + ay * math.sin(8 * t + delta)))
+        net = start_nearest(net, (pos[0], pos[1]))   # enter where the comb left off
+        # densify BEFORE the crossing scan: a one-segment span turns crossing_z's 2mm
+        # ramp into a long shallow float (caught by measuring the emitted file)
         net = machine.decimate(densify(net, 0.8), 0.3)
+        net_mm = sum(math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(net, net[1:]))
         nzs, ncross = crossing_z(net, bw, machine.PRESS_HARD, 0.5, prior=prior2, skip=60)
         stroke(net, z2, zs=nzs)
 
@@ -667,25 +771,29 @@ def main():
         mins = (e / e_per_mm) / speed / 60.0
         fn = os.path.join(a.out,
                           f"web_panel{a.segment}_{a.printer}_w{W:.0f}_h{H:.0f}_T{temp:g}.gcode")
-        summary = (f"  panel {a.segment}: {W:.0f}x{H:.0f}, ground grid + {NROWS}-row net "
-                   f"({ncross} path points in ride-over zones), {len(pieces)} clip pieces x{CLIP_LAYERS} layers "
+        summary = (f"  panel {a.segment}: {W:.0f}x{H:.0f}, ground grid + one-stroke 5:8 lissajous "
+                   f"net ({net_mm/1000:.2f} m measured, {ncross} path points in ride-over zones), "
+                   f"{len(pieces)} clip pieces x{CLIP_LAYERS} layers "
                    f"(cavity {CAV:g}, mouth {MOUTH:g}); ~{grams:.0f} g, ~{mins:.0f} min")
 
     # ------------------------------------------------------------------ TOPPER (k2plus)
     else:
+        # V4: the coil cap stays (3 spiral laps, each ONE unbroken line — already the
+        # aesthetic the client asked to spread); the 12-layer solid socket ring is GONE.
+        # Above the cap, the SAME wave+spring-C line as the base runs 9 single-bead
+        # laps. Printed show-face-down; the flip mirrors the 12-fold band onto itself
+        # (k/N angles map to k/N), and the C mouths still face the wall side, so clip
+        # pressure seats stick tops INTO the C backs exactly as at the base.
         cx, cy = bx / 2.0, by / 2.0
-        r_in, r_out = R_STICK - (a.bore_mod + 4 * bw) / 2.0 - 0.5, R_STICK + (a.bore_mod + 4 * bw) / 2.0 + 1.5
-        # SAME angles as the base sockets, k/N — the flip mirrors angle to -angle, and only
-        # the k/N set maps onto itself in a way that still meets the base's k/N set. A
-        # half-pitch offset here would land every socket 15 degrees off its stick.
-        centers = [(cx + R_STICK * math.cos(2 * math.pi * k / N_STICKS),
-                    cy + R_STICK * math.sin(2 * math.pi * k / N_STICKS))
-                   for k in range(N_STICKS)]
-        # PRINTED SHOW-FACE-DOWN: cap first (it is the top after flipping), sockets above
-        # (they open downward at assembly). 12-fold symmetric, so the flip mirrors it onto
-        # itself and no chirality is lost.
-        n_layers = CAP_LAYERS + TOP_SOCKET_LAYERS
-        header(f"topper coil r{r_in:.0f}-{r_out:.0f}, {N_STICKS} sockets", n_layers, arch=False)
+        TOP_LAPS = 9             # CHOSEN — same 5.4mm spring grip as the base band
+        r_in, r_out = 82.0, 98.0 # CHOSEN — covers wall 85.3..92.3 + pockets to 94.45,
+        #   AND (r_out-r_in)/bead = 8 EXACTLY: each spiral layer ends where the next
+        #   begins. A non-integer lap count lands the seam elsewhere on the rim and the
+        #   connector extrudes a chord — at 7.5 laps it was a full DIAMETER across the
+        #   open centre at z0.7 (caught by the long-move probe on the emitted file).
+        n_layers = CAP_LAYERS + TOP_LAPS
+        header(f"topper V4 coil r{r_in:.0f}-{r_out:.0f} + {TOP_LAPS} pocket laps",
+               n_layers, arch=False)
         w("M107                              ; layer 1 bonds uncooled")
         for k in range(CAP_LAYERS):
             z = machine.PRESS_HARD + k * lh
@@ -709,27 +817,29 @@ def main():
             stroke(pts, z, first=(k == 0))
             if k == 0:
                 w("M106 S51                        ; 20% fan from layer 2")
-        band = circle(r_out, seg=0.4).difference(circle(r_out - 2 * bw, seg=0.4))
-        from shapely import affinity
-        band = affinity.translate(band, cx, cy)
-        boss_r = (a.bore_mod + 4 * bw + (1.2 if a.socket == "lobed" else 0)) / 2.0
-        boss_discs = [affinity.translate(circle(boss_r, seg=0.4), px, py)
-                      for px, py in centers]
-        holes = unary_union(sockets_at(centers, a.bore_mod))
-        reg = unary_union([band] + boss_discs).difference(holes)
-        if reg.geom_type != "Polygon":
-            raise SystemExit("topper socket ring is not one connected region")
+        # pocket ring, entered at the mid-gap point nearest the spiral's end so the
+        # seam lives mid-gap, never at a pocket; the entry chord rides the solid cap
+        GAP = 2 * math.pi / N_STICKS
+        mids = [(cx + (R_STICK - POCKET_DW) * math.cos(GAP / 2 + k * GAP),
+                 cy + (R_STICK - POCKET_DW) * math.sin(GAP / 2 + k * GAP))
+                for k in range(N_STICKS)]
+        entry = min(mids, key=lambda p: (p[0] - pos[0]) ** 2 + (p[1] - pos[1]) ** 2)
+        _bpts, _bfl = pocket_band(cx, cy, True)
+        _i0 = min(range(len(_bpts)),
+                  key=lambda k: (_bpts[k][0]-entry[0])**2 + (_bpts[k][1]-entry[1])**2)
+        band = _bpts[_i0:-1] + _bpts[:_i0] + [_bpts[_i0]]
+        bfl = _bfl[_i0:-1] + _bfl[:_i0] + [_bfl[_i0]]
+        lap_mm = sum(math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(band, band[1:]))
         z_cap = machine.PRESS_HARD + (CAP_LAYERS - 1) * lh
-        for s_ in range(TOP_SOCKET_LAYERS):
-            # first socket layer lies on the solid cap — the bore voids start above it
-            emit_region_layer(reg, z_cap + (s_ + 1) * lh,
-                              holes=None if s_ == 0 else holes.buffer(-0.4))
+        for s_ in range(1, TOP_LAPS + 1):
+            stroke(band, z_cap + s_ * lh, pflags=bfl)
         grams = e * A * 1.24 / 1000.0
         mins = (e / e_per_mm) / speed / 60.0
         fn = os.path.join(a.out, f"web_topper_{a.printer}_T{temp:g}.gcode")
-        summary = (f"  topper: {CAP_LAYERS}-layer spiral cap r{r_in:.0f}-{r_out:.0f} + "
-                   f"{TOP_SOCKET_LAYERS}-layer socket ring ({N_STICKS} sockets bore "
-                   f"{a.bore_mod:g}); ~{grams:.0f} g, ~{mins:.0f} min")
+        summary = (f"  topper V4: {CAP_LAYERS}-lap spiral cap r{r_in:.0f}-{r_out:.0f} + "
+                   f"{TOP_LAPS} single-bead laps of one {lap_mm:.0f}mm line "
+                   f"({N_STICKS} spring-C pockets ID {2*(POCKET_RC-bw/4):.1f} modelled at half-flow, "
+                   f"{TOP_LAPS*lh:.1f}mm grip); ~{grams:.0f} g, ~{mins:.0f} min")
 
     w("M107"); w("M104 S0")
     w(f"M140 S{machine.bed_for(a.material, a.printer):.0f}   ; bed STAYS hot between parts (Oleg)")
