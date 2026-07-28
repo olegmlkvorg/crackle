@@ -135,10 +135,14 @@ def check(path):
                 problems.append(f"L{ln}: XY off bed ({nx},{ny})")
             _seq_ceiling = max(_seq_ceiling, nz) if nz >= z else 0.0
             x, y, z = nx, ny, nz; maxz = max(maxz, z); zs.append(z)
-            if 'Z' in s and 'E' not in s and '; HOP' not in raw:
+            if 'Z' in s and 'E' not in s and '; HOP' not in raw and '; LINK' not in raw:
                 # A HOP's lift is temporary and drops straight back — treating it as a new layer
                 # floor makes the matching drop look like a plough. Layer changes set the floor;
-                # hops do not.
+                # hops do not. Nor do LINK ride-overs: a gentle Z jump over an existing strand
+                # (Oleg's "pause extrusion" crossings) is an E-less G1 X Y Z, which otherwise looks
+                # exactly like a layer-change Z move and would record the CREST as the floor —
+                # making the descent back to the real floor read as a plough. It is not a layer
+                # change; the strand below already holds that ground.
                 layer_floor = nz
     if not body:
         # The single most dangerous outcome: a file that silently receives no checks and passes.

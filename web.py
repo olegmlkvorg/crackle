@@ -292,33 +292,39 @@ def main():
             else:
                 w(f"G1 F{f}")
         qx, qy, qz = pos[0], pos[1], pos[2]
-        _in_pocket = False
+        # TWO gentle regimes share the slow speed (pocket_f = speed/4): the bore POCKETS (half
+        # flow, Oleg's "4x slow down rthere") and the Z RIDE-OVERS (NO flow — Oleg 2026-07-28:
+        # "when you jump over the lines with Z, make it more gentle with slowdown and fillament
+        # pause extrusuin"). A ride-over is a point lifted well above this stroke's floor to cross
+        # an existing strand; the strand BELOW already covers that ground, so the upper line
+        # bridges the crossing without extruding (no blob) and resumes extruding on the descent.
+        _slow = False   # head is at the gentle pocket_f (either regime)
         for i, (X, Y) in enumerate(pts[1:], 1):
             d = math.hypot(X - qx, Y - qy)
             if d < 0.02:
                 continue
             zz = (base + zs[i]) if zs else z
-            if pflags is not None and pflags[i]:
-                # Oleg 2026-07-28: "critical percision around bores and 50% fillament flow
-                # there only" AND "4x slow down rthere". Half metering AND quarter speed in the
-                # pocket zone. The F is emitted once on entry and is sticky, so every pocket move
-                # runs at pocket_f until the body speed is restored on exit; declared per-move
-                # (LINK semantics: deliberate, counted, R4-exempt) and stamped ; SPEED_POCKET.
-                if not _in_pocket:
-                    w(f"G1 F{pocket_f}   ; 4x slowdown — entering bore zone")
-                    _in_pocket = True
-                e += math.hypot(d, zz - qz) * e_per_mm * 0.5
-                w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f} ; LINK pocket 50% flow 4x-slow")
+            _pocket = pflags is not None and pflags[i]
+            _ride = (not _pocket) and (zz - z) > 0.12
+            if _pocket or _ride:
+                if not _slow:
+                    w(f"G1 F{pocket_f}   ; gentle — {'bore zone' if _pocket else 'lifting over a strand'}")
+                    _slow = True
+                if _pocket:
+                    e += math.hypot(d, zz - qz) * e_per_mm * 0.5
+                    w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f} ; LINK pocket 50% flow 4x-slow")
+                else:
+                    w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} ; LINK ride-over gentle (extrusion paused)")
                 qx, qy, qz = X, Y, zz
                 continue
-            if _in_pocket:
-                w(f"G1 F{f}   ; restore body speed — leaving bore zone")
-                _in_pocket = False
+            if _slow:
+                w(f"G1 F{f}   ; restore body speed")
+                _slow = False
             e += math.hypot(d, zz - qz) * e_per_mm
             w(f"G1 X{X:.3f} Y{Y:.3f} Z{zz:.3f} E{e:.5f}")
             qx, qy, qz = X, Y, zz
-        if _in_pocket:
-            w(f"G1 F{f}   ; restore body speed — pocket ran to stroke end")
+        if _slow:
+            w(f"G1 F{f}   ; restore body speed — slow zone ran to stroke end")
         pos[0], pos[1], pos[2] = qx, qy, qz
 
     def hop(x, y, z, clear):
