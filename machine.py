@@ -670,7 +670,11 @@ def aux_fans(printer, frac):
 # PLA goes to the machine ceiling (BED_MAX 120 — the config claims 135 and silently clamps).
 # TPU deliberately does NOT: Oleg ran it at 120 and reported "tpu on 120 bed is like glue, how to
 # scrap it away" — the belt welded itself to the plate.
-BED_TEMP = {"pla": 120, "pla-matte": 120, "petg": 80, "tpu": 45, "abs": 100}
+# BED 80 IS THE DEFAULT EVERYWHERE — Oleg, 2026-07-28 ~22:00: "lets also set our default
+# print temp to 80 eveywhere." Supersedes the 120-max doctrine (07-26 "PLA maxed to the plate
+# ceiling") after a night of first-layer trouble: at 120 a single-layer floor sits above Tg
+# indefinitely and never sets. The full-target wait rule (bed_start = bed-5) still applies.
+BED_TEMP = {"pla": 80, "pla-matte": 80, "petg": 80, "tpu": 45, "abs": 100}
 
 # PART-COOLING FAN CEILING, PER MATERIAL. Oleg, 2026-07-26: "fans for printing pla should be only on
 # 20% at most". Running 80% on PLA — which this project had been doing on 320mm plates — chills the
