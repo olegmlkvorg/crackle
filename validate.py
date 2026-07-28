@@ -805,7 +805,7 @@ def check(path):
         _isl1 = bool(_l1v_decl) and _fr is not None and abs(_fr/60.0 - _l1v_decl) < 0.6
         if _pv_decl is not None and abs(_zr - _pv_decl) < 1e-6:
             _isl1 = True
-        if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime and not _islink \
+        if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime \
                 and not _isl1:
             # FLOW IS PER MM OF PATH, AND THE PATH IS 3D. F is a 3D feedrate in Klipper, so the
             # volumetric rate through the nozzle is de*A / (d3/v). Measuring against the XY
@@ -816,8 +816,17 @@ def check(path):
             _de = float(_g['E']) - _er
             if _d > 0.05 and _de > 0:
                 _sp = round(_fr / 60.0, 1)
-                _spd[_sp] = _spd.get(_sp, 0) + 1
-                _flw.append((_de * _area) / (_d / (_fr / 60.0)))
+                # SPEED constancy exempts ONLY declared regimes (POCKET here, LAYER1
+                # handled below), NOT every LINK. A plain '; LINK' move at a second
+                # feedrate otherwise passed R3 silently (review 2026-07-29): R3 dropped
+                # all LINK from the histogram and R3b only saw POCKET-tagged ones. Plain
+                # LINK connectors run at body speed so they enter harmlessly; a genuine
+                # second speed on them now fails R3.
+                if not _ispocket:
+                    _spd[_sp] = _spd.get(_sp, 0) + 1
+                # FLOW: all LINK stay exempt — they legitimately meter flow down.
+                if not _islink:
+                    _flw.append((_de * _area) / (_d / (_fr / 60.0)))
         if 'E' in _g:
             _er = float(_g['E'])
         if 'X' in _g:
