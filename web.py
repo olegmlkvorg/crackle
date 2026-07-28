@@ -98,6 +98,12 @@ def main():
                     help="lobed socket: modelled circle the 3 bumps inscribe (coupon V4)")
     ap.add_argument("--span", action="store_true",
                     help="coupon: six round bores 3.9-9.9 (zero-inset..full-inset), no clips")
+    ap.add_argument("--deep", action="store_true",
+                    help="coupon: full-socket-depth bores (--deep-bores) — depth LOOSENS the "
+                         "hole (upper layers cool truer and relax outward; measured: 5.1 snug "
+                         "at 5mm depth, loose at 11.4mm)")
+    ap.add_argument("--deep-bores", default="5.1,5.7",
+                    help="comma list of modelled bores for --deep, small->big, notches 1..N")
     ap.add_argument("--clip-cavity", type=float, default=4.3,
                     help="snap channel width at the stick (coupon V5/V6 test this bulged)")
     ap.add_argument("--clip-mouth", type=float, default=2.9,
@@ -307,24 +313,27 @@ def main():
         #   V1 bore 9.0   V2 bore 9.9   V3 bore 10.8      (round, push straight down)
         #   V4 lobed: clearance 10.8, 3 bumps inscribing 5.6
         #   V5 channel mouth 2.9   V6 channel mouth 2.5   (lay stick in, press down)
-        PL, PH = 130.0, 20.0
+        PL, PH = (14.0 + 20.0*len(a.deep_bores.split(',')) + 6, 20.0) if a.deep else (130.0, 20.0)
         ox, oy = (bx - PL) / 2.0, (by - PH) / 2.0
         # ROUND 2 (Oleg's photo: K1C coupon bores printed ~3x the stick — the 3.02 inset
         # measured on big hot K2 parts did NOT appear on a small K1C coupon; a fit constant
         # does not cross printers/beads/part sizes). --span widens the sweep to SIX round
         # bores from zero-inset snug to full-inset prediction, to be printed ON THE K2.
-        bores = ([(16.0, 9.0), (36.0, 9.9), (56.0, 10.8)] if not a.span else
-                 [(14.0, 3.9), (34.0, 5.1), (54.0, 6.3), (74.0, 7.5), (94.0, 8.7), (114.0, 9.9)])
-        LOBE_X = None if a.span else 76.0
-        CH = [] if a.span else [(96.0, 2.9), (118.0, 2.5)]     # (centre x, mouth)
+        bores = ([(16.0, 9.0), (36.0, 9.9), (56.0, 10.8)] if not (a.span or a.deep) else
+                 [(14.0, 3.9), (34.0, 5.1), (54.0, 6.3), (74.0, 7.5), (94.0, 8.7), (114.0, 9.9)]
+                 if a.span else
+                 [(14.0 + 20.0*i, float(b)) for i, b in enumerate(a.deep_bores.split(","))])
+        LOBE_X = None if (a.span or a.deep) else 76.0
+        CH = [] if (a.span or a.deep) else [(96.0, 2.9), (118.0, 2.5)]     # (centre x, mouth)
         CAV = a.clip_cavity
         yc = PH / 2.0
 
         def plate_region():
             r = box(ox, oy, ox + PL, oy + PH)
             n = 0
-            sites = ([(16, 1), (36, 2), (56, 3), (76, 4), (96, 5), (118, 6)] if not a.span
-                     else [(14, 1), (34, 2), (54, 3), (74, 4), (94, 5), (114, 6)])
+            sites = ([(16, 1), (36, 2), (56, 3), (76, 4), (96, 5), (118, 6)] if not (a.span or a.deep)
+                     else [(14, 1), (34, 2), (54, 3), (74, 4), (94, 5), (114, 6)] if a.span
+                     else [(14 + 20*i, i+1) for i in range(len(a.deep_bores.split(",")))])
             for site_x, count in sites:
                 for k in range(count):
                     nx = ox + site_x + (k - (count - 1) / 2.0) * 3.2
@@ -385,7 +394,7 @@ def main():
                 raise SystemExit("coupon upper region is not one connected piece")
             return reg, unary_union(holes)
 
-        n_layers = 2 + CLIP_LAYERS
+        n_layers = 2 + (19 if a.deep else CLIP_LAYERS)   # deep = the base band's full grip
         header("fit coupon V1-V6 for 3.175 stick", n_layers, arch=False)
         w("M107                              ; layer 1 bonds uncooled")
         plate = plate_region()
@@ -397,9 +406,10 @@ def main():
         reg_body, holes_body = upper_region(0.0)
         reg_m1, _ = upper_region(0.5)
         reg_m2, _ = upper_region(1.0)
-        for k in range(CLIP_LAYERS):
+        for k in range(19 if a.deep else CLIP_LAYERS):
             z = machine.PRESS_HARD + (2 + k) * lh
-            reg = reg_body if k < CLIP_LAYERS - 2 else (reg_m1 if k == CLIP_LAYERS - 2 else reg_m2)
+            _NL = 19 if a.deep else CLIP_LAYERS
+            reg = reg_body if k < _NL - 2 else (reg_m1 if k == _NL - 2 else reg_m2)
             # layer 3 sits on the solid plate — a link over a bore mouth there lands on
             # ground; from layer 4 up the void below is real and links must stay clear
             emit_region_layer(reg, z, holes=None if k == 0 else holes_body.buffer(-0.4))
@@ -641,7 +651,7 @@ def main():
                 out.append((x + s * (1 if ox + near > x else -1), y))
             return out
 
-        for k in range(CLIP_LAYERS):
+        for k in range(19 if a.deep else CLIP_LAYERS):
             z = machine.PRESS_HARD + (WALL_LAYERS + k) * lh
             clear = z + 1.0
             seq = pieces if k % 2 == 0 else pieces[::-1]
