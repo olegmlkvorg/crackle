@@ -17,8 +17,8 @@ below no longer size them.
   --part coupon   THE FIT GATE (k1c). Six socket/clip variants for a 3.175 stick, indexed
                   by edge notches (1 notch = V1 ... 6 = V6). Sized the SOLID-boss parts;
                   V4 single-bead pockets are a different fit regime (see pocket_band).
-  --part base     V4: ONE pressed layer draws the whole floor (rosette + rim + band
-                  ground), then 9 single-bead laps of one closed wave line with 12
+  --part base     V4: ONE pressed layer draws the whole floor (rosette + band ground,
+                  no rim ring), then 9 single-bead laps of one closed wave line with 12
                   spring-C pockets. Sockets are blind — the pressed pad is their bottom.
   --part web      one wall panel (print two, --segment 1/2 varies the net organically).
                   2 layers of web + snap-clip channels at every stick line it owns.
@@ -554,8 +554,8 @@ def main():
         # letd do everything single layer / single wall thick. instad of doing round
         # boars. just design the boars as part of continious path" + "10 layers in total
         # ... with single layer botton itself" + "flow max at all times".
-        # So: ONE pressed layer draws the whole floor — rosette, rim, and the band's
-        # ground pass — then NINE single-bead laps of ONE closed line draw the wall AND
+        # So: ONE pressed layer draws the whole floor — the rosette and the band's
+        # ground pass (no rim ring) — then NINE single-bead laps of ONE closed line draw the wall AND
         # the 12 stick sockets: at each stick the line detours into a spring-C arc
         # tangent to its trajectory and flows on. No region fills, no bosses; every
         # layer is one continuous stroke at the full 60 mm3/s bead.
