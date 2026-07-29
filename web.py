@@ -185,7 +185,7 @@ def rose_sockets(cx, cy, R, bw):
     N = N_STICKS
     GAP = 2 * math.pi / N
     R_out = R - bw / 2.0
-    rp = rose(cx, cy, R_out, R_out * 0.11, p=12, q=1, n=3, steps=2400)
+    rp = rose(cx, cy, R_out, R_out * 0.11, p=36, q=1, n=3, steps=3600)
     rp = machine.decimate(rp, machine.CONSTANT_SPEED / 300.0 * 1.2)
     if rp and rp[0] == rp[-1]:
         rp = rp[:-1]
