@@ -21,6 +21,11 @@ VOID_MEASUREMENTS = {  # kept visible so nobody re-adopts them
     70.0: "cracked — clog, not flow",
     60.0: "set while still chasing the clog; later printed CLEAN, so never a limit",
 }
+# CAVEAT, 2026-07-29 — these "cracking/skipping" flow ceilings are now SUSPECT. Oleg's PLA had sat
+# ~24h in 45% RH; the crackle "like fire burning" is the signature of WET filament (moisture flashing
+# to steam at the nozzle), not the extruder losing grip. So the whole 81→74→70→60 walk may have been
+# moisture misread as a flow limit. DO NOT trust any of these numbers, or the standing FLOW=55, until
+# the ceiling is re-measured on a KNOWN-DRY spool (dry 45–55°C 4–6h). See memory lesson-wet-pla-crackle.
 NOZZLE = 0.8
 MAX_VELOCITY = 800.0
 MAX_ACCEL = 30000.0     # config ceiling
