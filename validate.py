@@ -1162,6 +1162,48 @@ def check(path):
     elif _worst_rate[0]:
         print(f"  peak move rate {_worst_rate[0]:.0f}/s (stall ~{machine.MAX_MOVES_PER_SEC:.0f})")
 
+    # SHARP-ANGLE CLUSTER — cusps piled at a point don't adhere and peel.
+    # Oleg, 2026-07-29, after the bucket base DETACHED: "detachment happened because you created so
+    # many sharp angles in the middle - guard should not allow sharp angles". A rose sends every
+    # petal to the centre, so hundreds of near-180deg reversals stack at ONE point; the nozzle can
+    # not lay a clean bead through a hairpin and the pile-up is a stress concentration that peels.
+    # The signal is CLUSTERING, not raw count: distributed sharp turns (raster row-ends, the
+    # topper's spring-C mouths) print fine — measured max-cluster <=20 on every part that adhered,
+    # vs 360 on the base that detached. So this fails only a dense pile-up (>=50 in one ~45mm patch).
+    _sh, _pb, _inb = [], [], False
+    for _ln in open(path):
+        if 'BODY_START' in _ln:
+            _inb = True; continue
+        if not _inb:
+            continue
+        _c = _ln.split(';')[0]
+        _m = re.match(r'^G1 (?:F[\d.]+ )?X([-\d.]+) Y([-\d.]+) Z([\d.]+) E', _c)
+        if _m:
+            _pb.append((float(_m.group(1)), float(_m.group(2))))
+    for _i in range(1, len(_pb) - 1):
+        _ax, _ay = _pb[_i][0] - _pb[_i-1][0], _pb[_i][1] - _pb[_i-1][1]
+        _bx, _by = _pb[_i+1][0] - _pb[_i][0], _pb[_i+1][1] - _pb[_i][1]
+        _la = math.hypot(_ax, _ay); _lb = math.hypot(_bx, _by)
+        if _la < 0.05 or _lb < 0.05:
+            continue
+        _cv = max(-1.0, min(1.0, (_ax*_bx + _ay*_by) / (_la*_lb)))
+        if math.degrees(math.acos(_cv)) > 140.0:
+            _sh.append(_pb[_i])
+    if _sh:
+        _SC = 15.0; _gc = {}
+        for _x, _y in _sh:
+            _k = (int(_x // _SC), int(_y // _SC)); _gc[_k] = _gc.get(_k, 0) + 1
+        _best = max(sum(_gc.get((_kx+_dx, _ky+_dy), 0) for _dx in (-1, 0, 1) for _dy in (-1, 0, 1))
+                    for (_kx, _ky) in _gc)
+        if _best >= 50:
+            problems.append(f"SHARP-ANGLE CLUSTER: {_best} near-reversals (>140deg) pile into one "
+                            f"~45mm patch — cusps concentrate stress and do not adhere (Oleg: the "
+                            f"base detached from 'so many sharp angles in the middle'). Spread the "
+                            f"convergence out; do not run many paths into a single point.")
+        else:
+            print(f"  sharp-angle cluster max {_best} (>140deg reversals in any ~45mm patch; fails "
+                  f"at 50) — {len(_sh)} sharp turns total, distributed")
+
     # TPU RUNS FULL FANS, ALWAYS. Oleg's rule, 2026-07-26, after finding the chamber fans at 0 on
     # a TPU print: "tpu must allway run full fans, add a guard". hilbert/honeycomb/waves never set
     # the aux fans at all, so every lattice printed with them off while belt/pulley/solid did set
