@@ -77,11 +77,14 @@ def main():
     w("M82")
     w(f"M140 S{bed:.0f}")
     w(f"M104 S{temp}")
-    w("G28")
     _wait = bed if a.printer == "k2plus" else machine.bed_start(a.material, bed)
-    w(f"M190 S{_wait:.0f}")
-    w(f"M140 S{bed:.0f}")
-    w(f"M109 S{temp}")
+    w(f"M190 S{_wait:.0f}")                 # bed hot BEFORE homing — plate expanded to print height
+    w(f"M109 S{temp}")                      # NOZZLE HOT BEFORE G28: a cold tip carries residue from the
+    #   previous print, and the blob touches first -> Z0 set high -> nothing presses (the recurring
+    #   "nothing glued"). A hot tip sheds it and the datum is taken at true print-temp length.
+    w("G28")
+    w("SET_GCODE_OFFSET Z=-0.05             ; first-layer press insurance: the K2 nozzle-touch datum"
+      " scatters ~0.1mm high (measured); bias down 0.05 so the 0.1 gap actually presses")
     w("M106 S0")
     for line in machine.aux_fans(a.printer, 0.0):
         w(line)
