@@ -47,6 +47,9 @@ def main():
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--out", default="out")
+    ap.add_argument("--bed", type=float, default=None,
+                    help="override bed target C (default=material/machine; e.g. 120 for a thick "
+                         "filled tile: big-footprint grip + less warp, unlike the thin drum floor)")
     a = ap.parse_args()
 
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
@@ -55,7 +58,8 @@ def main():
     bw = machine.bead_for_flow(flow, lh)               # 2.0 k2 / 1.5 k1c at pla-matte
     speed = machine.speed_for_flow(flow, bw, lh)       # 50
     temp = machine.temp_for(a.material)
-    bed = machine.bed_for(a.material, a.printer)
+    bed = (min(a.bed, machine.BED_MAX.get(a.printer, machine.BED_MAX_DEFAULT))
+           if a.bed is not None else machine.bed_for(a.material, a.printer))
     bx, by = machine.BED[a.printer]
     sx = a.size
     sy = a.size_y if a.size_y else a.size
