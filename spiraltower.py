@@ -35,11 +35,13 @@ def main():
                          "wide -> lines wander). Set 1.2 (1.5x nozzle) + --layer-h 0.4 for ACCURATE lineup "
                          "(Oleg 2026-07-30, after wavy walls). Lower flow, more layers, cleaner stack.")
     ap.add_argument("--squish", type=float, default=1.0,
-                    help="extrusion multiplier for SINGLE-WALL bonding (Oleg 2026-07-30: only 5 layers "
-                         "bonded). The exact e=bead_w*layer_h model gives ZERO squish (bead height == layer "
-                         "height), so a single wall's layers only touch, never fuse. 1.2 over-feeds 20%% so "
-                         "each bead presses into the one below. A single wall has NO lateral neighbour to "
-                         "bond to, so squish is the only bond it gets.")
+                    help="extrusion multiplier. CAUTION (Oleg 2026-07-30): squishing HARD just BENDS a thin "
+                         "unsupported single wall (it flexes away, no fuse). Keep ~1.0; bond via HEAT (slow "
+                         "+ hot), not pressure.")
+    ap.add_argument("--speed", type=float, default=None,
+                    help="mm/s override (default 50 north star). Oleg 2026-07-30: try 1/4 (12.5) — slower "
+                         "lay drives more heat into the weld so single-wall layers fuse THERMALLY, without "
+                         "a squish force the flimsy wall can't take.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
@@ -47,12 +49,12 @@ def main():
     if a.bead:
         # ACCURATE-LINEUP geometry: set the bead width directly, hold the 50 north star, flow follows.
         bw = a.bead
-        speed = machine.DEFAULT_SPEED
+        speed = a.speed if a.speed else machine.DEFAULT_SPEED
         flow = bw * lh * speed
     else:
         flow = machine.flow_cap(a.material, a.printer)
         bw = machine.bead_for_flow(flow, lh)
-        speed = machine.speed_for_flow(flow, bw, lh)
+        speed = a.speed if a.speed else machine.speed_for_flow(flow, bw, lh)
     temp = 230
     f = round(speed * 60)
     A_FIL = math.pi * (1.75 / 2) ** 2
