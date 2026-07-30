@@ -70,18 +70,33 @@ def main():
     ap.add_argument("--bed", type=float, default=60,
                     help="bed C, default 60 (PLA rated 50-70; 0 = cold, no M190 wait)")
     ap.add_argument("--layer-h", type=float, default=0.6)
+    ap.add_argument("--bead", type=float, default=None,
+                    help="bead WIDTH mm. Default 2.0 wanders on a 0.8 nozzle; set 1.2 (1.5x nozzle) + "
+                         "--layer-h 0.4 for accurate lineup (Oleg 2026-07-30).")
+    ap.add_argument("--squish", type=float, default=1.0,
+                    help="extrusion multiplier. CAUTION (Oleg 2026-07-30): squishing HARD just BENDS a thin "
+                         "unsupported single wall instead of fusing. Keep ~1.0; bond via HEAT (slow), not pressure.")
+    ap.add_argument("--speed", type=float, default=None,
+                    help="mm/s override (default 50). SINGLE-WALL legs bond THERMALLY at slow speed: 12.5 "
+                         "(1/4) proved stable on the leg 2026-07-30. Slower lay drives heat into the weld so "
+                         "layers fuse without a squish force the flimsy wall can't take.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
-    flow = machine.flow_cap(a.material, a.printer)
     lh = a.layer_h
-    bw = machine.bead_for_flow(flow, lh)
-    speed = machine.speed_for_flow(flow, bw, lh)
+    if a.bead:
+        bw = a.bead
+        speed = a.speed if a.speed else machine.DEFAULT_SPEED
+        flow = bw * lh * speed
+    else:
+        flow = machine.flow_cap(a.material, a.printer)
+        bw = machine.bead_for_flow(flow, lh)
+        speed = a.speed if a.speed else machine.speed_for_flow(flow, bw, lh)
     temp = machine.temp_for(a.material)
     f = round(speed * 60)
     travel_f = round(machine.MACHINE_MAX_SPEED * 60)
-    e_per_mm = bw * lh / A_FIL
+    e_per_mm = bw * lh * a.squish / A_FIL     # squish >1 BENDS a thin wall; bond via slow speed (heat)
     bx, by = machine.BED[a.printer]
     bed = min(a.bed, machine.BED_MAX.get(a.printer, machine.BED_MAX_DEFAULT)) if a.bed else 0
 
@@ -270,7 +285,11 @@ def main():
     w(f"; PRINTER={a.printer}")
     w(f"; MATERIAL={a.material}")
     w(f"; LAYER_H={lh:g}")
-    w(f"; FLOW={bw*lh*speed:.4f}")
+    w(f"; FLOW={bw*lh*a.squish*speed:.4f}")
+    if a.bead or a.speed or a.squish != 1.0:
+        w(f"; FLOW_DERATE=accurate bead {bw:g}x{lh:g} at {speed:g} mm/s (Oleg 2026-07-30: single-wall "
+          f"legs bond THERMALLY at slow speed, not by squish which bends the wall). "
+          f"{bw*lh*a.squish*speed:g} mm3/s is a DELIBERATE bonding choice, not a flow ceiling.")
     w(f"; PRINT_TEMP={temp}")
     w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     w(f"; SEQUENTIAL={N} legs rising in rotation, lifted hops between")
