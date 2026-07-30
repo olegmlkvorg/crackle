@@ -4,8 +4,8 @@ idea kit." Each sample is a short twisted fluted column with a DIFFERENT flute c
 so the form can be chosen by holding them side by side instead of from one render.
 
 All samples rise TOGETHER, layer by layer, with lifted hops between them (the towers.py rotation: safe
-from head collisions by construction, and each sample cools ~N laps before its next). Cold bed, pressed
-first lap. Small (default 35mm tall, ~26mm across) so the whole kit prints in one short job.
+from head collisions by construction, and each sample cools ~N laps before its next). Bed 60 (PLA; cold
+spaghettied), pressed first lap. Small (default 35mm tall, ~26mm across) so the whole kit prints in one short job.
 
 Usage:  python3 ideakit.py [--height 35] [--dia 26]
 """
@@ -28,7 +28,9 @@ def main():
     ap.add_argument("--height", type=float, default=35.0)
     ap.add_argument("--dia", type=float, default=26.0, help="mean sample diameter")
     ap.add_argument("--gap", type=float, default=18.0, help="clear gap between samples")
-    ap.add_argument("--bed", type=float, default=60, help="bed C; 0 = COLD (default, solar)")
+    ap.add_argument("--bed", type=float, default=60,
+                    help="bed C, default 60 (PLA rated 50-70; cold=0 spaghettis on the K2 bare plate). "
+                         "Lower to 50 to shave solar once 60 is proven; 0 = cold (no heat, no M190 wait).")
     ap.add_argument("--layer-h", type=float, default=0.6)
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
@@ -156,7 +158,8 @@ def main():
     fn = os.path.join(a.out, f"ideakit_{a.printer}_h{a.height:g}_x{N}_T{temp:g}.gcode")
     open(fn, "w").write("\n".join(L) + "\n")
     print(fn)
-    print(f"  idea kit: {N} samples ({', '.join(v[0] for v in VARIANTS)}), h{a.height:g}, cold bed")
+    print(f"  idea kit: {N} samples ({', '.join(v[0] for v in VARIANTS)}), h{a.height:g}, "
+          f"bed {bed:g}" + ("C" if bed else " (cold)"))
 
 
 if __name__ == "__main__":

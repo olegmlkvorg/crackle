@@ -9,7 +9,7 @@ through the core as rebar and a visible spine.
 Form, not a box: the spiral is the structure and the ornament at once. Same family as towers.py (the
 spiral pillars Oleg called "perfect") and the rotunda, scaled to a load-bearing leg.
 
-Cold bed (solar). Pressed first lap for adhesion. Single-bead wall (the mass, not the shell, bears load).
+Bed 60 (PLA; cold spaghettied on the K2 bare plate). Pressed first lap. Single-bead wall (the mass, not the shell, bears load).
 
 Usage:  python3 spiraltower.py [--height 180] [--dia 64] [--lobes 6] [--flute 4] [--twist 180]
         (--twist = degrees the profile rotates over the full height)
@@ -27,7 +27,8 @@ def main():
     ap.add_argument("--lobes", type=int, default=6, help="number of flutes around")
     ap.add_argument("--flute", type=float, default=4.0, help="flute depth mm (peak-to-valley radius swing)")
     ap.add_argument("--twist", type=float, default=180.0, help="degrees the flutes rotate over full height")
-    ap.add_argument("--bed", type=float, default=60, help="bed C; 0 = COLD (default, solar)")
+    ap.add_argument("--bed", type=float, default=60,
+                    help="bed C, default 60 (PLA rated 50-70; cold=0 spaghettis). 0 = cold, no M190 wait.")
     ap.add_argument("--layer-h", type=float, default=0.6)
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
@@ -128,7 +129,7 @@ def main():
     # print length / speed = motion time (matches validate's estimate); +heat/accel in reality
     _path_mm = laps * PPL * (2 * math.pi * Rm)  # rough: laps x points x mean circumference/points
     print(f"  twisted fluted column h{a.height:g} dia {a.dia:g}, {a.lobes} flutes, {a.twist:g}deg twist, "
-          f"{laps} laps, cold bed (run validate.py for the true print time)")
+          f"{laps} laps, bed {bed:g}" + ("C" if bed else " (cold)") + " (run validate.py for the true print time)")
 
 
 if __name__ == "__main__":
