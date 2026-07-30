@@ -64,26 +64,28 @@ def main():
     jlayers = int(round(fillet / b.lh))
     laps_wall = int((a.wall_h + a.lip - fillet) / b.lh)
     b.preamble(f"STAND CAP {a.size:g} bore{a.bore:g} wall{a.wall_h:g}+lip{a.lip:g}",
-               laps_wall + jlayers + 2, extra_stamps=sc.stamp_dependencies())
+               laps_wall + jlayers + 2, extra_stamps=sc.stamp_dependencies(), corner=True)
 
     # --- FLOOR band, layer 1 (pressed 0.1): rect rings from the OUTER wall INWARD to the bore,
     #     stopping at the opening so the column bore stays clear. Pressed beads land ~land mm wide
-    #     and tile into a solid welded rim (the wide-line press, R4b-exempt via PRESSED_LAYER1). ---
+    #     and tile into a solid welded rim (the wide-line press, R4b-exempt via PRESSED_LAYER1).
+    #     Every square corner is slowed to corner speed (loop_cornered) — the tile's inner square
+    #     peeled on hard turns at 50; the cap band has the same 90deg corners. ---
     ring0 = b.rect_pts(cx, cy, hx, hy)
     b.begin_at(ring0[0][0], ring0[0][1], b.z1, tag="; PRIME-TRAVEL to cap band")
     ix = hx
     while ix > rb + b.land * 0.5:
-        b.loop(b.rect_pts(cx, cy, ix, ix), b.z1)
+        b.loop_cornered(b.rect_corners(cx, cy, ix, ix), b.z1)
         ix = max(rb, ix - b.land)
-    b.loop(b.rect_pts(cx, cy, rb, rb), b.z1)            # innermost pressed ring at the bore edge
+    b.loop_cornered(b.rect_corners(cx, cy, rb, rb), b.z1)   # innermost pressed ring at the bore edge
 
     # --- FLOOR band, layer 2 (normal bead): rings OUTWARD from the bore to the outer wall ---
     b.relevel_z(b.z2)
     ix = rb
     while ix < hx:
-        b.loop(b.rect_pts(cx, cy, ix, ix), b.z2)
+        b.loop_cornered(b.rect_corners(cx, cy, ix, ix), b.z2)
         ix = min(hx, ix + b.bw)
-    b.loop(ring0, b.z2)                                 # end on the outer wall line
+    b.loop_cornered(b.rect_corners(cx, cy, hx, hy), b.z2)   # end on the outer wall line
 
     # --- FUSED CORNER haunch: the outer wall welds face-to-face into the band over `fillet` mm,
     #     tapering wall_beads -> 1, so the fill push cannot peel the wall off the rim (cup failure). ---
@@ -94,7 +96,7 @@ def main():
         frac = (j * b.lh) / fillet if fillet > 1e-9 else 1.0
         k = max(1, int(round(nbase - (nbase - 1) * frac)))
         for bd in range(k - 1, -1, -1):
-            b.loop(b.rect_pts(cx, cy, hx - bd * b.bw, hy - bd * b.bw), zf)
+            b.loop_cornered(b.rect_corners(cx, cy, hx - bd * b.bw, hy - bd * b.bw), zf)
 
     # --- OUTER WALL: single-bead rectangle spiral up to wall_h (+ lip), one continuous stroke ---
     b.climb_loop(ring0, b.z2 + fillet, top)

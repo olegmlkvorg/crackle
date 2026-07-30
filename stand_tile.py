@@ -27,6 +27,7 @@ import argparse, math, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
+import stand_common as sc          # corner_samples() — shared sharp-corner detection
 
 A_FIL = math.pi * (1.75 / 2) ** 2
 
@@ -97,6 +98,15 @@ def main():
     hy = sy / 2.0 - bw / 2.0
     e_mm = bw * lh / A_FIL
     f = round(speed * 60)
+    # CORNER SLOWDOWN — quarter speed through the inner concentric-square corners that peeled.
+    # Oleg, 2026-07-30: "the inner square got detachment, on low radius sharp turns you have to slow
+    # down." At 50 mm/s the head overshoots a 90deg corner (Klipper brakes but E meters per mm of
+    # PATH, so the bead does not) and the flung cusp peels off the plate. Slow the ramp INTO/THROUGH
+    # each corner; hold 50 on the straights. E per mm is unchanged, so deposit is identical — only
+    # the feedrate falls (declared ; SPEED_CORNER, moves LINK-tagged, verified by validate R3c).
+    corner_speed = speed / 4.0
+    corner_f = round(corner_speed * 60)
+    czone = max(4.0, 3.0 * bw)                         # mm of slow ramp each side of a corner
     land = bw * lh / machine.PRESS_HARD                # pressed layer-1 landed width (~12mm)
     z1 = machine.PRESS_HARD
     z2 = machine.PRESS_HARD + lh
@@ -114,16 +124,39 @@ def main():
         w(f"G1 X{X:.3f} Y{Y:.3f} Z{Z:.3f} E{e:.5f}")
         qx, qy, qz = X, Y, Z
 
-    def ring(ix, iy, z):
-        """Emit one rectangle ring inset (ix,iy) from the wall centreline, at height z.
-        Starts and ends at the same +x,+y corner so rings chain into a continuous spiral."""
+    def emit_cornered(samples, z):
+        """Emit (x,y,slow) samples at body speed, dropping to corner_f through the slow ramps.
+        Mirrors the pocket regime: a bare 'G1 F' switches the regime, tagged moves inherit it (so
+        R4 skips them via LINK and R3c verifies SPEED_CORNER). E per mm is unchanged — only feed."""
+        nonlocal e, qx, qy, qz
+        slow_state = False
+        for X, Y, flag in samples:
+            want_slow = flag           # DEST-only: decelerate into the cusp, keep the departure
+            d3 = math.hypot(math.hypot(X - qx, Y - qy), z - qz)   # straight fast (see stand_common)
+            if d3 < 0.2:
+                continue
+            if want_slow != slow_state:
+                if want_slow:
+                    w(f"G1 F{corner_f}   ; corner slowdown — sharp turn, {corner_speed:g} mm/s")
+                else:
+                    w(f"G1 F{f}   ; restore body speed — leaving corner")
+                slow_state = want_slow
+            e += d3 * e_mm
+            tag = " ; LINK corner slow" if want_slow else ""
+            w(f"G1 X{X:.3f} Y{Y:.3f} Z{z:.3f} E{e:.5f}{tag}")
+            qx, qy, qz = X, Y, z
+        if slow_state:
+            w(f"G1 F{f}   ; restore body speed — corner ran to loop end")
+
+    def ring_slow(ix, iy, z):
+        """One rectangle ring inset (ix,iy) from the wall centreline, at height z, with the four
+        90deg corners run at corner speed (the inner square that peeled). Starts/ends at +x,+y so
+        rings chain into a continuous spiral."""
         x0, x1 = cx - ix, cx + ix
         y0, y1 = cy - iy, cy + iy
-        emit(x1, y1, z)
-        emit(x0, y1, z)
-        emit(x0, y0, z)
-        emit(x1, y0, z)
-        emit(x1, y1, z)
+        corners = [(x1, y1), (x0, y1), (x0, y0), (x1, y0), (x1, y1)]
+        emit_cornered(sc.corner_samples(corners, seg=1.5, zone=czone,
+                                        sharp_deg=55.0, short_len=2.0 * bw), z)
 
     fillet = max(0.0, min(a.fillet, a.depth - lh))     # leave at least one single-bead lap above
     jlayers = int(round(fillet / lh))
@@ -134,6 +167,7 @@ def main():
     w(f"; PRINTER={a.printer}")
     w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     w(f"; PRINT_TEMP={temp}")
+    w(f"; SPEED_CORNER={corner_speed:.4f}")            # third regime — slow the square corners (R3c)
     w("; ARGV: " + " ".join(sys.argv))
     w(f"; STAND TILE {sx:g}x{sy:g} depth {a.depth:g}: pressed floor + single-bead wall, bead "
       f"{bw:.2f}x{lh:g}. Butt with siblings, lay bamboo rebar, pour sand+gypsum for a monolithic slab")
@@ -142,10 +176,19 @@ def main():
         w(_der)
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {laps_wall + jlayers + 2}"); w("; HEADER_BLOCK_END")
     w("M82")
-    w(f"M140 S{bed:.0f}")
-    w(f"M104 S{temp}")
-    _wait = bed if a.printer == "k2plus" else machine.bed_start(a.material, bed)
-    w(f"M190 S{_wait:.0f}")
+    # COLD-BED RUN. Oleg, 2026-07-30, on limited solar power: the heated bed is the biggest draw, so
+    # --bed 0 prints with NO bed heat. A cold bed must never emit M190 (wait-for-bed) — the bed will
+    # never reach a positive target and the print would stall forever waiting. Adhesion then rests
+    # ENTIRELY on the mechanical press doctrine (0.1 wide-bead squish keying into the textured plate)
+    # plus this build's corner slowdown — which is exactly what the knock-test tile now proves out.
+    if bed > 0:
+        w(f"M140 S{bed:.0f}")
+        w(f"M104 S{temp}")
+        _wait = bed if a.printer == "k2plus" else machine.bed_start(a.material, bed)
+        w(f"M190 S{_wait:.0f}")
+    else:
+        w("M140 S0                          ; COLD BED — solar run, no bed heat, no M190 wait")
+        w(f"M104 S{temp}")
     w(f"M109 S{temp}")
     w("G28")
     w("SET_GCODE_OFFSET Z=-0.05             ; first-layer press insurance (measured ~0.1 high on K2)")
@@ -171,7 +214,7 @@ def main():
     qx, qy, qz = x0c, cy + hy, z1
     ix, iy = hx, hy
     while ix > land * 0.5 and iy > land * 0.5:
-        ring(ix, iy, z1)
+        ring_slow(ix, iy, z1)
         ix = max(0.0, ix - land)
         iy = max(0.0, iy - land)
     emit(cx, cy, z1)                 # close to centre
@@ -195,7 +238,7 @@ def main():
     rings.append((hx, hy))
     emit(cx, cy, z2)
     for rix, riy in rings:
-        ring(rix, riy, z2)
+        ring_slow(rix, riy, z2)
 
     # --- FUSED CORNER (haunch): the concept cup (stand.py) FAILED here on 2026-07-29 — its solid
     #     floor disc peeled off the single-bead wall along the one-bead rim seam when pulled. A
@@ -212,7 +255,7 @@ def main():
         k = max(1, int(round(nbase - (nbase - 1) * frac)))
         # innermost ring first, ending on the outer wall line, so the wall spiral continues cleanly
         for b in range(k - 1, -1, -1):
-            ring(hx - b * bw, hy - b * bw, zf)
+            ring_slow(hx - b * bw, hy - b * bw, zf)
 
     zstart = z2 + fillet
 

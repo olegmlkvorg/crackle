@@ -772,7 +772,9 @@ def check(path):
     _pv_decl = float(_m_pv.group(1)) if _m_pv else None
     _m_pkt = re.search(r'^; SPEED_POCKET=([\d.]+)', _rules_txt, re.M)
     _pkt_decl = float(_m_pkt.group(1)) if _m_pkt else None
-    _spd, _flw, _nlink, _pspd = {}, [], 0, {}
+    _m_cnr = re.search(r'^; SPEED_CORNER=([\d.]+)', _rules_txt, re.M)
+    _cnr_decl = float(_m_cnr.group(1)) if _m_cnr else None
+    _spd, _flw, _nlink, _pspd, _cspd = {}, [], 0, {}, {}
     _area = math.pi * (1.75 / 2) ** 2
     for _raw in _rules_txt.splitlines():
         _code = _raw.split(';')[0].strip()
@@ -802,6 +804,13 @@ def check(path):
         if _ispocket and 'X' in _g and 'E' in _g and _fr:
             _psp = round(_fr / 60.0, 1)
             _pspd[_psp] = _pspd.get(_psp, 0) + 1
+        # THE CORNER SLOWDOWN IS A THIRD DECLARED REGIME, checked the same way as the pocket. Sharp
+        # corners run at SPEED_CORNER (LINK-tagged '; LINK corner slow'), so the body histogram skips
+        # them; their own speed is collected here and verified against ; SPEED_CORNER by R3c below.
+        _iscorner = _islink and 'CORNER' in _raw.upper()
+        if _iscorner and 'X' in _g and 'E' in _g and _fr:
+            _csp = round(_fr / 60.0, 1)
+            _cspd[_csp] = _cspd.get(_csp, 0) + 1
         _isl1 = bool(_l1v_decl) and _fr is not None and abs(_fr/60.0 - _l1v_decl) < 0.6
         if _pv_decl is not None and abs(_zr - _pv_decl) < 1e-6:
             _isl1 = True
@@ -822,7 +831,7 @@ def check(path):
                 # all LINK from the histogram and R3b only saw POCKET-tagged ones. Plain
                 # LINK connectors run at body speed so they enter harmlessly; a genuine
                 # second speed on them now fails R3.
-                if not _ispocket:
+                if not _ispocket and not _iscorner:
                     _spd[_sp] = _spd.get(_sp, 0) + 1
                 # FLOW: all LINK stay exempt — they legitimately meter flow down.
                 if not _islink:
@@ -908,6 +917,41 @@ def check(path):
                 print(f"  R3b: {sum(_pspd.values())} pocket moves at the declared {_pkt_decl:g} "
                       f"mm/s" + (f" ({_ratio:.1f}x slower than the {_body_sp:g} mm/s body)"
                                  if _ratio else "") + " — bore slowdown applied")
+
+    # R3c — THE DECLARED CORNER SLOWDOWN MUST ACTUALLY APPEAR IN THE MOVES.
+    # Oleg, 2026-07-30, after the stand tile's inner concentric-square FLOOR peeled: "the inner
+    # square got detachment, on low radius sharp turns you have to slow down." At 50 mm/s the head
+    # overshoots a hard corner (Klipper brakes to square_corner_velocity but E meters per mm of
+    # PATH, so the bead does not brake with it) and the flung cusp peels. A '; SPEED_CORNER=' stamp
+    # declares a slower regime for the sharp-corner ramps, LINK-tagged so R4 skips them; this
+    # verifies the emitted corner moves run AT it — the exact mirror of R3b for the pocket, so the
+    # slowdown can never be stamped-but-not-applied (the silent-non-application failure).
+    if _cspd or _cnr_decl is not None:
+        _body_sp = max(_spd, key=_spd.get) if _spd else None
+        if _cspd and _cnr_decl is None:
+            problems.append(f"{sum(_cspd.values())} corner-slowdown moves run at {sorted(_cspd)} "
+                            f"mm/s but the file declares no '; SPEED_CORNER=' — an undeclared "
+                            f"second speed regime. Declare it, or the slowdown is unverifiable.")
+        elif _cnr_decl is not None and not _cspd:
+            problems.append(f"'; SPEED_CORNER={_cnr_decl:g}' is declared but NO corner move runs "
+                            f"at it — the corner slowdown was stamped and never applied. This is the "
+                            f"silent-non-application failure the stamp exists to catch.")
+        elif _cspd:
+            _cv2 = round(_cnr_decl, 1)
+            _wrong = {k: v for k, v in _cspd.items() if abs(k - _cv2) > 0.6}
+            if _wrong:
+                problems.append(f"corner moves declared at {_cv2:g} mm/s but {sum(_wrong.values())} "
+                                f"run at {sorted(_wrong)} — the declared corner slowdown does not "
+                                f"match the emitted speed.")
+            elif _body_sp and _cnr_decl > _body_sp - 0.6:
+                problems.append(f"'; SPEED_CORNER={_cnr_decl:g}' is not slower than the body speed "
+                                f"{_body_sp:g} mm/s — a slowdown that does not slow down. Oleg asked "
+                                f"to slow the sharp turns, not match them.")
+            else:
+                _ratio = (_body_sp / _cnr_decl) if _body_sp and _cnr_decl else 0
+                print(f"  R3c: {sum(_cspd.values())} corner moves at the declared {_cnr_decl:g} "
+                      f"mm/s" + (f" ({_ratio:.1f}x slower than the {_body_sp:g} mm/s body)"
+                                 if _ratio else "") + " — corner slowdown applied")
 
     if _flw and not _decl_flow:
         problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "

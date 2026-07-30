@@ -30,6 +30,66 @@ import machine
 A_FIL = math.pi * (1.75 / 2) ** 2
 
 
+def corner_samples(corners, seg=1.5, zone=6.0, sharp_deg=55.0, gentle_deg=30.0, short_len=4.0):
+    """Trace a closed polygon and mark where the head must SLOW for a sharp/low-radius corner.
+
+    `corners` are the COARSE vertices (corners[-1]==corners[0]); returns a list of (x, y, slow)
+    samples along the same loop. A vertex is a corner if its TURN (deviation from straight) exceeds
+    `sharp_deg`, OR the turn exceeds `gentle_deg` between two SHORT (< short_len) segments — a
+    low-radius corner. Around every such vertex a RAMP of points spanning ±`zone` mm is flagged
+    slow; the straight run between corners stays a single FAST segment (the north star holds there).
+
+    Why on the coarse vertices and not the dense path: a rectangle's 90deg corner is a single
+    direction discontinuity, but rect_pts/circle_pts subdivide edges into collinear points where the
+    per-point turn is ~0 — the corner is invisible once densified. Square corners (90deg) always
+    qualify; a smooth circle (a few deg per point) never does, so circular parts pass untouched and
+    emit no slow moves (and their generators then correctly stamp no SPEED_CORNER)."""
+    V = corners[:-1] if len(corners) >= 2 and corners[0] == corners[-1] else list(corners)
+    n = len(V)
+    if n < 3:
+        return [(x, y, False) for (x, y) in corners]
+    sharp = [False] * n
+    for i in range(n):
+        ax, ay = V[i][0] - V[i - 1][0], V[i][1] - V[i - 1][1]
+        bx, by = V[(i + 1) % n][0] - V[i][0], V[(i + 1) % n][1] - V[i][1]
+        la = math.hypot(ax, ay); lb = math.hypot(bx, by)
+        if la < 1e-6 or lb < 1e-6:
+            continue
+        cv = max(-1.0, min(1.0, (ax * bx + ay * by) / (la * lb)))
+        turn = math.degrees(math.acos(cv))
+        if turn > sharp_deg or (turn > gentle_deg and min(la, lb) < short_len):
+            sharp[i] = True
+    out = [(V[0][0], V[0][1], sharp[0])]
+    for i in range(n):
+        a = V[i]; b = V[(i + 1) % n]
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        if L < 1e-9:
+            continue
+        ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+        za = zone if sharp[i] else 0.0                 # slow ramp leaving vertex a
+        zb = zone if sharp[(i + 1) % n] else 0.0       # slow ramp approaching vertex b
+        if za + zb >= L:                               # short edge: the whole span is a slow zone
+            ns = max(1, int(math.ceil(L / max(seg, 0.2))))
+            for k in range(1, ns + 1):
+                t = k / ns
+                out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, True))
+            continue
+        if za > 0:
+            ns = max(1, int(math.ceil(za / max(seg, 0.2))))
+            for k in range(1, ns + 1):
+                d = za * k / ns
+                out.append((a[0] + ux * d, a[1] + uy * d, True))
+        mid = L - zb                                   # one fast segment across the straight
+        if mid > za + 1e-6:
+            out.append((a[0] + ux * mid, a[1] + uy * mid, False))
+        if zb > 0:
+            ns = max(1, int(math.ceil(zb / max(seg, 0.2))))
+            for k in range(1, ns + 1):
+                d = mid + zb * k / ns
+                out.append((a[0] + ux * d, a[1] + uy * d, True))
+    return out
+
+
 class Build:
     """Carries the machine operating point + the emitted gcode + a running extruder position.
 
@@ -55,6 +115,21 @@ class Build:
         self.cx, self.cy = self.bx / 2.0, self.by / 2.0
         self.e_mm = self.bw * self.lh / A_FIL                          # E per mm of PATH (3D)
         self.f = round(self.speed * 60)
+        # CORNER SLOWDOWN — a third declared speed regime (after the north star and the pocket).
+        # Oleg, 2026-07-30, after the tile's inner concentric-square FLOOR peeled: "the inner
+        # square got detachment, on low radius sharp turns you have to slow down." At 50 mm/s the
+        # head overshoots a hard corner — Klipper brakes to square_corner_velocity but E is metered
+        # per mm of PATH, so the bead does NOT brake with it, and the flung cusp is not pressed, it
+        # peels. The fix mirrors the pocket regime: quarter speed THROUGH the sharp corner, the full
+        # north star on the straight. E per mm is unchanged (deposit is per mm of path, not per
+        # second), so the corner lays the SAME bead more slowly — the volumetric rate through the
+        # nozzle drops there, which is exactly why the corner moves are LINK-tagged and R4-exempt
+        # like the pocket arcs. Refines the "50 constant" north star the same way SPEED_POCKET did
+        # (memory: speed-50-north-star) — Oleg's explicit call, not a drift.
+        self.corner_speed = self.speed / 4.0
+        self.corner_f = round(self.corner_speed * 60)
+        self.sharp_deg = 55.0        # turn (deviation from straight) above which a vertex is sharp
+        self.corner_zone = max(4.0, 3.0 * self.bw)   # mm of ramp EACH side of a sharp vertex, slow
         self.land = self.bw * self.lh / machine.PRESS_HARD             # pressed layer-1 landed width
         self.z1 = machine.PRESS_HARD                                   # pressed first layer
         self.z2 = machine.PRESS_HARD + self.lh                         # second (normal) layer
@@ -77,11 +152,16 @@ class Build:
         self.qx, self.qy, self.qz = X, Y, Z
 
     # ---- the proven start/finish sequence (verbatim from stand_tile.py) ----
-    def preamble(self, title, total_layers, extra_stamps=()):
+    def preamble(self, title, total_layers, extra_stamps=(), corner=False):
         """Header stamps + heat + PROBE-HOT-THEN-HOME + press bias + prime + break-off + BODY_START.
 
         `title` MUST be free of the word 'bead'; this method appends 'bead {w}x{h}' which the
-        overhang and fill-ratio checks parse for the nominal bead width."""
+        overhang and fill-ratio checks parse for the nominal bead width.
+
+        `corner=True` stamps '; SPEED_CORNER=' so validate.py's R3c will VERIFY the corner slowdown
+        fired. Pass it only when the part actually routes rings through loop_cornered (a rectangular
+        tray/cap); a circular part (column/foot) has no sharp corner and must NOT stamp it, or R3c
+        will (correctly) fail a stamp with no matching move."""
         w = self.w
         w(f"; MATERIAL={self.material}")
         w(f"; LAYER_H={self.lh}")
@@ -89,6 +169,8 @@ class Build:
         w(f"; PRINTER={self.printer}")
         w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
         w(f"; PRINT_TEMP={self.temp}")
+        if corner:
+            w(f"; SPEED_CORNER={self.corner_speed:.4f}")
         w("; ARGV: " + " ".join(sys.argv))
         w(f"; {title} bead {self.bw:.2f}x{self.lh:g}")
         for s in extra_stamps:
@@ -174,6 +256,60 @@ class Build:
         self.emit(x0, y0, z)
         self.emit(x1, y0, z)
         self.emit(x1, y1, z)
+
+    def rect_corners(self, cx, cy, ix, iy):
+        """The four COARSE corners of a rectangle ring (closed, +x+y first so rings chain). Feed to
+        loop_cornered so the corner slowdown can see the 90deg vertices — rect_pts hides them in a
+        subdivided list where every point is collinear."""
+        x0, x1 = cx - ix, cx + ix
+        y0, y1 = cy - iy, cy + iy
+        return [(x1, y1), (x0, y1), (x0, y0), (x1, y0), (x1, y1)]
+
+    def emit_cornered(self, samples, z):
+        """Emit (x,y,slow) `samples` at body speed, dropping to self.corner_f through the slow ramps.
+
+        Mirrors the pocket regime (web.py): a bare 'G1 F' switches the regime, and the tagged moves
+        inherit it — so R4 (constant flow) skips them via the LINK tag, and R3c verifies they ran at
+        the declared SPEED_CORNER. A move runs slow iff its DESTINATION sample is in a slow zone: the
+        head decelerates as it enters the ramp before the cusp (Klipper needs ~0.24mm to drop 50->12
+        at accel 5000, and the ramp is a few mm), and the long DEPARTURE straight — whose destination
+        is the fast mid-point — stays at the north star. (Keying on 'either endpoint' instead wrongly
+        slowed the whole departure straight, because it LEAVES a slow ramp point: 50% of the tile ran
+        at corner speed. Destination-only is the correct rule.) E per mm is unchanged (metered on 3D
+        path exactly like emit()); only the feedrate falls. Returns the count of slowed moves."""
+        slow_state = False
+        slowed = 0
+        for X, Y, flag in samples:
+            want_slow = flag
+            d3 = math.hypot(math.hypot(X - self.qx, Y - self.qy), z - self.qz)
+            if d3 < 0.2:                 # decimate micro-segments (same 0.2 floor as emit())
+                continue
+            if want_slow != slow_state:
+                if want_slow:
+                    self.w(f"G1 F{self.corner_f}   ; corner slowdown — sharp turn, "
+                           f"{self.corner_speed:g} mm/s")
+                else:
+                    self.w(f"G1 F{self.f}   ; restore body speed — leaving corner")
+                slow_state = want_slow
+            self.e += d3 * self.e_mm
+            tag = " ; LINK corner slow" if want_slow else ""
+            self.w(f"G1 X{X:.3f} Y{Y:.3f} Z{z:.3f} E{self.e:.5f}{tag}")
+            self.qx, self.qy, self.qz = X, Y, z
+            if want_slow:
+                slowed += 1
+        if slow_state:
+            self.w(f"G1 F{self.f}   ; restore body speed — corner ran to loop end")
+        return slowed
+
+    def loop_cornered(self, corners, z, zone=None):
+        """Emit a closed polygon (coarse `corners`, closed) as ONE continuous stroke, slowing to
+        self.corner_f through every sharp corner and holding the north star on the straights.
+        Returns the slowed-move count (0 => no sharp corner, e.g. a smooth loop — the caller then
+        need not stamp SPEED_CORNER)."""
+        samples = corner_samples(corners, seg=1.5,
+                                 zone=self.corner_zone if zone is None else zone,
+                                 sharp_deg=self.sharp_deg, short_len=2.0 * self.bw)
+        return self.emit_cornered(samples, z)
 
     def rect_pts(self, cx, cy, ix, iy, seg=1.5):
         """Closed rectangle loop, edges subdivided to ~seg mm, starting/ending at +x,+y so loops
