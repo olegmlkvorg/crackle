@@ -56,7 +56,7 @@ def main():
     ap.add_argument("--layer-h", type=float, default=0.6)
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
-    ap.add_argument("--bed", type=float, default=0, help="bed target C; 0 = COLD (default, solar). Heat only on explicit request, e.g. 120")
+    ap.add_argument("--bed", type=float, default=60, help="bed target C; 0 = COLD (default, solar). Heat only on explicit request, e.g. 120")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 

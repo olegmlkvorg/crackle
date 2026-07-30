@@ -27,7 +27,7 @@ def main():
     ap.add_argument("--lobes", type=int, default=6, help="number of flutes around")
     ap.add_argument("--flute", type=float, default=4.0, help="flute depth mm (peak-to-valley radius swing)")
     ap.add_argument("--twist", type=float, default=180.0, help="degrees the flutes rotate over full height")
-    ap.add_argument("--bed", type=float, default=0, help="bed C; 0 = COLD (default, solar)")
+    ap.add_argument("--bed", type=float, default=60, help="bed C; 0 = COLD (default, solar)")
     ap.add_argument("--layer-h", type=float, default=0.6)
     ap.add_argument("--out", default="out")
     a = ap.parse_args()

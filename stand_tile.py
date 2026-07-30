@@ -48,10 +48,15 @@ def main():
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--out", default="out")
-    ap.add_argument("--bed", type=float, default=0,
+    ap.add_argument("--bed", type=float, default=60,
                     help="bed target C; 0 = COLD (default, solar — Oleg 2026-07-30: no bed heat unless "
                          "asked). Heat only on explicit request, e.g. --bed 120 for a thick filled tile "
                          "(big-footprint grip + less warp) when mains power is available)")
+    ap.add_argument("--overlap", type=float, default=0.85,
+                    help="fill line spacing as a FRACTION of bead width (Oleg 2026-07-30: 'put lines "
+                         "closer, extrude at max flow'). 1.0 = butt joint (0%% overlap, leaves gaps that "
+                         "don't weld); 0.85 = 15%% overlap so beads merge into a gap-free solid. Lower "
+                         "= more overlap/denser. Applies to the pressed layer 1 pitch and the fill rings.")
     # v1 FORMWORK DETAILS — where they landed, and why (spec's "still to write" list).
     #
     # --rod-channel is the ONE detail that is clean single-part geometry: a shallow perimeter
@@ -214,10 +219,11 @@ def main():
     w(f"G1 F{f}")
     qx, qy, qz = x0c, cy + hy, z1
     ix, iy = hx, hy
-    while ix > land * 0.5 and iy > land * 0.5:
+    land_step = land * a.overlap     # overlap the pressed rings so they weld gap-free (Oleg 07-30)
+    while ix > land_step * 0.5 and iy > land_step * 0.5:
         ring_slow(ix, iy, z1)
-        ix = max(0.0, ix - land)
-        iy = max(0.0, iy - land)
+        ix = max(0.0, ix - land_step)
+        iy = max(0.0, iy - land_step)
     emit(cx, cy, z1)                 # close to centre
 
     # --- FLOOR layer 2: solid, rings spiralling OUTWARD at bead pitch, ending at the outer edge.
@@ -231,7 +237,7 @@ def main():
     qz = z2
     rings = []
     ix, iy = 0.0, 0.0
-    step = bw
+    step = bw * a.overlap            # lines CLOSER than a bead (Oleg 07-30): 15% overlap -> beads merge, no gap
     while ix < hx and iy < hy:
         if chan_r is None or abs(ix - chan_r) > bw * 0.5:
             rings.append((min(ix, hx), min(iy, hy)))

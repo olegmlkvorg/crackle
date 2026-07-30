@@ -28,7 +28,7 @@ def main():
     ap.add_argument("--height", type=float, default=35.0)
     ap.add_argument("--dia", type=float, default=26.0, help="mean sample diameter")
     ap.add_argument("--gap", type=float, default=18.0, help="clear gap between samples")
-    ap.add_argument("--bed", type=float, default=0, help="bed C; 0 = COLD (default, solar)")
+    ap.add_argument("--bed", type=float, default=60, help="bed C; 0 = COLD (default, solar)")
     ap.add_argument("--layer-h", type=float, default=0.6)
     ap.add_argument("--out", default="out")
     a = ap.parse_args()

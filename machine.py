@@ -679,7 +679,7 @@ def aux_fans(printer, frac):
 # print temp to 80 eveywhere." Supersedes the 120-max doctrine (07-26 "PLA maxed to the plate
 # ceiling") after a night of first-layer trouble: at 120 a single-layer floor sits above Tg
 # indefinitely and never sets. The full-target wait rule (bed_start = bed-5) still applies.
-BED_TEMP = {"pla": 80, "pla-matte": 80, "petg": 80, "tpu": 45, "abs": 100}
+BED_TEMP = {"pla": 60, "pla-matte": 60, "petg": 70, "tpu": 45, "abs": 100}   # PLA 60: filament rated 50-70; 80 was above range + wasted solar (Oleg 2026-07-30)
 
 # PART-COOLING FAN CEILING, PER MATERIAL. Oleg, 2026-07-26: "fans for printing pla should be only on
 # 20% at most". Running 80% on PLA — which this project had been doing on 320mm plates — chills the
