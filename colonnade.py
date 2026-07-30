@@ -62,6 +62,15 @@ def main():
                     help="degrees the clover rotates over the height (clamped to the walk limit)")
     ap.add_argument("--ring-r", type=float, default=100.0, help="leg centres sit on this radius (stance width)")
     ap.add_argument("--legs", type=int, default=3)
+    ap.add_argument("--walls", type=int, default=1,
+                    help="concentric perimeters per leg, one bead apart. 1 = single wall (the "
+                         "current behaviour, flexes tall); 2-3 = the rigidity fix (walls bond "
+                         "LATERALLY into a box section, the multiwall_leg.py mechanism). N>1 "
+                         "defaults bead 1.2 x layer 0.4 and speed 25 for the proven multi-wall bond.")
+    ap.add_argument("--link-flow", type=float, default=0.3,
+                    help="wall-to-wall connectors run at this fraction of a bead (N>1 only). The "
+                         "connector crosses ground the two touching walls already cover, so a full "
+                         "bead there doubles the height and ploughs next layer (solid.py, 0.3).")
     ap.add_argument("--bands", type=int, default=3, help="number of cross-brace height bands")
     ap.add_argument("--band-h", type=float, default=40.0, help="height mm each brace band spans")
     ap.add_argument("--kpv", type=int, default=6, help="laps per leg per rotation visit (cooling revisit)")
@@ -69,7 +78,9 @@ def main():
                     help="1 = single strand, 2 = doubled out-and-back (rides the first pass)")
     ap.add_argument("--bed", type=float, default=60,
                     help="bed C, default 60 (PLA rated 50-70; 0 = cold, no M190 wait)")
-    ap.add_argument("--layer-h", type=float, default=0.6)
+    ap.add_argument("--layer-h", type=float, default=None,
+                    help="layer height mm (default 0.6 single-wall; 0.4 for --walls>1, the accurate "
+                         "multi-wall combo). Explicit value overrides either default.")
     ap.add_argument("--bead", type=float, default=None,
                     help="bead WIDTH mm. Default 2.0 wanders on a 0.8 nozzle; set 1.2 (1.5x nozzle) + "
                          "--layer-h 0.4 for accurate lineup (Oleg 2026-07-30).")
@@ -84,10 +95,19 @@ def main():
     a = ap.parse_args()
 
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
-    lh = a.layer_h
+    NW = max(1, a.walls)                       # concentric perimeters per leg
+    lh = a.layer_h if a.layer_h is not None else (0.4 if NW > 1 else 0.6)
     if a.bead:
         bw = a.bead
         speed = a.speed if a.speed else machine.DEFAULT_SPEED
+        flow = bw * lh * speed
+    elif NW > 1:
+        # MULTI-WALL (multiwall_leg.py mechanism): the accurate-lineup bead 1.2 (1.5x the 0.8
+        # nozzle) IS the wall-to-wall spacing, so adjacent walls touch and fuse. Slow 25mm/s: a
+        # bonded box section carries heat and does not flex, so it bonds fine where single-wall
+        # wanted 12.5. Both overridable via --bead / --speed / --layer-h.
+        bw = 1.2
+        speed = a.speed if a.speed else 25.0
         flow = bw * lh * speed
     else:
         flow = machine.flow_cap(a.material, a.printer)
@@ -154,6 +174,12 @@ def main():
         """Twisted clover radius at azimuth theta and absolute height z (from the plate)."""
         return Rm + a.flute * 0.5 * math.cos(a.lobes * (theta - twist_rate * (z - machine.PRESS_HARD)))
 
+    def radius_w(wall, theta, z):
+        """Radius of concentric wall `wall` (0 = outermost). Every wall shares the identical cos
+        term, so wall k and k+1 sit EXACTLY one bead (bw) apart at every azimuth — nested clovers
+        that touch and fuse. radius_w(0, ...) == radius(...), so wall 0 is the single-wall clover."""
+        return (Rm - wall * bw) + a.flute * 0.5 * math.cos(a.lobes * (theta - twist_rate * (z - machine.PRESS_HARD)))
+
     def rim(k, toward_xy, z):
         """Point on leg k's wall on the side facing toward_xy, at height z. Returns (x,y,z)."""
         tx, ty = centres[k]
@@ -185,6 +211,20 @@ def main():
         qx, qy, qz = X, Y, Z
         zmax_seen = max(zmax_seen, Z)
 
+    def link_e(X, Y, Z):
+        """A THIN radial connector (N>1 only): the wall-to-wall bond stitch at the seam. Metered to
+        --link-flow of a bead and tagged '; LINK thin' (matching solid.py) so it never builds a seam
+        ridge and validate's R4 exempts it. It is an extrusion, not a travel — the leg stays one
+        continuous zero-travel stroke within a visit."""
+        nonlocal e, qx, qy, qz, zmax_seen
+        d3 = math.dist((qx, qy, qz), (X, Y, Z))
+        if d3 < 1e-6:
+            return
+        e += d3 * e_per_mm * a.link_flow
+        w(f"G1 X{X:.3f} Y{Y:.3f} Z{Z:.3f} E{e:.5f}   ; LINK thin (wall-to-wall bond)")
+        qx, qy, qz = X, Y, Z
+        zmax_seen = max(zmax_seen, Z)
+
     def hop_to(X, Y, Z):
         """Lifted, flow-suspended travel: up clear of everything, across, down. Tagged HOP so R5
         excludes it and the plough check sees the XY move happen up high."""
@@ -200,6 +240,8 @@ def main():
     def foot(k, first=False):
         """Layer 1: one flat pressed clover lap at PRESS_HARD (wide bead welds to the plate)."""
         nonlocal qx, qy, qz
+        if NW > 1:
+            return foot_mw(k, first)
         tx, ty = centres[k]
         Z1 = machine.PRESS_HARD
         p0 = seam_pt(k, Z1)
@@ -219,6 +261,8 @@ def main():
     def climb(k, target):
         """Continue leg k's clover helix from done[k] up to lap index `target`, in one stroke."""
         nonlocal qx, qy, qz
+        if NW > 1:
+            return climb_mw(k, target)
         if done[k] >= target:
             return
         m = target - done[k]
@@ -235,6 +279,77 @@ def main():
             move_e(tx + r * math.cos(th), ty + r * math.sin(th), zz)
         done[k] = target
         z[k] = z_start + m * lh
+
+    # ---- MULTI-WALL (N>1): the multiwall_leg.py rigidity fix ported to a leg-on-a-ring. Each leg
+    # becomes N concentric twisted-clover perimeters one bead apart, joined at the seam by thin
+    # radial LINK stitches, with the wall order ALTERNATING outer->inner / inner->outer each layer
+    # so consecutive layers start on the wall the last one ended on — one continuous zero-travel
+    # stroke within a visit, a bare Z-step in place at the seam. Concentric walls cannot be a vase
+    # helix, so a multi-wall leg is laid flat layer-by-layer (unlike the single-wall helix above).
+    def walls_order(La):
+        """Wall visiting order for absolute layer index La. Even: outer->inner (0..N-1). Odd:
+        inner->outer (N-1..0). So layer La ends on the wall layer La+1 begins on -> continuous."""
+        return list(range(NW - 1, -1, -1)) if (La % 2 == 1) else list(range(0, NW))
+
+    def draw_walls(k, Z, walls):
+        """Draw the N concentric clover loops of one layer at height Z, in the given wall order,
+        with the head already parked at walls[0]'s seam. First wall = full-flow seam reseat;
+        each later wall = a thin radial LINK to its seam, then its closed loop."""
+        tx, ty = centres[k]
+        for wi, wall in enumerate(walls):
+            rw = radius_w(wall, seam[k], Z)
+            sx, sy = tx + rw * math.cos(seam[k]), ty + rw * math.sin(seam[k])
+            if wi == 0:
+                move_e(sx, sy, Z)          # continue/reseat on the wall the last layer ended on
+            else:
+                link_e(sx, sy, Z)          # thin radial stitch across to the next wall's seam
+            for i in range(1, PPL + 1):
+                th = seam[k] + 2 * math.pi * i / PPL
+                r = radius_w(wall, th, Z)
+                move_e(tx + r * math.cos(th), ty + r * math.sin(th), Z)
+
+    def foot_mw(k, first):
+        """Layer 1, multi-wall: N pressed concentric clover loops at PRESS_HARD (La=0, outer->in)."""
+        nonlocal qx, qy, qz
+        tx, ty = centres[k]
+        Z1 = machine.PRESS_HARD
+        walls = walls_order(0)
+        r0 = radius_w(walls[0], seam[k], Z1)
+        p0 = (tx + r0 * math.cos(seam[k]), ty + r0 * math.sin(seam[k]), Z1)
+        if first:
+            w(f"G0 F9000 X{p0[0]:.3f} Y{p0[1]:.3f} ; PRIME-TRAVEL")
+            w(f"G1 F1800 Z{Z1:.3f}")
+            w(f"G1 F{f}")
+            qx, qy, qz = p0
+        else:
+            hop_to(*p0)
+            w(f"G1 F{f}")
+        draw_walls(k, Z1, walls)
+
+    def climb_mw(k, target):
+        """Continue leg k up to climbing-layer index `target`, N walls per layer. One HOP to the
+        seam at the start of a visit; a bare Z-step in place between layers within the visit."""
+        nonlocal qx, qy, qz
+        if done[k] >= target:
+            return
+        tx, ty = centres[k]
+        start = done[k] + 1
+        for lap in range(start, target + 1):
+            Z = machine.PRESS_HARD + lap * lh              # flat layer (twist phase steps per layer)
+            walls = walls_order(lap)
+            r0 = radius_w(walls[0], seam[k], Z)
+            p0 = (tx + r0 * math.cos(seam[k]), ty + r0 * math.sin(seam[k]), Z)
+            if lap == start:
+                hop_to(*p0)                                # visit start: to this leg's seam
+                w(f"G1 Z{Z:.3f}")                          # declare the layer Z in the R2 ladder:
+                qz = Z                                     # the hop reached it by a G0 the ladder
+                w(f"G1 F{f}")                              # scanner can't see (else a phantom 2x step)
+            else:
+                w(f"G1 Z{Z:.3f}")                          # seam Z-step in place (R2 ladder)
+                qz = Z
+            draw_walls(k, Z, walls)
+        done[k] = target
+        z[k] = machine.PRESS_HARD + target * lh
 
     def rotate(group, target):
         """Rise every leg in `group` together to lap index `target`, kpv laps per visit."""
@@ -286,7 +401,12 @@ def main():
     w(f"; MATERIAL={a.material}")
     w(f"; LAYER_H={lh:g}")
     w(f"; FLOW={bw*lh*a.squish*speed:.4f}")
-    if a.bead or a.speed or a.squish != 1.0:
+    if NW > 1:
+        w(f"; FLOW_DERATE=multiwall {NW} concentric walls one bead ({bw:g}mm) apart, bead {bw:g}x{lh:g} "
+          f"at {speed:g} mm/s; {bw*lh*a.squish*speed:g} mm3/s is a DELIBERATE accuracy+bonding choice, "
+          f"not a flow ceiling. The walls bond LATERALLY into a rigid box section — the rigidity a "
+          f"single {bw:g}mm wall lacks — so the layers fuse without over-fed squish (multiwall_leg.py).")
+    elif a.bead or a.speed or a.squish != 1.0:
         w(f"; FLOW_DERATE=accurate bead {bw:g}x{lh:g} at {speed:g} mm/s (Oleg 2026-07-30: single-wall "
           f"legs bond THERMALLY at slow speed, not by squish which bends the wall). "
           f"{bw*lh*a.squish*speed:g} mm3/s is a DELIBERATE bonding choice, not a flow ceiling.")
@@ -296,6 +416,9 @@ def main():
     w(f"; ARCH_LIFT={lh:.3f}")     # Z varies within a lap (helix) and within a brace by design
     w(f"; legs x{N} dia{a.dia:g} lobes{a.lobes} flute{a.flute:g} on r{R:g}, h{a.height:g}, "
       f"bead {bw:.2f}x{lh:g}, twist {math.degrees(twist_rad):.0f}deg, {len(bands)} brace bands")
+    if NW > 1:
+        w(f"; walls {NW} concentric perimeters/leg one bead ({bw:g}mm) apart, alternating in/out per "
+          f"layer, thin radial LINK stitches at the seam — lateral fuse into a rigid box section")
     w("; ARGV: " + " ".join(sys.argv))
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {n_climb + 1}"); w("; HEADER_BLOCK_END")
     w("M82")
@@ -340,13 +463,17 @@ def main():
     g = "\n".join(L) + "\n"
 
     os.makedirs(a.out, exist_ok=True)
-    fn = os.path.join(a.out, f"colonnade_{a.printer}_x{N}_d{a.dia:g}_h{a.height:g}_T{temp:g}.gcode")
+    _wtag = f"_w{NW}" if NW > 1 else ""      # single-wall filename unchanged; multi-wall distinct
+    fn = os.path.join(a.out, f"colonnade_{a.printer}_x{N}{_wtag}_d{a.dia:g}_h{a.height:g}_T{temp:g}.gcode")
     open(fn, "w").write(g)
 
     grams = e * A_FIL * 1.24 / 1000.0
     mins = (e / e_per_mm) / speed / 60.0
     print(f"  {N} clover legs dia{a.dia:g} (lobes {a.lobes}, flute {a.flute:g}) on ring r{R:g}, "
           f"h{a.height:g}, {n_climb} climbing laps (+ pressed foot)")
+    if NW > 1:
+        print(f"  MULTI-WALL: {NW} concentric perimeters/leg, one bead ({bw:g}mm) apart, laid flat "
+              f"layer-by-layer (alternating in/out), thin radial LINK stitches — the rigidity fix")
     print(f"  footprint {fp_x:.0f}x{fp_y:.0f}mm on the {bx:g}x{by:g} bed "
           f"(X {lo_x:.0f}..{hi_x:.0f}, Y {lo_y:.0f}..{hi_y:.0f}); maxZ {top_z:.0f}mm")
     if twist_clamped:
