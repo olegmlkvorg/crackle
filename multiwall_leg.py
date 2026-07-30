@@ -69,6 +69,13 @@ def main():
                          "crosses ground the two touching walls already cover, so a full bead there "
                          "doubles the height and ploughs next layer (solid.py, 0.3). Thin keeps the "
                          "path continuous without building a seam ridge.")
+    ap.add_argument("--seam-turns", type=float, default=2.0,
+                    help="turns the SEAM azimuth rotates over the full height. A fixed seam (0) stacks "
+                         "the loop-closure + reseat + wall-links at one azimuth into a visible scar "
+                         "COLUMN (Oleg 2026-07-30, measured: every layer started at theta=0). Rotating "
+                         "the seam spreads that scar into a gentle spiral so no misaligned column builds. "
+                         "The inter-layer reseat stays on the same wall (alternation), so it is just a "
+                         "short azimuthal arc; on a full-height leg the per-layer arc is < a bead.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
@@ -107,6 +114,8 @@ def main():
     w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     w(f"; walls {N} dia {a.dia:g} lobes {a.lobes} flute {a.flute:g} twist {a.twist:g}deg "
       f"bead {bw:g}x{lh:g} — concentric clover perimeters one bead apart, alternating in/out per layer")
+    w(f"; seam spirals {a.seam_turns:g} turn(s) over the height (rotating seam azimuth) so the "
+      f"loop-closure + wall-links do not stack into a fixed scar column")
     w(f"; peak twist shift {peak_shift:.3f}mm/layer (must be < one bead {bw:g} to bond layer-to-layer)")
     w(f"; SPEED={speed:.4f}")
     w(f"; FLOW={flow:.4f}")
@@ -144,11 +153,12 @@ def main():
     E = 0.0
     q = [None, None, None]     # current head position (x, y, z)
 
-    def loop_points(wall, zc):
-        """Closed clover loop for one wall at structural height zc; starts and ends at the seam (theta=0)."""
+    def loop_points(wall, zc, theta0=0.0):
+        """Closed clover loop for one wall at structural height zc; starts and ends at the seam
+        azimuth theta0 (rotates per layer so the seam spirals instead of stacking a scar column)."""
         pts = []
         for i in range(PPL + 1):
-            th = 2 * math.pi * i / PPL
+            th = theta0 + 2 * math.pi * i / PPL
             r = radius(wall, th, zc)
             pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
         return pts
@@ -175,19 +185,21 @@ def main():
     w(f"G1 F{f}")
     q[0], q[1], q[2] = start[0], start[1], z0
 
+    seam_step = a.seam_turns * 2 * math.pi / max(1, layers)   # seam azimuth advance per layer
     for Lidx in range(layers):
         zc = Lidx * lh                                 # structural height (for twist phase)
         z = machine.PRESS_HARD + Lidx * lh             # absolute Z
+        theta0 = seam_step * Lidx                       # this layer's seam azimuth (spirals up)
         outward = (Lidx % 2 == 1)                      # even: outer->inner, odd: inner->outer
         order = range(N - 1, -1, -1) if outward else range(0, N)
         if Lidx > 0:
-            # step to this layer's Z, lifting in place at the seam where the last layer ended.
-            # Bare Z (F persists) so R2 reads the ladder and no travel is introduced.
+            # step to this layer's Z, lifting in place where the last layer ended. Bare Z (F
+            # persists) so R2 reads the ladder; the first extrude then walks the seam arc to theta0.
             w(f"G1 Z{z:.3f}")
             q[2] = z
         first = True
         for wall in order:
-            pts = loop_points(wall, zc)
+            pts = loop_points(wall, zc, theta0)
             # first wall: the seam-reseat continues the same wall the previous layer ended on
             # (full flow). Subsequent walls: a THIN radial LINK across ground the touching walls
             # already cover — full flow there would build a seam ridge and plough next layer.
