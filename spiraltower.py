@@ -34,6 +34,12 @@ def main():
                     help="override bead WIDTH mm. Default derives from max flow (2.0 = 2.5x a 0.8 nozzle, "
                          "wide -> lines wander). Set 1.2 (1.5x nozzle) + --layer-h 0.4 for ACCURATE lineup "
                          "(Oleg 2026-07-30, after wavy walls). Lower flow, more layers, cleaner stack.")
+    ap.add_argument("--squish", type=float, default=1.0,
+                    help="extrusion multiplier for SINGLE-WALL bonding (Oleg 2026-07-30: only 5 layers "
+                         "bonded). The exact e=bead_w*layer_h model gives ZERO squish (bead height == layer "
+                         "height), so a single wall's layers only touch, never fuse. 1.2 over-feeds 20%% so "
+                         "each bead presses into the one below. A single wall has NO lateral neighbour to "
+                         "bond to, so squish is the only bond it gets.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
@@ -50,7 +56,10 @@ def main():
     temp = 230
     f = round(speed * 60)
     A_FIL = math.pi * (1.75 / 2) ** 2
-    e_mm = bw * lh / A_FIL
+    # SINGLE-WALL SQUISH: over-feed so each bead presses into the layer below and FUSES. The bare
+    # bw*lh volume gives zero squish (bead height == layer height) -> a single wall's layers only
+    # touch. --squish 1.2 = +20% material -> the bead is fatter than the gap and welds down.
+    e_mm = bw * lh * a.squish / A_FIL
     bed = min(a.bed, machine.BED_MAX.get(a.printer, machine.BED_MAX_DEFAULT)) if a.bed else 0
 
     cx, cy = 175.0, 175.0
@@ -71,12 +80,14 @@ def main():
     w(f"; LAYER_H={lh:g}")
     w("; PRESSED_LAYER1=1                    ; first lap pressed low to key into the cold plate")
     w(f"; height {a.height:g} dia {a.dia:g} lobes {a.lobes} flute {a.flute:g} twist {a.twist:g}deg — fill sand+gypsum, bamboo core")
+    _flow_act = bw * lh * a.squish * speed        # actual volumetric flow, squish included
     w(f"; SPEED={speed:.4f}")
-    w(f"; FLOW={bw*lh*speed:.4f}")
-    if a.bead:
-        w(f"; FLOW_DERATE=accurate-lineup bead {bw:g}x{lh:g} on the 0.8 nozzle (Oleg 2026-07-30, "
-          f"after wavy walls); {bw*lh*speed:g} mm3/s is a DELIBERATE accuracy choice at the 50 north "
-          f"star, not a flow ceiling. Narrow+short so the 0.8 nozzle places lines it can actually stack.")
+    w(f"; FLOW={_flow_act:.4f}")
+    if a.bead or a.squish != 1.0:
+        w(f"; FLOW_DERATE=accurate-lineup bead {bw:g}x{lh:g} x{a.squish:g} squish on the 0.8 nozzle "
+          f"(Oleg 2026-07-30: wavy walls + only 5 layers bonded); {_flow_act:g} mm3/s is a DELIBERATE "
+          f"accuracy+bonding choice at the 50 north star, not a flow ceiling. Narrow bead the nozzle "
+          f"places accurately, over-fed {int((a.squish-1)*100)}%% so single-wall layers squish and fuse.")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {laps}"); w("; HEADER_BLOCK_END")
     w("M82")
     if bed > 0:
