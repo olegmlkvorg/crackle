@@ -69,6 +69,12 @@ def main():
                          "crosses ground the two touching walls already cover, so a full bead there "
                          "doubles the height and ploughs next layer (solid.py, 0.3). Thin keeps the "
                          "path continuous without building a seam ridge.")
+    ap.add_argument("--z-gain", type=float, default=1.0,
+                    help="Z-step multiplier: physical Z rises lh*z_gain per layer while the bead still "
+                         "lays lh-worth of material, so the nozzle lifts FASTER than the bead builds and "
+                         "does not plough the last layer and push beads OUTWARD (Oleg 2026-07-30: 'add "
+                         "some z layer offset, move z a bit faster otherwise we get outside pushed lines'). "
+                         "Too high = gaps / weak layer bond. Start ~1.1 and tune by eye.")
     ap.add_argument("--seam-turns", type=float, default=2.0,
                     help="turns the SEAM azimuth rotates over the full height. A fixed seam (0) stacks "
                          "the loop-closure + reseat + wall-links at one azimuth into a visible scar "
@@ -110,7 +116,11 @@ def main():
     w("; MULTIWALL LEG — twisted fluted clover, N concentric perimeters bonded laterally for rigidity")
     w(f"; PRINTER={a.printer}")
     w(f"; MATERIAL={a.material}")
-    w(f"; LAYER_H={lh:g}")
+    w(f"; LAYER_H={lh * a.z_gain:g}")                 # physical Z step (R2 ladder)
+    if a.z_gain != 1.0:
+        w(f"; Z_GAIN={a.z_gain:g} — Z rises {lh * a.z_gain:g}/layer while the bead lays {lh:g}-worth of "
+          f"material (deliberate nozzle clearance so it does not plough and push beads outward). The "
+          f"bead cross-section stays {a.bead:g}x{lh:g}; the extra Z is a small underfill, not a flow change.")
     w(f"; PRESSED_LAYER1={machine.PRESS_HARD:g}")
     w(f"; walls {N} dia {a.dia:g} lobes {a.lobes} flute {a.flute:g} twist {a.twist:g}deg "
       f"bead {bw:g}x{lh:g} — concentric clover perimeters one bead apart, alternating in/out per layer")
@@ -186,9 +196,10 @@ def main():
     q[0], q[1], q[2] = start[0], start[1], z0
 
     seam_step = a.seam_turns * 2 * math.pi / max(1, layers)   # seam azimuth advance per layer
+    z_step = lh * a.z_gain                             # physical Z advance/layer (>lh lifts for clearance)
     for Lidx in range(layers):
-        zc = Lidx * lh                                 # structural height (for twist phase)
-        z = machine.PRESS_HARD + Lidx * lh             # absolute Z
+        zc = Lidx * lh                                 # structural height (twist follows the DESIGN bead)
+        z = machine.PRESS_HARD + Lidx * z_step         # physical Z (z_gain lifts faster than the bead builds)
         theta0 = seam_step * Lidx                       # this layer's seam azimuth (spirals up)
         outward = (Lidx % 2 == 1)                      # even: outer->inner, odd: inner->outer
         order = range(N - 1, -1, -1) if outward else range(0, N)
