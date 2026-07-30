@@ -30,13 +30,23 @@ def main():
     ap.add_argument("--bed", type=float, default=60,
                     help="bed C, default 60 (PLA rated 50-70; cold=0 spaghettis). 0 = cold, no M190 wait.")
     ap.add_argument("--layer-h", type=float, default=0.6)
+    ap.add_argument("--bead", type=float, default=None,
+                    help="override bead WIDTH mm. Default derives from max flow (2.0 = 2.5x a 0.8 nozzle, "
+                         "wide -> lines wander). Set 1.2 (1.5x nozzle) + --layer-h 0.4 for ACCURATE lineup "
+                         "(Oleg 2026-07-30, after wavy walls). Lower flow, more layers, cleaner stack.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
-    flow = machine.flow_cap(a.material, a.printer)
     lh = a.layer_h
-    bw = machine.bead_for_flow(flow, lh)
-    speed = machine.speed_for_flow(flow, bw, lh)
+    if a.bead:
+        # ACCURATE-LINEUP geometry: set the bead width directly, hold the 50 north star, flow follows.
+        bw = a.bead
+        speed = machine.DEFAULT_SPEED
+        flow = bw * lh * speed
+    else:
+        flow = machine.flow_cap(a.material, a.printer)
+        bw = machine.bead_for_flow(flow, lh)
+        speed = machine.speed_for_flow(flow, bw, lh)
     temp = 230
     f = round(speed * 60)
     A_FIL = math.pi * (1.75 / 2) ** 2
@@ -63,6 +73,10 @@ def main():
     w(f"; height {a.height:g} dia {a.dia:g} lobes {a.lobes} flute {a.flute:g} twist {a.twist:g}deg — fill sand+gypsum, bamboo core")
     w(f"; SPEED={speed:.4f}")
     w(f"; FLOW={bw*lh*speed:.4f}")
+    if a.bead:
+        w(f"; FLOW_DERATE=accurate-lineup bead {bw:g}x{lh:g} on the 0.8 nozzle (Oleg 2026-07-30, "
+          f"after wavy walls); {bw*lh*speed:g} mm3/s is a DELIBERATE accuracy choice at the 50 north "
+          f"star, not a flow ceiling. Narrow+short so the 0.8 nozzle places lines it can actually stack.")
     w("; HEADER_BLOCK_START"); w(f"; total layer number: {laps}"); w("; HEADER_BLOCK_END")
     w("M82")
     if bed > 0:
