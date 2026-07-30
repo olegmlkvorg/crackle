@@ -125,8 +125,10 @@ def main():
     fn = os.path.join(a.out, f"spiraltower_{a.printer}_h{a.height:g}_d{a.dia:g}_L{a.lobes}_T{temp:g}.gcode")
     open(fn, "w").write("\n".join(L) + "\n")
     print(fn)
+    # print length / speed = motion time (matches validate's estimate); +heat/accel in reality
+    _path_mm = laps * PPL * (2 * math.pi * Rm)  # rough: laps x points x mean circumference/points
     print(f"  twisted fluted column h{a.height:g} dia {a.dia:g}, {a.lobes} flutes, {a.twist:g}deg twist, "
-          f"{laps} laps, cold bed, ~{laps*PPL*bw*lh/ (speed*60) /60:.0f}? min")
+          f"{laps} laps, cold bed (run validate.py for the true print time)")
 
 
 if __name__ == "__main__":
