@@ -182,10 +182,17 @@ class Build:
         w(f"; total layer number: {total_layers}")
         w("; HEADER_BLOCK_END")
         w("M82")
-        w(f"M140 S{self.bed:.0f}")
-        w(f"M104 S{self.temp}")
-        _wait = self.bed if self.printer == "k2plus" else machine.bed_start(self.material, self.bed)
-        w(f"M190 S{_wait:.0f}")
+        # BED HEAT OFF BY DEFAULT (Oleg 2026-07-30, solar): only heat on an explicit --bed. A COLD bed
+        # (bed<=0) must emit M140 S0 and NEVER an M190 wait (the bed will never reach a positive target
+        # so a wait-for-bed is an infinite stall). Adhesion then rests on the press-weld, not the plate.
+        if self.bed and self.bed > 0:
+            w(f"M140 S{self.bed:.0f}")
+            w(f"M104 S{self.temp}")
+            _wait = self.bed if self.printer == "k2plus" else machine.bed_start(self.material, self.bed)
+            w(f"M190 S{_wait:.0f}")
+        else:
+            w("M140 S0                             ; COLD BED — solar run, no bed heat, no M190 wait")
+            w(f"M104 S{self.temp}")
         w(f"M109 S{self.temp}")                 # NOZZLE HOT BEFORE G28 — probe at print-temp length (R7)
         w("G28")
         w("SET_GCODE_OFFSET Z=-0.05             ; first-layer press insurance (K2 datum ~0.1 high)")

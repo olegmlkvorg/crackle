@@ -48,9 +48,10 @@ def main():
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--out", default="out")
-    ap.add_argument("--bed", type=float, default=None,
-                    help="override bed target C (default=material/machine; e.g. 120 for a thick "
-                         "filled tile: big-footprint grip + less warp, unlike the thin drum floor)")
+    ap.add_argument("--bed", type=float, default=0,
+                    help="bed target C; 0 = COLD (default, solar — Oleg 2026-07-30: no bed heat unless "
+                         "asked). Heat only on explicit request, e.g. --bed 120 for a thick filled tile "
+                         "(big-footprint grip + less warp) when mains power is available)")
     # v1 FORMWORK DETAILS — where they landed, and why (spec's "still to write" list).
     #
     # --rod-channel is the ONE detail that is clean single-part geometry: a shallow perimeter
