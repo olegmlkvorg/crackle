@@ -50,6 +50,30 @@ def main():
     ap.add_argument("--bed", type=float, default=None,
                     help="override bed target C (default=material/machine; e.g. 120 for a thick "
                          "filled tile: big-footprint grip + less warp, unlike the thin drum floor)")
+    # v1 FORMWORK DETAILS — where they landed, and why (spec's "still to write" list).
+    #
+    # --rod-channel is the ONE detail that is clean single-part geometry: a shallow perimeter
+    # CHANNEL in the floor, one bead inboard of the haunch, that locates the bottom bamboo RING ROD
+    # (rule 2) laid along the floor-wall corner. It is the floor fill skipping one ring — still one
+    # continuous stroke — so it validates. Default OFF; the proven tile output is unchanged.
+    #
+    # The corner-ring-rod SEAT itself needs NO new geometry: the fused haunch already forms the
+    # concave floor-wall corner the ring rod beds into. The channel just gives it a defined inboard lip.
+    #
+    # The other three (shiplap tile edges, LOW interior seam walls, raised rebar-grid nibs) are NOT
+    # emitted, deliberately. Each needs a feature that either descends back onto the floor after the
+    # wall is up, or gives one edge a different height than the spiral is climbing — and BOTH break a
+    # hard validate.py machine-safety rule (Z-plough / floating-line on a non-sequential part; a
+    # capped edge that the climbing spiral re-traces and grinds). Declaring the file sequential does
+    # not rescue them: those features STACK on the tray, and the sequential overlap guard (correctly)
+    # refuses one part deposited within 1.5mm of another. So they are handled at ASSEMBLY — which is
+    # exactly what the spec says (rule 3 + the note "laid at assembly (rods + pour), not printed into
+    # a single tile"): tiles BUTT, every seam is crossed by rebar, and one continuous pour + the
+    # bamboo ties merge them into a monolith. The PLA is skin; the set gypsum + bamboo is structure.
+    ap.add_argument("--rod-channel", action="store_true",
+                    help="cut a shallow perimeter channel one bead inboard of the haunch to locate "
+                         "the bottom bamboo ring rod (spec rule 2). Single-stroke, validates.")
+    ap.add_argument("--rod-dia", type=float, default=6.35, help="bamboo rod diameter (1/4in)")
     a = ap.parse_args()
 
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
@@ -152,7 +176,12 @@ def main():
         iy = max(0.0, iy - land)
     emit(cx, cy, z1)                 # close to centre
 
-    # --- FLOOR layer 2: solid, rings spiralling OUTWARD at bead pitch, ending at the outer edge ---
+    # --- FLOOR layer 2: solid, rings spiralling OUTWARD at bead pitch, ending at the outer edge.
+    #     With --rod-channel, ONE ring is skipped a bamboo-diameter inboard of the haunch, leaving a
+    #     shallow perimeter channel that locates the bottom ring rod in the floor-wall corner (rule
+    #     2). Skipping a ring is still one continuous stroke (the spiral steps 2 beads there). ---
+    nbase = max(1, a.wall_beads)
+    chan_r = hx - (nbase * bw + a.rod_dia) if a.rod_channel else None
     w(f"G1 F1800 Z{z2:.3f}")
     w(f"G1 F{f}")
     qz = z2
@@ -160,7 +189,8 @@ def main():
     ix, iy = 0.0, 0.0
     step = bw
     while ix < hx and iy < hy:
-        rings.append((min(ix, hx), min(iy, hy)))
+        if chan_r is None or abs(ix - chan_r) > bw * 0.5:
+            rings.append((min(ix, hx), min(iy, hy)))
         ix += step; iy += step
     rings.append((hx, hy))
     emit(cx, cy, z2)
@@ -176,7 +206,6 @@ def main():
     #     interlock + bamboo rebar through this corner are the real load path — see the guide; they
     #     are laid at assembly, not printed into a single tile.) ---
     w("; bead 2.00x wall")            # so the overhang check sizes its support cell sensibly
-    nbase = max(1, a.wall_beads)
     for j in range(1, jlayers + 1):
         zf = z2 + j * lh
         frac = (j * lh) / fillet if fillet > 1e-9 else 1.0
@@ -185,9 +214,10 @@ def main():
         for b in range(k - 1, -1, -1):
             ring(hx - b * bw, hy - b * bw, zf)
 
+    zstart = z2 + fillet
+
     # --- WALL: single-bead rectangle spiral rising from the top of the haunch to the fill depth ---
     perim = 2.0 * (2 * hx + 2 * hy)
-    zstart = z2 + fillet
     t = 0.0
     Z = zstart
     top = z2 + a.depth
