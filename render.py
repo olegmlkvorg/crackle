@@ -52,7 +52,13 @@ def read_path(path):
     return segs
 
 
-def svg(segs, out, w=1500, h=820, zmax_cut=60.0, layers=0, min_seg=0.0):
+def svg(segs, out, w=1500, h=820, zmax_cut=None, layers=0, min_seg=0.0):
+    # AUTO height cut. A fixed 60mm silently truncated tall parts — the 180mm spiral tower rendered as
+    # its bottom third and nobody could see the form. Cut just above the tallest EXTRUDING move (the
+    # part), which drops only the non-extruding park lift, at any part height.
+    if zmax_cut is None:
+        _ext_tops = [max(s[2], s[5]) for s in segs if s[6]]
+        zmax_cut = (max(_ext_tops) + 1.0) if _ext_tops else 60.0
     body = [s for s in segs if s[2] < zmax_cut and s[5] < zmax_cut]   # ignore the park lift
 
     # A DIAGRAM IS NOT A DUMP. A 15-part plate is 392k segments; drawn in full that is a 71MB SVG
