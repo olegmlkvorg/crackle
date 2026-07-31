@@ -75,6 +75,11 @@ def main():
                          "does not plough the last layer and push beads OUTWARD (Oleg 2026-07-30: 'add "
                          "some z layer offset, move z a bit faster otherwise we get outside pushed lines'). "
                          "Too high = gaps / weak layer bond. Start ~1.1 and tune by eye.")
+    ap.add_argument("--base-solid-layers", type=int, default=3,
+                    help="first N layers print as CLOSED rings (no seam-gap) so the base keys to the bed "
+                         "for adhesion. The seam-gap that prevents the outskirt pile is a BODY feature; "
+                         "opening the pressed first layers would weaken the foundation. The base double-bead "
+                         "is pressed flat at 0.1 so it does not plough.")
     ap.add_argument("--seam-gap", type=float, default=1.4,
                     help="mm the ring stops SHORT of closing, so its last bead does not merge with its "
                          "first into a doubled pile that ploughs outward (Oleg 2026-07-31: outskirt lines "
@@ -169,21 +174,28 @@ def main():
     E = 0.0
     q = [None, None, None]     # current head position (x, y, z)
 
-    def loop_points(wall, zc, theta0=0.0):
+    def loop_points(wall, zc, theta0=0.0, solid=False):
         """Clover loop for one wall at structural height zc, starting at the seam azimuth theta0.
-        Stops ONE STEP SHORT of closing (range PPL, not PPL+1): a fully closed ring lays its last
-        bead exactly on its first (measured 0.000mm apart) = a DOUBLED bead at the seam that ploughs
-        outward (Oleg 2026-07-31: 'couple outskirt lines, exactly at the seam'). Leaving the last
-        step open, with the seam spiralling, turns the doubled zit into a faint spiral notch that the
-        next wall-link / layer-reseat bridges."""
-        r_seam = radius(wall, theta0, zc)                 # radius where this ring starts/would close
-        gap_ang = a.seam_gap / max(r_seam, 1.0)           # angular gap that gives seam_gap mm of arc
-        span = 2 * math.pi - gap_ang                       # stop this far short of a full turn
+        Body layers (solid=False) stop SHORT of closing so the last bead never doubles onto the first
+        (a DOUBLED bead at the seam ploughs outward; Oleg 2026-07-31: 'outskirt lines at the seam');
+        the seam-gap spirals into a faint notch bridged by the wall-links. Base layers (solid=True)
+        print a CLOSED ring so the foundation keys to the bed."""
         pts = []
-        for i in range(PPL):
-            th = theta0 + span * i / (PPL - 1)             # theta0 .. theta0+span (leaves gap_ang open)
-            r = radius(wall, th, zc)
-            pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
+        if solid:
+            # CLOSED ring (base layers): full turn for bed adhesion; the double-bead at the seam is
+            # pressed flat at the first-layer height so it does not plough.
+            for i in range(PPL + 1):
+                th = theta0 + 2 * math.pi * i / PPL
+                r = radius(wall, th, zc)
+                pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
+        else:
+            r_seam = radius(wall, theta0, zc)             # radius where this ring starts/would close
+            gap_ang = a.seam_gap / max(r_seam, 1.0)       # angular gap that gives seam_gap mm of arc
+            span = 2 * math.pi - gap_ang                   # stop this far short of a full turn
+            for i in range(PPL):
+                th = theta0 + span * i / (PPL - 1)         # theta0 .. theta0+span (leaves gap_ang open)
+                r = radius(wall, th, zc)
+                pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
         return pts
 
     def ext_to(x, y, z, tag="", flow_mul=1.0):
@@ -221,9 +233,10 @@ def main():
             # persists) so R2 reads the ladder; the first extrude then walks the seam arc to theta0.
             w(f"G1 Z{z:.3f}")
             q[2] = z
+        solid = Lidx < a.base_solid_layers                 # closed rings at the base for adhesion
         first = True
         for wall in order:
-            pts = loop_points(wall, zc, theta0)
+            pts = loop_points(wall, zc, theta0, solid=solid)
             # first wall: the seam-reseat continues the same wall the previous layer ended on
             # (full flow). Subsequent walls: a THIN radial LINK across ground the touching walls
             # already cover — full flow there would build a seam ridge and plough next layer.
