@@ -75,6 +75,12 @@ def main():
                          "does not plough the last layer and push beads OUTWARD (Oleg 2026-07-30: 'add "
                          "some z layer offset, move z a bit faster otherwise we get outside pushed lines'). "
                          "Too high = gaps / weak layer bond. Start ~1.1 and tune by eye.")
+    ap.add_argument("--seam-gap", type=float, default=1.4,
+                    help="mm the ring stops SHORT of closing, so its last bead does not merge with its "
+                         "first into a doubled pile that ploughs outward (Oleg 2026-07-31: outskirt lines "
+                         "at the seam). Sized per wall/layer from the actual seam radius so the arc gap is "
+                         "this many mm everywhere (>=1.2 bead width = ends clear, no merge). Spirals with "
+                         "the seam into a faint notch bridged by the wall-links.")
     ap.add_argument("--seam-turns", type=float, default=2.0,
                     help="turns the SEAM azimuth rotates over the full height. A fixed seam (0) stacks "
                          "the loop-closure + reseat + wall-links at one azimuth into a visible scar "
@@ -164,11 +170,18 @@ def main():
     q = [None, None, None]     # current head position (x, y, z)
 
     def loop_points(wall, zc, theta0=0.0):
-        """Closed clover loop for one wall at structural height zc; starts and ends at the seam
-        azimuth theta0 (rotates per layer so the seam spirals instead of stacking a scar column)."""
+        """Clover loop for one wall at structural height zc, starting at the seam azimuth theta0.
+        Stops ONE STEP SHORT of closing (range PPL, not PPL+1): a fully closed ring lays its last
+        bead exactly on its first (measured 0.000mm apart) = a DOUBLED bead at the seam that ploughs
+        outward (Oleg 2026-07-31: 'couple outskirt lines, exactly at the seam'). Leaving the last
+        step open, with the seam spiralling, turns the doubled zit into a faint spiral notch that the
+        next wall-link / layer-reseat bridges."""
+        r_seam = radius(wall, theta0, zc)                 # radius where this ring starts/would close
+        gap_ang = a.seam_gap / max(r_seam, 1.0)           # angular gap that gives seam_gap mm of arc
+        span = 2 * math.pi - gap_ang                       # stop this far short of a full turn
         pts = []
-        for i in range(PPL + 1):
-            th = theta0 + 2 * math.pi * i / PPL
+        for i in range(PPL):
+            th = theta0 + span * i / (PPL - 1)             # theta0 .. theta0+span (leaves gap_ang open)
             r = radius(wall, th, zc)
             pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
         return pts
