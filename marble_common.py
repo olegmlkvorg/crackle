@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """marble_common — the ONE connection standard + mesh/STL plumbing for the marble-run kit.
 
-Every kit part couples the same way (defined here, used everywhere):
-  TOP    = female SOCKET, surface Ø56, 15 mm deep  — slips OVER a Ø55 male below it
-  BOTTOM = male SPIGOT,  surface Ø55, 15 mm long  — slips INTO the Ø56 socket of the next part
-So the chain is: funnel spout (Ø55) -> part socket -> part spigot -> next socket, daisy-chained.
-Ø56 over Ø55 leaves 0.5 mm on the surface model; vase-printed (Creality empirics: hole ≈ model
-−0.25) that lands as a snug slip fit. Tune --socket per printer if needed.
+Every kit part couples the same way (defined here, used everywhere): a TAPERED, wall-aware NEST.
+  BOTTOM = male SPIGOT: a shallow cone, Ø52 tip -> Ø56 base, COUPLE_L long. The narrow tip drops
+           into the mouth below and self-centres.
+  TOP    = female SOCKET: a shallow cone, Ø55.2 bottom -> Ø59.2 mouth, COUPLE_L deep. It flares to
+           catch the spigot and guide it in.
+The female PATH sits LINE_W+clear (1.6 mm) OUTSIDE the male path at every mating height. That matters
+because these are single-wall VASE prints: the printed wall is LINE_W wide, centred on the surface
+path, so if the two paths are closer than one line width the male's OUTER face ends up fatter than the
+female's INNER face and it JAMS. The old straight Ø55/Ø56 fit failed exactly there (0.5 mm path gap <
+1.2 mm wall). The taper then makes it forgiving: print drift just shifts the seating depth, not whether
+it connects. Chain: funnel spout -> part socket / part spigot -> next socket, daisy-chained.
 
 Marbles are ~Ø16; free path anywhere a marble must pass is ≥ Ø22.
 
@@ -15,18 +20,35 @@ so slicer VASE mode prints them as one continuous wall. Z-monotonic by construct
 """
 import math, os, struct
 
-# ---- the kit standard (surface dimensions, mm) ----
-SOCKET_D = 56.0     # female socket diameter, top of every part
-SPIGOT_D = 55.0     # male spigot diameter, bottom of every part (matches the funnel spout)
-COUPLE_L = 15.0     # socket depth / spigot length = friction-fit overlap
-MARBLE_D = 16.0     # standard marble
-BORE_D   = 24.0     # default free marble path (marble + 8 mm of air)
+# ---- the kit connection standard: a TAPERED, wall-aware nest (surface dimensions, mm) ----
+LINE_W        = 1.2      # vase line width the fit is designed around (Oleg: "assuming 1.2mm line width")
+COUPLE_CLEAR  = 0.4      # radial slip between the two wall FACES once the wall is added
+COUPLE_L      = 16.0     # engagement length: socket depth = spigot length
+SPIGOT_BASE_D = 56.0     # male outer-path cone: WIDE at the base (top of the spigot)
+SPIGOT_TIP_D  = 52.0     #                       NARROW at the tip (bottom) -> drops into the mouth below
+_OFF = LINE_W + COUPLE_CLEAR                     # female path sits this far OUTSIDE the male path (radial)
+SOCKET_MOUTH_D = SPIGOT_BASE_D + 2 * _OFF        # female inner-path cone: WIDEST at the mouth (top rim)
+SOCKET_BOT_D   = SPIGOT_TIP_D  + 2 * _OFF        #                         NARROWEST at the socket bottom
+SPIGOT_BASE_R, SPIGOT_TIP_R   = SPIGOT_BASE_D / 2, SPIGOT_TIP_D / 2
+SOCKET_MOUTH_R, SOCKET_BOT_R  = SOCKET_MOUTH_D / 2, SOCKET_BOT_D / 2
+MARBLE_D   = 16.0   # standard marble
+BORE_D     = 24.0   # default free marble path (marble + 8 mm of air)
 CONE_SLOPE = 1.0    # max |dr/dz| for transition cones (45° from vertical)
 
 
 def cone_h(r0, r1, slope=CONE_SLOPE):
     """Height a transition cone needs to stay within the print-safe slope."""
     return abs(r1 - r0) / slope
+
+
+def spigot_profile():
+    """Male end (bottom): tapered cone, tip at z=0 -> base at z=COUPLE_L. [(z, r), ...]."""
+    return [(0.0, SPIGOT_TIP_R), (COUPLE_L, SPIGOT_BASE_R)]
+
+
+def socket_profile(z_bottom):
+    """Female end (top): tapered cone, socket-bottom at z_bottom -> mouth at z_bottom+COUPLE_L."""
+    return [(z_bottom, SOCKET_BOT_R), (z_bottom + COUPLE_L, SOCKET_MOUTH_R)]
 
 
 def rev_rings(profile, n_pts):
@@ -117,5 +139,6 @@ def report(path, v, note=""):
           f"x[{v['lo'][0]:.1f},{v['hi'][0]:.1f}] y[{v['lo'][1]:.1f},{v['hi'][1]:.1f}] "
           f"z[{v['lo'][2]:.1f},{v['hi'][2]:.1f}] mm, max wall lean {v['max_lean']:.0f}° from vertical"
           + (f" (+{v['flat']} flat floor tris on the bed)" if v.get('flat') else ""))
-    print(f"  coupling: socket Ø{SOCKET_D:g}x{COUPLE_L:g} top / spigot Ø{SPIGOT_D:g}x{COUPLE_L:g} "
-          f"bottom — VASE mode, single wall{('. ' + note) if note else ''}")
+    print(f"  coupling: TAPERED nest — spigot Ø{SPIGOT_TIP_D:g}tip->Ø{SPIGOT_BASE_D:g}base (bottom) / "
+          f"socket Ø{SOCKET_BOT_D:g}->Ø{SOCKET_MOUTH_D:g}mouth (top), {COUPLE_L:g}mm; female path +{_OFF:g}mm "
+          f"radial over male (> {LINE_W:g}mm wall, so it nests){('. ' + note) if note else ''}")

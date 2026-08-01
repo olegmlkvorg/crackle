@@ -68,17 +68,14 @@ def main():
     ap.add_argument("--pocket", type=float, default=44.0, help="pocket (outer wave) dia mm")
     ap.add_argument("--floor-frac", type=float, default=0.50,
                     help="fraction of pitch used by the up-facing floor flank")
-    ap.add_argument("--socket", type=float, default=mc.SOCKET_D, help="female socket dia (top)")
-    ap.add_argument("--spigot", type=float, default=mc.SPIGOT_D, help="male spigot dia (bottom)")
     ap.add_argument("--points", type=int, default=144, help="points per ring")
     ap.add_argument("--zstep", type=float, default=0.5, help="ring spacing mm in the wave zone")
     ap.add_argument("--out", default="spiral_chute.stl")
     a = ap.parse_args()
 
     rail_r, pocket_r = a.rail / 2, a.pocket / 2
-    rs, rg = a.socket / 2, a.spigot / 2
     assert a.rail <= mc.MARBLE_D - 1.0, "--rail must undercut the marble by >=1 mm (captivity)"
-    assert pocket_r < rg, "--pocket must stay inside the spigot dia"
+    assert pocket_r < mc.SPIGOT_TIP_R, "--pocket must stay inside the spigot tip dia"
     grade = math.degrees(math.atan(a.pitch / (2 * math.pi * 13.0)))
 
     tab = wave_table(rail_r, pocket_r, a.floor_frac, a.pitch)
@@ -90,8 +87,8 @@ def main():
         return tab[i % len(tab)] * (1 - f) + tab[(i + 1) % len(tab)] * f
 
     P, N = a.pitch, a.points
-    h_cone_lo = mc.cone_h(rg, pocket_r)
-    h_cone_hi = mc.cone_h(rs, pocket_r)
+    h_cone_lo = mc.cone_h(mc.SPIGOT_BASE_R, pocket_r)
+    h_cone_hi = mc.cone_h(mc.SOCKET_BOT_R, pocket_r)
     z_w0 = mc.COUPLE_L + h_cone_lo                 # wave zone: full-pitch blend each end
     wave_h = (a.turns + 2) * P                     # (a shorter blend makes the crest sides
     #                                                steeper than 60° — measured, not guessed)
@@ -107,11 +104,13 @@ def main():
     def add_ring(z):
         w = blend(z)
         if w == 0.0:                               # plain profile outside the wave zone
-            if z <= mc.COUPLE_L: r = rg
-            elif z < z_w0: r = rg + (pocket_r - rg) * (z - mc.COUPLE_L) / h_cone_lo
+            if z <= mc.COUPLE_L:                    # tapered male spigot: tip -> base
+                r = mc.SPIGOT_TIP_R + (mc.SPIGOT_BASE_R - mc.SPIGOT_TIP_R) * (z / mc.COUPLE_L)
+            elif z < z_w0: r = mc.SPIGOT_BASE_R + (pocket_r - mc.SPIGOT_BASE_R) * (z - mc.COUPLE_L) / h_cone_lo
             elif z <= z_w1: r = pocket_r
-            elif z < total - mc.COUPLE_L: r = pocket_r + (rs - pocket_r) * (z - z_w1) / h_cone_hi
-            else: r = rs
+            elif z < total - mc.COUPLE_L: r = pocket_r + (mc.SOCKET_BOT_R - pocket_r) * (z - z_w1) / h_cone_hi
+            else:                                   # tapered female socket: bottom -> mouth
+                r = mc.SOCKET_BOT_R + (mc.SOCKET_MOUTH_R - mc.SOCKET_BOT_R) * (z - (total - mc.COUPLE_L)) / mc.COUPLE_L
             rows.append((z, [r] * N))
         else:
             radii = [pocket_r - w * (pocket_r - wave(z / P - k / N)) for k in range(N)]
