@@ -7,8 +7,11 @@ The stance = how long the owner cuts the rods, so exact dims do not matter — t
 
 Prints PAD-DOWN, socket-UP, support-free. What it IS:
   1. a stable flat BASE PAD (Ø95) that sits on the floor;
-  2. a LEG-SOCKET cup on top (bore Ø65.5 over the Ø64 leg foot, ~18mm deep, ~4mm walls) that receives
-     and locates the leg foot;
+  2. a LEG-SOCKET cup on top: a ROUND bore sized to the leg's PEAK diameter (Ø79.5 over the Ø77.5 leg
+     peaks, ~1mm clearance, ~18mm deep, ~4mm walls). The leg twists, but its PEAK radius is constant, so
+     it DROPS STRAIGHT IN at any rotation; the 4 lobe peaks locate it and the gypsum pour fills the valleys.
+     (Not a clover bore: a keyed clover would have to be screwed in and would jam on print variance, and
+     the socket is only a locator — the gypsum + bamboo + stance give the stability.)
   3. a VERTICAL Ø7 bamboo through-hole from the socket floor straight down through the pad (the rebar
      runs ground -> up the leg -> to the platform), plus gypsum PORTS around it so slurry poured down the
      leg reaches the pad/foot (the socket floor opens around the rod hole);
@@ -34,6 +37,18 @@ import argparse, math, os, random, struct
 def circle(cx, cy, r, n, ccw=True):
     pts = [(cx + r * math.cos(2 * math.pi * j / n), cy + r * math.sin(2 * math.pi * j / n))
            for j in range(n)]
+    return pts if ccw else pts[::-1]
+
+
+def clover(cx, cy, mean_r, amp, lobes, n, phase=0.0, ccw=True):
+    """A lobed 'clover' profile r(theta) = mean_r + amp*cos(lobes*(theta - phase)) — the SAME family
+    the twisted-clover leg prints (leg_stl.py: radius = Rm + flute/2*cos(lobes*theta) at the foot,
+    twist phase 0). Used for the leg-socket bore so it accepts the clover leg and keys its rotation."""
+    pts = []
+    for j in range(n):
+        th = 2 * math.pi * j / n
+        r = mean_r + amp * math.cos(lobes * (th - phase))
+        pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
     return pts if ccw else pts[::-1]
 
 
@@ -321,8 +336,10 @@ def build(a):
     tris = []
     rod_r = a.bamboo_dia / 2.0
     bore_r = a.bamboo_dia / 2.0
-    socket_r = a.socket_dia / 2.0
-    cup_outer_r = socket_r + a.socket_wall
+    amp = a.flute / 2.0                                                  # leg clover lobe amplitude
+    peak_r = a.socket_dia / 2.0 + amp                                    # leg OUTER (peak) radius = Rm + flute/2
+    sock_in = peak_r + a.socket_clear                                    # ROUND bore over the leg PEAKS (drops in)
+    sock_out = sock_in + a.socket_wall                                   # round cup outer wall
     pad_r = a.pad_dia / 2.0
 
     # HEXAGONAL pad: two ADJACENT hex faces are exactly 60deg apart (the equilateral-triangle interior
@@ -352,26 +369,29 @@ def build(a):
 
     cup_z0 = a.pad_h - 2.0                                              # interpenetrate the pad top
     cup_z1 = a.pad_h + a.socket_depth
-    add_tube(tris, circle(0.0, 0.0, cup_outer_r, a.points),
-             circle(0.0, 0.0, socket_r, a.points), cup_z0, cup_z1)     # LEG-SOCKET cup wall
+    inner = circle(0.0, 0.0, sock_in, a.points)                        # ROUND bore over the leg peaks: the leg
+    outer = circle(0.0, 0.0, sock_out, a.points)                       # twists but its PEAK radius is constant, so
+    add_tube(tris, outer, inner, cup_z0, cup_z1)                       # it DROPS STRAIGHT IN at any rotation/depth
 
-    info = dict(pad_r=pad_r, cup_outer_r=cup_outer_r, socket_r=socket_r, height=cup_z1,
-                bore_end_r=None)
+    info = dict(pad_r=pad_r, bore_r=sock_in, cup_outer_r=sock_out, peak_r=peak_r, height=cup_z1)
     return tris, info
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--pad-dia", type=float, default=95.0, help="base pad size (vertex circle) mm")
+    ap.add_argument("--pad-dia", type=float, default=105.0, help="base pad size (vertex circle) mm")
     ap.add_argument("--pad-sides", type=int, default=6,
                     help="pad polygon sides; 6 (hexagon) makes the two bore faces exactly 60deg apart")
     ap.add_argument("--pad-phase", type=float, default=0.0,
                     help="pad rotation deg; 0 -> the two bore faces straddle +x symmetrically")
     ap.add_argument("--pad-h", type=float, default=15.0,
                     help="pad thickness mm (thick enough to host the horizontal Ø7 bores + walls)")
-    ap.add_argument("--leg-dia", type=float, default=64.0, help="leg foot mean diameter (reference)")
-    ap.add_argument("--socket-clear", type=float, default=1.5, help="diametral clearance socket over leg")
-    ap.add_argument("--socket-dia", type=float, default=None, help="socket bore dia; default leg+clear=65.5")
+    ap.add_argument("--socket-dia", type=float, default=64.0,
+                    help="leg MEAN diameter mm (bore is sized to the PEAK = this/2 + flute/2)")
+    ap.add_argument("--lobes", type=int, default=4, help="leg clover lobe count (for reference)")
+    ap.add_argument("--flute", type=float, default=13.5, help="leg clover flute (peak-valley) depth mm")
+    ap.add_argument("--socket-clear", type=float, default=1.0,
+                    help="RADIAL clearance of the round bore over the leg PEAKS (generous = drops in easily)")
     ap.add_argument("--socket-wall", type=float, default=4.0, help="cup wall thickness mm")
     ap.add_argument("--socket-depth", type=float, default=18.0, help="cup depth mm")
     ap.add_argument("--bamboo-dia", type=float, default=7.0, help="bamboo rod hole dia mm (vert + horiz)")
@@ -386,8 +406,6 @@ def main():
     ap.add_argument("--teardrop-points", type=int, default=24, help="samples per teardrop bore")
     ap.add_argument("--out", default="foot_cup.stl")
     a = ap.parse_args()
-    if a.socket_dia is None:
-        a.socket_dia = a.leg_dia + a.socket_clear
 
     tris, info = build(a)
     write_binary_stl(a.out, tris)
@@ -396,8 +414,11 @@ def main():
     print(f"{a.out}: {n} triangles, {os.path.getsize(a.out)} bytes")
     print(f"  open (non-paired) edges: {open_edges}  [0 = watertight]")
     print(f"  bounds  X {b[0]:.1f}..{b[1]:.1f}  Y {b[2]:.1f}..{b[3]:.1f}  Z {b[4]:.1f}..{b[5]:.1f}")
-    print(f"  pad {a.pad_sides}-gon Ø{a.pad_dia:g} x {a.pad_h:g}, socket bore Ø{a.socket_dia:g} "
-          f"(over Ø{a.leg_dia:g} leg) OD Ø{2*info['cup_outer_r']:.1f} depth {a.socket_depth:g}, height {dz:.1f}")
+    print(f"  pad {a.pad_sides}-gon Ø{a.pad_dia:g} x {a.pad_h:g}, ROUND socket bore over the leg PEAKS "
+          f"(leg peak r {info['peak_r']:.2f}), clearance {a.socket_clear:g} radial, depth {a.socket_depth:g}, height {dz:.1f}")
+    print(f"  socket bore Ø{2*info['bore_r']:.2f} (r {info['bore_r']:.2f}); cup outer r {info['cup_outer_r']:.2f} "
+          f"vs pad apothem {info['pad_r']*math.cos(math.pi/a.pad_sides):.2f} -- twisting leg drops straight in, "
+          f"4 peaks locate it, gypsum fills the valleys")
     print(f"  vertical rod Ø{a.bamboo_dia:g} + {a.ports} gypsum ports Ø{a.port_dia:g} @ r{a.port_r:g}")
     print(f"  horizontal bores: 2 x Ø{a.bamboo_dia:g} TEARDROP (apex up, self-supporting), "
           f"{a.horiz_depth:g}mm deep, on 2 adjacent hex faces = {360.0/a.pad_sides:g}deg apart, axis z={a.horiz_z:g}")
