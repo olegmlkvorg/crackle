@@ -1,42 +1,49 @@
 #!/usr/bin/env python3
-"""trashcan_stl.py — a PERSONALIZED WEIGHTED GIFT BIN (formwork shell + base-only cast).
+"""trashcan_stl.py -- a PERSONALIZED WEIGHTED GIFT BIN (open-top pour, vase doctrine).
 
-What it IS: a thin-wall tapered OPEN bin (a wastebasket) whose BODY stays hollow but whose BOTTOM is a
-closed, double-wall RING cavity you pour a sand+gypsum slurry into. The cast mass lives ONLY in that
-base ring — a low, heavy skirt around the perimeter — so the bin sits with a low centre of gravity and
-will not tip or blow over. A name stands proud on the side. One printed PLA part, sliced NORMAL.
+What it IS: a thin-wall tapered OPEN bin (a wastebasket) with a SOLID thin floor sitting on the bed
+at z=0 and nothing sealed anywhere. The ballast (sand+gypsum slurry) is poured INTO the bin through
+the open top, straight onto the floor, and sets as an exposed slab in the base -- a low centre of
+gravity so the bin will not tip or blow over. A name stands proud on the side. One printed PLA part,
+sliced NORMAL.
 
-HOW IT IS MODELLED (the crackle boolean-free union trick, same as foot_cup_stl.py): the part is a SOUP
-of individually-watertight closed sub-solids that INTERPENETRATE; the SLICER unions the soup. Nothing
-is CSG-subtracted. The sub-solids:
-  BODY   * body wall  — a thin (--wall) tapered tube, open at the top (its own closed thin shell);
-         * body floor — a solid disc that closes the bin over the base ring so trash rests on it.
-  BASE   * outer wall tube + inner wall tube — the two thin walls of the ring cavity (a "double wall");
-  RING   * floor disc — seals the underside + is the ground-contact base;
-         * top annulus — caps the ring and carries the FILL PORT + a smaller VENT (holes to pour/breathe);
-         * port collars — short upstanding spouts around those two holes (each a watertight pipe).
-The GYPSUM fills the annular void between the inner and outer wall tubes, floor disc up to top annulus.
+WHY THIS SHAPE (the redesign): the previous version cast the mass inside a sealed double-wall ring
+cavity in the base. That mesh was watertight -- and UNPRINTABLE: the cavity's roof and floor were
+spanning overhangs inside a sealed shell where support can never be removed (830 offending faces
+measured by qa_stl.py; the broken part is preserved as fixtures/trashcan_sealed_base.stl). Watertight
+is not printable. The fix is the vase doctrine: keep the vessel open so the ballast goes in from one
+side, no internal cavity, no fill port, no roof.
 
-NAME: raised text is wrapped on the side ~2/3 up via emboss.emboss_on_cylinder (import emboss.py). Each
-letter is its own watertight capsule-chain rib that interpenetrates the wall — no booleans.
+HOW IT IS MODELLED (the crackle boolean-free union trick): a soup of individually-watertight closed
+sub-solids that INTERPENETRATE; the SLICER unions the soup. Nothing is CSG-subtracted. The sub-solids:
+  * body wall  -- a thin (--wall) tapered tube, open at the top (its own closed thin shell);
+  * floor      -- a solid thin disc at z=0, rim buried 0.9mm into the body wall so it welds;
+  * name       -- raised text wrapped on the side via emboss.emboss_on_cylinder (each letter a
+                  watertight capsule-chain rib that interpenetrates the wall, no booleans).
 
-STYLE: --style round (a smooth cone frustum) or faceted (a low-count polygon, a flat facet facing the
-name). The base ring is always round (it is hidden inside the base).
+--cover: also emit a drop-in COVER DISC (out root + "_cover.stl"): a flat washer with a Ø20 finger
+hole, sized to the bin's inner cross-section at the default pour depth (40mm) minus 1.5mm diametral
+clearance. After the slab sets, it drops in through the open top and sits on the gypsum as a clean
+floor. It prints flat.
 
-HONEST STAGE / CAVEATS — READ. This is GEOMETRY ONLY and verified watertight IN SOFTWARE (the binary-STL
-filesize law + edge parity). That is a mesh guarantee, NOT a proof that the print or the pour works:
-  * The gypsum POUR IS UNPROVEN — nothing here has been physically cast. Do not phrase it as proven.
-  * Set gypsum is BRITTLE and WATER-SOLUBLE. This is an INDOOR bin. The PLA shell is the wet face; the
-    cast never touches water if the shell stays intact — SEAL the cast (the open port/vent especially)
-    before use. A cracked shell + a wet cast is a failure.
-  * The cast is BASE-ONLY by design (mass low, walls light) — the body is not reinforced and is not a
-    load member; it is a liner, not structure.
+BALLAST TABLE -- measured, not recomputed: after the STL is written, this script reads the FILE back,
+slices the inner cavity at successive z planes, and integrates the measured cross-section areas
+(Simpson) to get litres and kg at 1.9 g/cc for depths 20/40/70mm. An independent analytic figure is
+computed from the input dimensions and the two routes MUST agree within 0.5% or the run FAILS
+(crosscheck() -- proven able to fire).
 
-FITS: default footprint (Ø top) is under the K2 Plus bed; a FITS_340 line is printed. Default --height
-350 puts the Z extent at the machine's ~350mm ceiling — drop --height for margin.
+HONEST STAGE -- READ. This is GEOMETRY ONLY. The mesh passes qa_stl.py --class closed (watertight AND
+0 spanning overhangs, i.e. printable geometry as measured), but:
+  * The gypsum POUR IS UNPROVEN -- nothing here has been physically cast. Do not phrase it as proven.
+  * NOTHING HAS BEEN PRINTED. Wall adhesion, emboss legibility, warp: untested on the K2 Plus.
+  * Set gypsum is BRITTLE and WATER-SOLUBLE. Indoor bin. The exposed slab top is why the cover disc
+    exists; seal the slab (e.g. PVA/varnish) before wet use. The body is a liner, not structure.
+
+FITS: default footprint (Ø top 300) clears the 340 bed; a FITS_340 line is printed. Default --height
+350 puts the Z extent at the machine's ~350mm ceiling -- drop --height for margin.
 
 Usage: python3 trashcan_stl.py [--name OLEG] [--height 350] [--top-dia 300] [--bottom-dia 260]
-                               [--wall 1.2] [--base-ring-h 70] [--style round|faceted] [--points 160]
+                               [--wall 1.2] [--style round|faceted] [--points 160] [--cover]
                                [--out trashcan.stl]
 """
 import argparse, math, os, struct, sys
@@ -44,9 +51,13 @@ import argparse, math, os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import emboss                                                        # noqa: E402  (raised-text ribs)
 
-FACETS = 16                                                          # facet count for --style faceted
-CAVITY_WIDTH = 18.0                                                  # radial width of the cast ring (mm)
-GYPSUM_DENSITY = 0.0019                                              # g/mm^3  (1.9 g/cc sand+gypsum)
+FACETS = 16                # facet count for --style faceted
+GYPSUM_DENSITY = 0.0019    # g/mm^3 (1.9 g/cc sand+gypsum) -- mix-recipe target, not a measured slab
+BALLAST_DEPTHS = (20.0, 40.0, 70.0)   # mm, the printed table rows
+DEFAULT_POUR_DEPTH = 40.0  # mm, the depth the cover disc is sized for (middle table row)
+COVER_CLEAR = 1.5          # mm diametral clearance of the cover disc in the bin
+COVER_T = 2.4              # mm cover disc thickness
+FINGER_R = 10.0            # mm finger-hole radius in the cover (Ø20)
 
 
 # ----------------------------------------------------------------------------- 2D profiles
@@ -54,131 +65,6 @@ def circle(cx, cy, r, n, phase=0.0, ccw=True):
     pts = [(cx + r * math.cos(phase + 2 * math.pi * j / n),
             cy + r * math.sin(phase + 2 * math.pi * j / n)) for j in range(n)]
     return pts if ccw else pts[::-1]
-
-
-# ----------------------------------------------------------------------------- polygon triangulation
-# (copied verbatim in spirit from foot_cup_stl.py — used only for the holed top annulus)
-def _area2(poly):
-    s = 0.0
-    n = len(poly)
-    for i in range(n):
-        x0, y0 = poly[i]; x1, y1 = poly[(i + 1) % n]
-        s += x0 * y1 - x1 * y0
-    return 0.5 * s
-
-
-def _ccw(poly):
-    return _area2(poly) > 0
-
-
-def _in_tri(p, a, b, c, eps=1e-9):
-    (px, py), (ax, ay), (bx, by), (cx, cy) = p, a, b, c
-    d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by)
-    d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy)
-    d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay)
-    return (d1 > eps and d2 > eps and d3 > eps) or (d1 < -eps and d2 < -eps and d3 < -eps)
-
-
-def ear_clip(poly, test=None):
-    P = test if test is not None else poly
-    idx = list(range(len(poly)))
-    tris = []
-
-    def convex(a, b, c):
-        ax, ay = P[a]; bx, by = P[b]; cx, cy = P[c]
-        return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) > 1e-12
-
-    guard = 0
-    while len(idx) > 3 and guard < 100000:
-        guard += 1
-        m = len(idx)
-        cut = False
-        for i in range(m):
-            a, b, c = idx[(i - 1) % m], idx[i], idx[(i + 1) % m]
-            if not convex(a, b, c):
-                continue
-            if all(j in (a, b, c) or not _in_tri(P[j], P[a], P[b], P[c]) for j in idx):
-                tris.append((a, b, c)); idx.pop(i); cut = True; break
-        if not cut:
-            break
-    if len(idx) == 3:
-        tris.append((idx[0], idx[1], idx[2]))
-    return tris
-
-
-def _seg_cross(p1, p2, p3, p4):
-    def o(a, b, c):
-        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-    d1, d2, d3, d4 = o(p3, p4, p1), o(p3, p4, p2), o(p1, p2, p3), o(p1, p2, p4)
-    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
-
-
-def _pt_in_poly(p, poly):
-    x, y = p
-    inside = False
-    n = len(poly)
-    j = n - 1
-    for i in range(n):
-        xi, yi = poly[i]; xj, yj = poly[j]
-        if ((yi > y) != (yj > y)) and \
-                (x < (xj - xi) * (y - yi) / ((yj - yi) if (yj - yi) != 0 else 1e-12) + xi):
-            inside = not inside
-        j = i
-    return inside
-
-
-def _bridge_ok(M, O, merged, oi, hole, mi):
-    if not _pt_in_poly(((M[0] + O[0]) / 2.0, (M[1] + O[1]) / 2.0), merged):
-        return False
-    n = len(merged)
-    for e in range(n):
-        if e == oi or (e + 1) % n == oi:
-            continue
-        if _seg_cross(M, O, merged[e], merged[(e + 1) % n]):
-            return False
-    hn = len(hole)
-    for e in range(hn):
-        if e == mi or (e + 1) % hn == mi:
-            continue
-        if _seg_cross(M, O, hole[e], hole[(e + 1) % hn]):
-            return False
-    return True
-
-
-def triangulate_with_holes(outer, holes):
-    import random
-    merged = list(outer)
-    if not _ccw(merged):
-        merged = merged[::-1]
-    for hole in holes:
-        h = list(hole)
-        if _ccw(h):
-            h = h[::-1]
-        best = None
-        for mi, M in enumerate(h):
-            for oi, O in enumerate(merged):
-                d = (M[0] - O[0]) ** 2 + (M[1] - O[1]) ** 2
-                if (best is None or d < best[0]) and _bridge_ok(M, O, merged, oi, h, mi):
-                    best = (d, oi, mi)
-        if best is None:
-            mi = max(range(len(h)), key=lambda k: h[k][0] ** 2 + h[k][1] ** 2)
-            M = h[mi]
-            rM = M[0] ** 2 + M[1] ** 2
-            cand = [a for a in range(len(merged)) if merged[a][0] ** 2 + merged[a][1] ** 2 > rM]
-            oi = min(cand, key=lambda a: (merged[a][0] - M[0]) ** 2 + (merged[a][1] - M[1]) ** 2)
-        else:
-            _, oi, mi = best
-        hole_loop = [h[(mi + t) % len(h)] for t in range(len(h))]
-        merged = merged[:oi + 1] + hole_loop + [hole_loop[0], merged[oi]] + merged[oi + 1:]
-    want = len(merged) - 2
-    faces = []
-    for seed in range(24):
-        rng = random.Random(seed)
-        test = [(x + rng.uniform(-1e-4, 1e-4), y + rng.uniform(-1e-4, 1e-4)) for (x, y) in merged]
-        faces = ear_clip(merged, test)
-        if len(faces) == want:
-            return merged, faces
-    return merged, faces
 
 
 # ----------------------------------------------------------------------------- mesh builders
@@ -241,21 +127,6 @@ def add_solid_cylinder(tris, r, z0, z1, n, phase=0.0):
         tris.append((cb, (ak[0], ak[1], z0), (aj[0], aj[1], z0)))          # bottom cap (down)
 
 
-def add_slab_with_holes(tris, outer2d, holes2d, z0, z1):
-    """A solid slab (its own watertight solid) of an outer loop with holes cut in it: top + bottom
-    faces (triangulated with the holes) and side walls for the outer loop and every hole loop."""
-    verts, faces = triangulate_with_holes(outer2d, holes2d)
-    for (a, b, c) in faces:
-        tris.append(((verts[a][0], verts[a][1], z1), (verts[b][0], verts[b][1], z1),
-                     (verts[c][0], verts[c][1], z1)))
-    for (a, b, c) in faces:
-        tris.append(((verts[c][0], verts[c][1], z0), (verts[b][0], verts[b][1], z0),
-                     (verts[a][0], verts[a][1], z0)))
-    _add_side_wall(tris, outer2d, z0, z1, outward=True)
-    for hole in holes2d:
-        _add_side_wall(tris, hole, z0, z1, outward=False)
-
-
 # ----------------------------------------------------------------------------- STL io + verify
 def normal(a, b, c):
     ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
@@ -265,7 +136,7 @@ def normal(a, b, c):
     return (0.0, 0.0, 0.0) if m < 1e-12 else (nx / m, ny / m, nz / m)
 
 
-def write_binary_stl(path, tris, header=b"crackle trashcan_stl - weighted gift bin (base-ring cast)"):
+def write_binary_stl(path, tris, header=b"crackle trashcan_stl - open weighted bin (top-pour ballast)"):
     with open(path, "wb") as fh:
         fh.write(header.ljust(80, b"\0"))
         fh.write(struct.pack("<I", len(tris)))
@@ -309,6 +180,108 @@ def verify(path, tris):
     return count, open_edges, degen, bounds
 
 
+# ------------------------------------------------------------------ MEASURE the emitted artifact
+# The ballast table and the cover size come from slicing the WRITTEN FILE, not from the loop math
+# that built it (lesson: measure the emitted artifact; verify by a different route).
+def read_stl_tris(path):
+    tris = []
+    with open(path, "rb") as fh:
+        fh.read(80)
+        (count,) = struct.unpack("<I", fh.read(4))
+        for _ in range(count):
+            fh.read(12)
+            vs = tuple(struct.unpack("<3f", fh.read(12)) for _ in range(3))
+            fh.read(2)
+            tris.append(vs)
+    return tris
+
+
+def _slice_segments(tris, z):
+    """Cut the triangle soup with the plane at height z. Returns oriented 2D segments (p1, p2):
+    each segment is directed along n x k (facet normal x +z) so every loop is traversed with one
+    consistent orientation and a plain cross-sum gives its enclosed area."""
+    segs = []
+    for v0, v1, v2 in tris:
+        zs = (v0[2], v1[2], v2[2])
+        if min(zs) >= z or max(zs) <= z:                      # strictly crossing triangles only
+            continue
+        pts = []
+        for a, b in ((v0, v1), (v1, v2), (v2, v0)):
+            if (a[2] - z) * (b[2] - z) < 0.0:
+                t = (z - a[2]) / (b[2] - a[2])
+                pts.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
+        if len(pts) != 2:
+            continue                                          # vertex exactly on plane: skip sliver
+        n = normal(v0, v1, v2)
+        d = (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+        if d[0] * n[1] - d[1] * n[0] < 0.0:                   # want dir . (ny, -nx) >= 0
+            pts.reverse()
+        segs.append((pts[0], pts[1]))
+    return segs
+
+
+def _pt_seg_dist(px, py, a, b):
+    ax, ay = a; bx, by = b
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    if L2 < 1e-18:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / L2))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def cavity_section(tris, z):
+    """Measured inner cross-section of the bin at height z: (area mm^2, inradius mm).
+    Expects exactly the bin's two concentric wall loops (outer face, inner face) at that height --
+    i.e. z must sit between the floor top and the bottom of the name band. Both loops enclose the
+    axis, so under the n x k orientation rule every segment of one loop subtends the origin with
+    the same cross sign: the INNER face (surface normal toward the axis) winds counter to the
+    outer, so its segments are exactly the positive-cross ones. Radius clustering is NOT used --
+    on a faceted bin the facet chord sag exceeds the wall gap and the radii of the two loops
+    overlap (found live by crosscheck(); see the guide). The inradius is the closest approach of
+    any inner segment to the axis: what a drop-in disc must clear."""
+    segs = _slice_segments(tris, z)
+    pos = []; n_neg = 0
+    for a, b in segs:
+        cr = a[0] * b[1] - b[0] * a[1]
+        if cr > 0.0:
+            pos.append((a, b, cr))
+        else:
+            n_neg += 1
+    if len(pos) < 6 or n_neg < 6:
+        raise SystemExit(f"MEASURE FAIL: z={z:.1f} slice has {len(pos)} inner + {n_neg} outer "
+                         "segments; expected the bin's two wall faces")
+    area = 0.5 * sum(cr for _, _, cr in pos)
+    inr = min(_pt_seg_dist(0.0, 0.0, a, b) for a, b, _ in pos)
+    if area <= 0.0 or not math.isfinite(inr):
+        raise SystemExit(f"MEASURE FAIL: degenerate inner loop at z={z:.1f}")
+    return area, inr
+
+
+def cavity_volume(tris, z0, z1, m=8):
+    """Composite Simpson over measured sections. The section area of a linearly tapered polygon
+    tube is quadratic in z, so Simpson is exact up to the 0.01mm plane-epsilon."""
+    if m % 2:
+        m += 1
+    h = (z1 - z0) / m
+    total = 0.0
+    for i in range(m + 1):
+        a, _ = cavity_section(tris, z0 + i * h)
+        w = 1 if i in (0, m) else (4 if i % 2 else 2)
+        total += w * a
+    return total * h / 3.0
+
+
+def crosscheck(measured, analytic, what, tol=0.005):
+    """The two routes (slice the emitted file vs analytic from the input dims) MUST agree.
+    Fails the run on divergence -- proven able to fire (see guide)."""
+    if analytic == 0 or abs(measured - analytic) / abs(analytic) > tol:
+        raise SystemExit(f"CROSSCHECK FAIL [{what}]: measured {measured:.1f} vs analytic "
+                         f"{analytic:.1f} (tol {tol*100:.1f}%) -- the emitted file disagrees "
+                         "with the math that claims to describe it")
+    return measured
+
+
 # ----------------------------------------------------------------------------- build
 def build(a):
     tris = []
@@ -316,73 +289,25 @@ def build(a):
     wall = a.wall
     R0 = a.bottom_dia / 2.0                                          # body OUTER radius at the floor
     R1 = a.top_dia / 2.0                                             # body OUTER radius at the rim
+    floor_t = wall + 0.3                                             # solid floor thickness
 
     def Rb(z):                                                       # body outer radius at height z
         return R0 + (R1 - R0) * (z / H)
 
     n_body = a.points if a.style == "round" else FACETS
     ph_body = 0.0 if a.style == "round" else math.pi / FACETS        # faceted: a flat facet faces +x
-    n = a.points                                                     # smooth rings for the hidden ring
 
-    # --- BODY: thin tapered tube, open top -------------------------------------------------------
+    # --- BODY: thin tapered tube, open top, nothing above it ---------------------------------
     ob = circle(0.0, 0.0, R0, n_body, ph_body)
     ot = circle(0.0, 0.0, R1, n_body, ph_body)
     ib = circle(0.0, 0.0, R0 - wall, n_body, ph_body)
     it = circle(0.0, 0.0, R1 - wall, n_body, ph_body)
     add_tube_taper(tris, ob, ot, ib, it, 0.0, H)
 
-    # --- BASE RING geometry (all radii kept distinct so no two sub-solids share an exact edge) ----
-    brh = a.base_ring_h
-    z_ring0 = wall                                                   # cavity floor (top of ring floor)
-    z_ring1 = brh - wall                                             # cavity ceiling (under top annulus)
-
-    def Roo(z):                                                      # ring OUTER wall, outer face
-        return Rb(z) - 0.6                                           # 0.6 buried in the body wall -> welds
-    def Roi(z):                                                      # ring OUTER wall, inner face = cavity outer bound
-        return Roo(z) - wall
-    def Rio(z):                                                      # ring INNER wall, outer face = cavity inner bound
-        return Roi(z) - CAVITY_WIDTH
-    def Rii(z):                                                      # ring INNER wall, inner face
-        return Rio(z) - wall
-
-    # ring floor disc: seals the underside + is the ground-contact base (full solid disc)
-    add_solid_cylinder(tris, R0 - 0.3, 0.0, wall + 0.3, n)
-
-    # outer + inner wall tubes of the cast cavity (tapered to follow the body)
-    add_tube_taper(tris,
-                   circle(0, 0, Roo(z_ring0), n), circle(0, 0, Roo(z_ring1), n),
-                   circle(0, 0, Roi(z_ring0), n), circle(0, 0, Roi(z_ring1), n),
-                   z_ring0, z_ring1)
-    add_tube_taper(tris,
-                   circle(0, 0, Rio(z_ring0), n), circle(0, 0, Rio(z_ring1), n),
-                   circle(0, 0, Rii(z_ring0), n), circle(0, 0, Rii(z_ring1), n),
-                   z_ring0, z_ring1)
-
-    # top annulus (caps the ring) carrying the FILL PORT + VENT holes
-    port_r = 5.0                                                    # fill port hole radius (Ø10)
-    vent_r = 2.5                                                    # vent hole radius (Ø5)
-    r_pc = (Rio(z_ring1) + Roi(z_ring1)) / 2.0                      # ports centred in the cast band
-    fill_ang = math.radians(160.0); vent_ang = math.radians(200.0)  # on the back, away from the name
-    fill_c = (r_pc * math.cos(fill_ang), r_pc * math.sin(fill_ang))
-    vent_c = (r_pc * math.cos(vent_ang), r_pc * math.sin(vent_ang))
-    outer_ann = circle(0, 0, Roo(z_ring1) + 0.3, n)
-    holes = [circle(0, 0, Rii(z_ring1) - 0.3, n, ccw=False),
-             circle(fill_c[0], fill_c[1], port_r, 24, ccw=False),
-             circle(vent_c[0], vent_c[1], vent_r, 20, ccw=False)]
-    add_slab_with_holes(tris, outer_ann, holes, z_ring1, brh)
-
-    # body floor: solid disc closing the bin over the central well (welds to inner wall + annulus)
-    add_solid_cylinder(tris, Rio(z_ring1) + 1.5, brh - wall - 0.3, brh + 0.3, n)
-
-    # port collars: short upstanding pour spouts around each hole (each a watertight pipe, bore
-    # offset +0.4 from the hole so it never shares an edge with the annulus hole wall)
-    for (cx, cy), br in ((fill_c, port_r), (vent_c, vent_r)):
-        bore = br + 0.4
-        zc0 = brh - wall - 0.1; zc1 = brh + 8.0
-        add_tube_taper(tris,
-                       circle(cx, cy, bore + wall, 24), circle(cx, cy, bore + wall, 24),
-                       circle(cx, cy, bore, 24), circle(cx, cy, bore, 24),
-                       zc0, zc1)
+    # --- FLOOR: solid thin disc ON THE BED, rim buried 0.9mm into the body wall so it welds.
+    # Same point count and phase as the body so a faceted bin gets a faceted floor that stays
+    # inside the flats (radius offset only -> no shared/coincident edges).
+    add_solid_cylinder(tris, R0 - 0.3, 0.0, floor_t, n_body, ph_body)
 
     # --- NAME: raised text wrapped on the side, ~2/3 up ------------------------------------------
     name_h = min(60.0, 0.16 * H)
@@ -395,17 +320,21 @@ def build(a):
         emboss.emboss_on_cylinder(tris, a.name, cyl_radius=cyl_r, z_center=z_name,
                                   angle_center_rad=0.0, height_mm=name_h)
 
-    # --- cast mass (annular cavity, exact integral of a linear taper via the mid-height radius) ---
-    zc_mid = (z_ring0 + z_ring1) / 2.0
-    roi_mid = Roi(zc_mid)                                           # cavity outer bound at mid-height
-    cav_h = z_ring1 - z_ring0
-    cast_vol = math.pi * CAVITY_WIDTH * (2 * roi_mid - CAVITY_WIDTH) * cav_h   # pi*(Roi^2 - Rio^2)*h
-    cast_mass = cast_vol * GYPSUM_DENSITY
-
-    info = dict(name_h=name_h, z_name=z_name, cyl_r=cyl_r, r_pc=r_pc, port_r=port_r, vent_r=vent_r,
-                cav_w=CAVITY_WIDTH, cav_h=cav_h, cast_vol=cast_vol, cast_mass=cast_mass,
-                roi_mid=roi_mid, rio_mid=roi_mid - CAVITY_WIDTH)
+    info = dict(name_h=name_h, z_name=z_name, cyl_r=cyl_r, floor_t=floor_t,
+                n_body=n_body, R0=R0, R1=R1,
+                name_band_lo=z_name - name_h / 2.0 - 2.0)           # ribs poke ~1.6 below the glyph box
     return tris, info
+
+
+def build_cover(cover_r, n):
+    """The drop-in cover: a flat washer, cover_r outer, Ø20 finger hole, COVER_T thick. Sits on the
+    set slab as a clean floor. Prints flat on the bed, trivially."""
+    tris = []
+    # a washer IS a straight tube: outer wall + finger-hole wall + top and bottom annuli
+    oc = circle(0.0, 0.0, cover_r, n)
+    ic = circle(0.0, 0.0, FINGER_R, n)
+    add_tube_taper(tris, oc, oc, ic, ic, 0.0, COVER_T)
+    return tris
 
 
 def main():
@@ -414,10 +343,12 @@ def main():
     ap.add_argument("--top-dia", type=float, default=300.0, help="top (rim) OUTER diameter mm")
     ap.add_argument("--bottom-dia", type=float, default=260.0, help="bottom OUTER diameter mm")
     ap.add_argument("--wall", type=float, default=1.2, help="shell wall thickness mm")
-    ap.add_argument("--base-ring-h", type=float, default=70.0, help="height of the cast base ring mm")
     ap.add_argument("--style", choices=("round", "faceted"), default="round", help="body cross-section")
     ap.add_argument("--name", default="OLEG", help="raised name on the side ('' for none)")
     ap.add_argument("--points", type=int, default=160, help="samples per round ring")
+    ap.add_argument("--cover", action="store_true",
+                    help=f"also emit the drop-in cover disc (sized for the {DEFAULT_POUR_DEPTH:g}mm "
+                         "default pour depth) as <out-root>_cover.stl")
     ap.add_argument("--out", default="trashcan.stl")
     a = ap.parse_args()
 
@@ -431,16 +362,61 @@ def main():
     print(f"  open (non-paired) edges: {open_edges}  [0 = watertight]    degenerate: {degen}  [0 = ok]")
     print(f"  bounds  X {b[0]:.1f}..{b[1]:.1f}  Y {b[2]:.1f}..{b[3]:.1f}  Z {b[4]:.1f}..{b[5]:.1f}")
     print(f"  FITS_340: X {dx:.1f} Y {dy:.1f} <= 340 -> {fits}   (Z {dz:.1f}mm; default height sits at "
-          f"the ~350mm machine ceiling — lower --height for margin)")
+          f"the ~350mm machine ceiling -- lower --height for margin)")
     print(f"  body: {a.style} tapered tube, bottom Ø{a.bottom_dia:g} -> rim Ø{a.top_dia:g}, "
-          f"wall {a.wall:g}mm, open top, height {a.height:g}mm")
-    print(f"  base ring: cast band width {info['cav_w']:g}mm x height {info['cav_h']:.1f}mm "
-          f"(r {info['rio_mid']:.1f}..{info['roi_mid']:.1f}), fill port Ø{2*info['port_r']:g} + vent "
-          f"Ø{2*info['vent_r']:g} @ r{info['r_pc']:.0f}")
-    print(f"  CAST MASS (base only): {info['cast_vol']/1000.0:.0f} cc x 1.9 g/cc = "
-          f"{info['cast_mass']:.0f} g  (~{info['cast_mass']/1000.0:.2f} kg) — POUR UNPROVEN, not yet cast")
-    print(f"  name '{a.name}' raised {info['name_h']:.0f}mm tall, wrapped @ z{info['z_name']:.0f} "
-          f"(~2/3 up) on r{info['cyl_r']:.1f}")
+          f"wall {a.wall:g}mm, OPEN top, solid {info['floor_t']:g}mm floor at z=0, height {a.height:g}mm")
+    print(f"  no cavity, no port, no roof: the ballast pours in from the open top onto the floor "
+          f"and sets as an exposed slab")
+
+    # ---- BALLAST TABLE: measured from the emitted file, cross-checked analytically -------------
+    file_tris = read_stl_tris(a.out)
+    eps = 0.01
+    z_floor = info["floor_t"] + eps
+    max_depth = max(list(BALLAST_DEPTHS) + [DEFAULT_POUR_DEPTH])
+    if info["floor_t"] + max_depth >= info["name_band_lo"]:
+        raise SystemExit("MEASURE FAIL: ballast depth reaches the name band; the two-loop slice "
+                         "assumption breaks there. Raise the name (taller --height) or lower depth.")
+    c_poly = 0.5 * info["n_body"] * math.sin(2 * math.pi / info["n_body"])   # polygon area coeff
+
+    def ri(z):                                                       # analytic inner circumradius
+        return (info["R0"] - a.wall) + (info["R1"] - info["R0"]) * z / a.height
+
+    def analytic_vol(z0, z1):                                        # exact integral of c*ri(z)^2
+        s = (info["R1"] - info["R0"]) / a.height
+        r0 = ri(z0)
+        d = z1 - z0
+        return c_poly * (r0 * r0 * d + r0 * s * d * d + s * s * d * d * d / 3.0)
+
+    print(f"  BALLAST (measured by slicing {a.out}; density {GYPSUM_DENSITY*1000:g} g/cc sand+gypsum "
+          f"mix target):")
+    for depth in BALLAST_DEPTHS:
+        v = cavity_volume(file_tris, z_floor, info["floor_t"] + depth)
+        crosscheck(v, analytic_vol(z_floor, info["floor_t"] + depth), f"volume@{depth:g}mm")
+        print(f"    depth {depth:5.0f} mm -> {v/1e6:.2f} L -> {v*GYPSUM_DENSITY/1000.0:.1f} kg")
+    a10, _ = cavity_section(file_tris, info["floor_t"] + 10.0)
+    print(f"    pour to taste: ~{a10*10.0*GYPSUM_DENSITY/1000.0:.2f} kg per 10 mm of depth near the "
+          f"floor (grows slightly with depth; the bin tapers outward)")
+    print(f"  POUR UNPROVEN: nothing has been cast; the masses above are geometry, not a weighed part")
+
+    if a.name:
+        print(f"  name '{a.name}' raised {info['name_h']:.0f}mm tall, wrapped @ z{info['z_name']:.0f} "
+              f"(~2/3 up) on r{info['cyl_r']:.1f}")
+
+    # ---- COVER: sized off the MEASURED inner section at the default pour depth -----------------
+    if a.cover:
+        z_cover = info["floor_t"] + DEFAULT_POUR_DEPTH
+        _, inr = cavity_section(file_tris, z_cover)
+        crosscheck(inr, ri(z_cover) * math.cos(math.pi / info["n_body"]), "cover inradius")
+        cover_r = inr - COVER_CLEAR / 2.0
+        cov_path = os.path.splitext(a.out)[0] + "_cover.stl"
+        cov = build_cover(cover_r, a.points)
+        write_binary_stl(cov_path, cov, header=b"crackle trashcan_stl cover - drop-in slab floor disc")
+        cn, co, cd, cb = verify(cov_path, cov)
+        print(f"  cover: {cov_path}  Ø{2*cover_r:.1f} x {COVER_T:g}mm washer, Ø{2*FINGER_R:g} finger "
+              f"hole, {cn} tris, open edges {co}, degenerate {cd}")
+        print(f"    sits on the slab at the {DEFAULT_POUR_DEPTH:g}mm default depth "
+              f"({COVER_CLEAR:g}mm diametral clearance, measured inradius {inr:.2f}); the bin only "
+              f"widens upward, so the drop-in transit from the rim is free by geometry")
 
 
 if __name__ == "__main__":
