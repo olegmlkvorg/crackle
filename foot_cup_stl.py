@@ -53,11 +53,12 @@ def clover(cx, cy, mean_r, amp, lobes, n, phase=0.0, ccw=True):
 
 
 def teardrop(cx, cy, r, n):
-    """A teardrop for a horizontal bore: a circle whose top is two straight 45deg lines to an apex at
-    +y (~1.414r). Printed with the bore axis horizontal and +y = world up, the roof overhang stays
-    <= 45deg so it bridges support-free. Returns a simple polygon of ~n points."""
-    apex = (cx, cy + r * math.sqrt(2.0))
-    a_lo, a_hi = math.radians(45.0), math.radians(135.0)         # arc endpoints the roof spans
+    """A teardrop for a horizontal bore: a circle whose top is two straight 50deg lines to an apex at
+    +y (~1.556r). Printed with the bore axis horizontal and +y = world up, the roof stays STEEPER than
+    the 45deg self-support limit at every facet (45deg flats put discretized facets exactly ON the
+    limit; qa_stl caught 8 facets tipping past it). Returns a simple polygon of ~n points."""
+    apex = (cx, cy + r / math.sin(math.radians(40.0)))
+    a_lo, a_hi = math.radians(40.0), math.radians(140.0)         # tangent points of the 50deg flats
     pts = [apex]
     span = (a_lo + 2 * math.pi) - a_hi                           # bottom 270deg arc, a_hi -> a_lo+360
     m = max(3, n - 1)

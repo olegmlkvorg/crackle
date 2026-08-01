@@ -19,15 +19,18 @@ def main():
     ap.add_argument("--depth", type=float, default=110.0, help="bowl depth mm")
     ap.add_argument("--points", type=int, default=140, help="points per ring")
     ap.add_argument("--rings", type=int, default=80, help="rings up the wall")
+    ap.add_argument("--curve", type=float, default=0.85,
+                    help="wall profile exponent t**curve; 0.85 keeps the base lean under the 55deg "
+                         "vase ceiling (0.7 flared too low: qa_stl measured 63.8deg at the base)")
     ap.add_argument("--out", default="bowl.stl")
     a = ap.parse_args()
 
     rb, rr, N = a.bottom / 2.0, a.rim / 2.0, a.points
-    # profile (r,z): flat bottom out to rb, then a flared wall to the rim (t**0.7 = bowl-ish, flares low)
+    # profile (r,z): flat bottom out to rb, then a flared wall to the rim (t**curve = bowl-ish)
     prof = [(0.0, 0.0), (rb, 0.0)]
     for i in range(1, a.rings + 1):
         t = i / a.rings
-        prof.append((rb + (rr - rb) * (t ** 0.7), a.depth * t))
+        prof.append((rb + (rr - rb) * (t ** a.curve), a.depth * t))
 
     def pt(r, z, k):
         th = 2 * math.pi * k / N
