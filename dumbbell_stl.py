@@ -1,58 +1,62 @@
 #!/usr/bin/env python3
-"""dumbbell_stl.py — a PERSONALIZED GIFT DUMBBELL: two cast-mass ends on a rod core, printed as
-thin PLA FORMWORK. Emits the two identical END shells + the GRIP sleeve as separate STLs.
+"""dumbbell_stl.py — a PERSONALIZED GIFT DUMBBELL in the canonical form Oleg named (2026-08-02):
+"dumbbell is 2 sides plus tube in the middle". Two identical DRUM-CUP ends + a fluted GRIP tube,
+printed as thin PLA formwork, mass cast in with gypsum. First unit is Oleg's own home equipment.
 
-WHAT IT IS (a gift / trophy, NOT a competition weight — 1..6 kg sweet spot):
-  * Each END is a SELF-SUPPORTING HOLLOW DOME vessel — a gumdrop/bell whose outer radius is WIDEST at
-    the base and only ever narrows going up to a small OPEN pour hole at the top. It is sized so its
-    inner cavity holds exactly the gypsum needed for the target weight (per-end fill = weight/density/2).
-    You print the dome BASE-DOWN (no support), stand the rod up through the base hole, pour a gypsum+sand
-    mix (~1.9 g/cc) in through the OPEN TOP, and the mass casts around the rod tip. The recipient's NAME
-    is a raised bead wrapped on the near-vertical SIDE band (imported emboss.py, boolean-free).
-  * The GRIP is a knurled/fluted tube sleeve with a central rod bore.
+WHAT AN END IS — an open DRUM CUP that reads as a classic weight plate:
+  * Outer silhouette: a STRAIGHT CYLINDER (a drum). Diameter and depth are derived from --weight:
+    the inner cavity holds exactly the per-end fill (weight/fill_density/2), with proportions that
+    read like a dumbbell plate: depth = --aspect * dia (default 0.55). 3 kg at 1.9 g/cc -> ~789 cc
+    per end -> about Ø125 x 69.
+  * CLOSED flat outer FACE — prints ON THE BED, face-down. It stays CLEAN: raised text printed
+    face-down would squish into the bed, so the NAME wraps the drum SIDE instead
+    (emboss_on_cylinder — plate-style rim lettering, printed mid-wall, a self-supporting bead).
+  * Straight vertical wall (--wall), OPEN inner side: the pour mouth is the WHOLE open face (vase
+    doctrine — fill from one side). A small inner LIP flange at the open rim (LIP_IN mm inward)
+    locks the set gypsum axially; its underside is a chamfer (rise LIP_RISE) so it self-supports.
+  * ROD BORE: a collar tube stands COLLAR_H mm from the closed face centre into the cavity
+    (bore r = --core-dia/2 + 0.4, blind socket, closed by the face plate). The rod tip embeds in
+    the cast gypsum while the bore itself stays gypsum-free for assembly.
 
-HARD RULE — THE ROD CORE IS MANDATORY (baked in, like the stand's rebar): a bamboo (Ø6.35) or steel
-(Ø~12) ROD runs the whole length — through the grip's through-bore and into each cast end, where its
-tip is embedded in the gypsum. The rod is the TENSILE / BENDING member; the gypsum is cheap mass; the
-PLA is only the mould + grip sleeve. A solid gypsum handle with NO rod SNAPS in bending — never omit it.
+HARD RULE — THE ROD CORE IS MANDATORY: a bamboo (Ø6.35) or steel (Ø~12) rod runs the whole length,
+through the grip's bore and into each end's collar socket. The rod is the TENSILE / BENDING member;
+the gypsum is cheap mass; the PLA is only the mould + grip sleeve. Never omit it.
+
+ASSEMBLY reads: [drum][grip tube][drum] — open faces INWARD against the grip ends, rod through all
+three. --viz ALSO writes dumbbell_assembled.stl: 2 ends + grip on a shared axis, correctly spaced
+(grip length between the two open rims), lying HORIZONTAL (axis along X) like a real dumbbell on a
+table. VIZ ONLY — never print that file.
 
 BALANCE: the two ends are IDENTICAL by construction (same STL, printed twice). Do not scale one end
-without the other or the dumbbell will be lopsided.
+without the other.
 
-WHY THE DOME PRINTS WITHOUT SUPPORT: the outer silhouette r(z) = r_top + (R_base-r_top)*(1-(z/H)^p)^q
-is MONOTONICALLY NON-INCREASING, so every layer is <= the one below (no outer overhang anywhere). The
-height H is auto-scaled so the steepest wall slope |dr/dz| stays at MAX_WALL_SLOPE (0.70 = 35deg off
-vertical, well under 45), which bounds the inner cavity skin's downward tilt to nz > -0.58 — under the
-support threshold. There is NO flat internal ceiling and NO sealed cavity: the top is an OPEN pour hole,
-so the interior is reachable from outside and needs no support to remove. build_end runs an overhang
-check on the emitted STL (see overhang_report) that MEASURES this: ~0 support-needing facets above the bed.
+WHY IT PRINTS WITHOUT SUPPORT (mesh frame = print frame): the closed face is at z=0 on the bed,
+every wall is vertical, every internal flat annulus (cavity floor, collar top, rim top) faces UP,
+and the only downward-tilted skin — the lip chamfer underside — is held to |nz| ~0.62 (< 0.707) by
+LIP_IN/LIP_RISE. Zero spanning downward overhangs BY CONSTRUCTION; build_end measures it anyway.
 
-MESH MODEL (house style, BOOLEAN-FREE): each part is a soup of individually-watertight surfaces that
-the SLICER unions. The END is an outer dome skin + an inner dome skin (offset inward by --wall) closed
-by three flat annuli built with band(): the wide BASE annulus at z=0 (rod-hole floor, underside on the
-bed) with its bore collar, and the TOP RIM annulus at z=H that steps the outer rim down to the open pour
-hole. The NAME ribs are separate closed sub-solids that INTERPENETRATE the outer wall (emboss.py). No
-CSG, no boolean subtraction anywhere. verify() ASSERTS the binary-STL laws and returns the open-edge
-count (MUST be 0).
+MESH MODEL (house style, BOOLEAN-FREE): the drum is ONE closed solid of revolution — bottom disc
+fan, outer wall, rim-top annulus, lip chamfer, inner cavity wall, cavity floor annulus, collar wall,
+collar top, bore wall, bore floor disc — every ring shared by exactly two surfaces. The NAME ribs
+are separate closed capsule-chain sub-solids that INTERPENETRATE the outer wall (emboss.py; the
+wall must swallow rib_r - raise_mm = 0.4 mm, which --wall 1.6 does). No CSG anywhere. verify()
+asserts the binary-STL laws and 0 open edges.
 
-STAGE / HONESTY — the gypsum POUR is UNPROVEN. Nothing here has been physically cast or even printed;
-this is FIRST-CUT geometry for the owner to react to. A watertight mesh is a SOFTWARE guarantee (file-
-size law + edge parity), NOT a proof that the shell survives a pour or that the cast weight lands on
-target. The print-orientation / support caveat, however, IS resolved for the shell: printed base-down
-the dome is measured self-supporting (overhang_report ~0). Do not phrase the POUR as proven.
+STAGE / HONESTY — the gypsum POUR is UNPROVEN. Nothing has been cast; this is geometry for Oleg to
+react to. Watertight + zero-overhang are SOFTWARE guarantees measured off the emitted mesh, not a
+proof the shell survives a pour or that the cast mass lands on target. Do not phrase the POUR as
+proven.
 
 Usage:
-  python3 dumbbell_stl.py --part all --name "OLEG"        # writes dumbbell_end.stl + dumbbell_grip.stl
+  python3 dumbbell_stl.py --name "OLEG" --viz     # end + grip + assembled viz
   python3 dumbbell_stl.py --part end --weight 4 --name "MAX" --out max_end.stl
 Flags: --weight --fill-density --grip-dia --grip-len --name
-       --core-dia --wall --points --part {end,grip,all} --out
+       --core-dia --wall --aspect --points --part {end,grip,all} --out --viz
 """
 import argparse, math, os, random, struct
 
 from emboss import emboss_on_cylinder, text_width       # raised NAME beads (boolean-free, watertight)
 
-COS30 = math.cos(math.radians(30.0))
-HOLE_N = 24                                              # samples per round port / rod hole
 BORE_N = 48                                             # samples per grip rod bore
 
 
@@ -61,11 +65,6 @@ def circle(cx, cy, r, n, ccw=True):
     pts = [(cx + r * math.cos(2 * math.pi * j / n), cy + r * math.sin(2 * math.pi * j / n))
            for j in range(n)]
     return pts if ccw else pts[::-1]
-
-
-def ngon(cx, cy, r, n, phase=0.0):
-    return [(cx + r * math.cos(phase + 2 * math.pi * k / n),
-             cy + r * math.sin(phase + 2 * math.pi * k / n)) for k in range(n)]
 
 
 def fluted(cx, cy, mean_r, depth, ridges, n, phase=0.0):
@@ -216,9 +215,26 @@ def cap_at(tris, outline, holes, z, up):
                          (verts[a][0], verts[a][1], z)))
 
 
+def disc_fan(tris, ring2d, z, up):
+    """A full horizontal disc at height z: a triangle fan from the (0,0) centre to a ccw ring.
+    up=True winds the face +z, up=False winds it -z. The ring is shared vertex-for-vertex with
+    whatever band it closes, so edge parity holds."""
+    c = (0.0, 0.0, z)
+    n = len(ring2d)
+    for j in range(n):
+        k = (j + 1) % n
+        pj = (ring2d[j][0], ring2d[j][1], z)
+        pk = (ring2d[k][0], ring2d[k][1], z)
+        if up:
+            tris.append((c, pj, pk))
+        else:
+            tris.append((c, pk, pj))
+
+
 def band(tris, A, B, outward=True):
     """Connect two equal-length rings of 3D points (A lower, B upper) with a quad strip. `outward`
-    winds the normals away from the axis (True) or toward it (False)."""
+    winds the normals away from the axis (True) or toward it (False). For two concentric rings at
+    the SAME z (a flat annulus), band(inner, outer, outward=True) faces -z and outward=False +z."""
     n = len(A)
     for j in range(n):
         k = (j + 1) % n
@@ -241,7 +257,7 @@ def normal(a, b, c):
     return (0.0, 0.0, 0.0) if m < 1e-12 else (nx / m, ny / m, nz / m)
 
 
-def write_binary_stl(path, tris, header=b"crackle dumbbell_stl - gift dumbbell formwork (POUR UNPROVEN)"):
+def write_binary_stl(path, tris, header=b"crackle dumbbell_stl - drum-cup dumbbell formwork (POUR UNPROVEN)"):
     with open(path, "wb") as fh:
         fh.write(header.ljust(80, b"\0"))
         fh.write(struct.pack("<I", len(tris)))
@@ -285,90 +301,56 @@ def verify(path, tris):
     return count, open_edges, bounds, degen
 
 
-# ----------------------------------------------------------------------------- END geometry (dome)
-# Self-supporting capped-cylinder vessel, printed BASE-DOWN, poured from the OPEN TOP. Outer silhouette:
-#     z in [0, z_knee]:  r(z) = R_base                                   (a straight vertical body)
-#     z in [z_knee, H ]: r(z) = r_top + (R_base-r_top)*(1-w**P)**Q       w = (z-z_knee)/(H-z_knee)
-# It is MAX at the base and MONOTONICALLY NON-INCREASING to r_top at the top (constant, then narrowing),
-# so no outer overhang exists at any z. The straight lower body gives a near-vertical CONSTANT-RADIUS
-# band for the wrapped NAME; the domed top narrows to the open pour hole. The dome height (H-z_knee) is
-# auto-scaled (end_geom) so the steepest wall slope equals MAX_WALL_SLOPE, which also bounds the inner
-# cavity skin's downward tilt below the support threshold => self-supporting at any weight.
-DOME_P = 1.4               # cap shape (1-w^P)^Q: rounded at both the knee (w=0) and the pour hole (w=1)
-DOME_Q = 1.6
-MAX_WALL_SLOPE = 0.75      # cap on |dr/dz| = tan(wall angle off vertical); 0.75 -> 37deg (< 45 = 1.0)
-CYL_FRAC = 0.45            # lower fraction of H that is the straight vertical body (the name band lives here)
+# ----------------------------------------------------------------------------- END geometry (drum cup)
+# The end is a straight open cylinder cup, printed CLOSED-FACE-DOWN. In the mesh (= print) frame the
+# closed face plate sits at z=0 on the bed, the walls rise vertically, and the open rim is the top.
+# Every flat internal surface faces UP; the one downward-tilted skin is the lip-flange chamfer,
+# whose slope is fixed by LIP_IN/LIP_RISE at |nz| ~0.62 — under the 0.707 support threshold. So the
+# cup has ZERO spanning downward overhangs by construction (measured anyway, see build_end).
+LIP_IN = 2.5     # rim lip flange, mm radially inward at the open rim — axial lock for the set gypsum
+LIP_RISE = 3.2   # chamfer rise under the lip, mm; slope atan(LIP_IN/LIP_RISE) ~38deg off vertical
+COLLAR_H = 25.0  # rod-bore collar height into the cavity, mm (blind socket depth for the rod tip)
 
 
-def _dome_shape(w):
-    """Dome-cap shape factor: 1 at the knee (w=0), 0 at the top (w=1); w clamped to [0,1]."""
-    w = 0.0 if w < 0.0 else (1.0 if w > 1.0 else w)
-    return (1.0 - w ** DOME_P) ** DOME_Q
+def collar_height(D, wall):
+    """Collar height, clamped so the collar always stays clear of the lip chamfer zone."""
+    return min(COLLAR_H, max(5.0, D - wall - LIP_RISE - 2.0))
 
 
-def _dome_shape_max_slope(samples=4000):
-    """max_w |d(shape)/dw| — a pure number for (P,Q). The dome height is scaled by this (end_geom) so
-    the wall never exceeds MAX_WALL_SLOPE at ANY size => the vessel is self-supporting at any weight."""
-    m = 0.0
-    for i in range(1, samples):
-        w = i / samples
-        d = DOME_P * DOME_Q * (w ** (DOME_P - 1.0)) * ((1.0 - w ** DOME_P) ** (DOME_Q - 1.0))
-        if d > m:
-            m = d
-    return m
-
-
-_SHAPE_MAX_SLOPE = _dome_shape_max_slope()
-
-
-def end_geom(size, wall):
-    """Vessel dimensions for base radius `size`: (H, r_top, port_r, z_knee).
-      port_r = OPEN pour-hole radius at the top (the inner opening, min(6, 0.30*R_base)),
-      r_top  = outer silhouette radius at z=H = port_r + wall (so the top rim annulus is `wall` wide),
-      z_knee = top of the straight body; the dome caps z in [z_knee, H],
-      H      = z_knee + dome height, dome height set so the steepest wall slope == MAX_WALL_SLOPE."""
-    port_r = min(6.0, 0.30 * size)
-    r_top = port_r + wall
-    span = max(1.0, size - r_top)
-    dome_h = span * _SHAPE_MAX_SLOPE / MAX_WALL_SLOPE
-    H = dome_h / (1.0 - CYL_FRAC)
-    z_knee = CYL_FRAC * H
-    return H, r_top, port_r, z_knee
-
-
-def dome_r(size, z, H, r_top, z_knee):
-    """Outer silhouette radius at height z: R_base (=size) up to z_knee, then monotonically
-    non-increasing to r_top at z=H. Every layer <= the one below, so the outer skin never overhangs."""
-    if z <= z_knee:
-        return size
-    return r_top + (size - r_top) * _dome_shape((z - z_knee) / (H - z_knee))
-
-
-def cavity_volume(size, wall, side_n):
-    """Modeled gypsum volume (mm^3): integrate the INNER cross-sectional area (the meshed side_n-gon of
-    radius r_out(z)-wall) from the floor (z=wall) to the OPEN brim (z=H). Open-topped: no top wall."""
-    H, r_top, _, z_knee = end_geom(size, wall)
-    z0, z1 = wall, H
+def cavity_volume(R, aspect, wall, side_n, rc_out):
+    """Modeled gypsum volume (mm^3) of one drum cup, filled to the open brim: integrate the meshed
+    side_n-gon cross-section from the cavity floor (z=wall) to the rim (z=D), narrowing across the
+    lip chamfer, MINUS the collar keep-out disc (collar tube + blind bore, r<=rc_out, gypsum-free)."""
+    D = 2.0 * R * aspect
+    ch = collar_height(D, wall)
+    k = abs(_area2(circle(0.0, 0.0, 1.0, side_n)))       # n-gon area factor: A(r) = k * r^2
+    z0, z1 = wall, D
     if z1 <= z0:
         return 0.0
-    nz = 160
+    nz = 200
     dz = (z1 - z0) / nz
     vol = 0.0
     for i in range(nz):
         z = z0 + (i + 0.5) * dz
-        r_in = max(0.1, dome_r(size, z, H, r_top, z_knee) - wall)
-        vol += abs(_area2(circle(0.0, 0.0, r_in, side_n))) * dz
+        if z <= D - LIP_RISE:
+            r_in = R - wall
+        else:
+            r_in = R - wall - LIP_IN * (z - (D - LIP_RISE)) / LIP_RISE
+        a = k * max(0.1, r_in) ** 2
+        if z <= wall + ch:
+            a -= k * rc_out ** 2                          # collar + bore keep-out
+        vol += max(0.0, a) * dz
     return vol
 
 
-def size_for_weight(weight_kg, density_gcc, wall, side_n):
-    """Bisect the dome base radius so the modeled cavity holds the per-end fill volume
-    (weight/density/2 in litres -> mm^3). cavity_volume rises with size, so bisection converges."""
+def size_for_weight(weight_kg, density_gcc, aspect, wall, side_n, rc_out):
+    """Bisect the drum outer radius R (depth D = 2*R*aspect follows) so the modeled cavity holds the
+    per-end fill volume (weight/density/2 in litres -> mm^3). Volume rises with R, so it converges."""
     vf = weight_kg / density_gcc / 2.0 * 1.0e6
-    lo, hi = 5.0, 250.0
+    lo, hi = max(12.0, rc_out + wall + LIP_IN + 2.0), 250.0
     for _ in range(80):
         mid = 0.5 * (lo + hi)
-        if cavity_volume(mid, wall, side_n) < vf:
+        if cavity_volume(mid, aspect, wall, side_n, rc_out) < vf:
             lo = mid
         else:
             hi = mid
@@ -378,8 +360,8 @@ def size_for_weight(weight_kg, density_gcc, wall, side_n):
 def overhang_count(tris, thresh=0.707, z_floor=0.5):
     """Count SUPPORT-NEEDING facets in a triangle soup: downward-facing (nz<0) steeper than 45deg off
     vertical (nz < -thresh), EXCLUDING anything on the base layer (zmin < z_floor, which sits ON the
-    bed). Returns (bad, total). For the self-supporting shell this MUST be ~0 (the outer skin faces
-    up-and-out; the inner skin's downward tilt is capped below thresh by MAX_WALL_SLOPE)."""
+    bed). Returns (bad, total). For the drum cup this MUST be 0 (walls vertical, annuli face up, lip
+    chamfer capped at |nz| ~0.62)."""
     bad = 0
     for vs in tris:
         _, _, nz = normal(*vs)
@@ -403,57 +385,59 @@ def overhang_report(path, thresh=0.707, z_floor=0.5):
 
 
 def build_end(a):
+    """One drum-cup end as a single closed solid of revolution + the NAME ribs on the drum side.
+    Mesh frame = print frame: closed face at z=0 (bed), open rim at z=D."""
     side_n = a.points
     wall = a.wall
-    size, vf = size_for_weight(a.weight, a.fill_density, wall, side_n)
-    H, r_top, port_r, z_knee = end_geom(size, wall)
-    rod_r = a.core_dia / 2.0 + 0.4                      # rod clearance bore through the base floor
+    rod_r = a.core_dia / 2.0 + 0.4                       # rod clearance bore (blind socket)
+    rc_out = rod_r + wall                                # collar outer radius
+    R, vf = size_for_weight(a.weight, a.fill_density, a.aspect, wall, side_n, rc_out)
+    D = 2.0 * R * a.aspect
+    ch = collar_height(D, wall)
 
-    def rout(z):
-        return dome_r(size, z, H, r_top, z_knee)
-
-    # z-levels: a ring exactly AT the knee (a crisp body->dome crease) + dense sampling over the dome.
-    ncyl, ndome = 6, 64
-    zs = [z_knee * i / ncyl for i in range(ncyl)] + \
-         [z_knee + (H - z_knee) * i / ndome for i in range(ndome + 1)]
-    zin = [wall + (z_knee - wall) * i / ncyl for i in range(ncyl)] + \
-          [z_knee + (H - z_knee) * i / ndome for i in range(ndome + 1)]
+    # one ring object per radius, reused at every z — exact shared vertices = clean edge parity
+    ring_R = circle(0.0, 0.0, R, side_n)                 # outer drum
+    ring_Rw = circle(0.0, 0.0, R - wall, side_n)         # inner cavity wall
+    ring_lip = circle(0.0, 0.0, R - wall - LIP_IN, side_n)  # rim opening inside the lip
+    ring_rc = circle(0.0, 0.0, rc_out, side_n)           # collar outer
+    ring_rod = circle(0.0, 0.0, rod_r, side_n)           # bore
 
     tris = []
-    outer_rings = [circle(0.0, 0.0, rout(z), side_n) for z in zs]
-    inner_rings = [circle(0.0, 0.0, max(0.5, rout(z) - wall), side_n) for z in zin]
-    rod_ring = circle(0.0, 0.0, rod_r, side_n)
+    # closed outer FACE: full disc ON THE BED at z=0, facing -z — stays clean flat (no text here)
+    disc_fan(tris, ring_R, 0.0, up=False)
+    # outer drum wall: straight vertical cylinder z=0..D
+    band(tris, lift(ring_R, 0.0), lift(ring_R, D), outward=True)
+    # rim top annulus at z=D: lip opening -> outer edge, faces up
+    band(tris, lift(ring_lip, D), lift(ring_R, D), outward=False)
+    # lip chamfer underside: cavity wall (R-wall @ D-LIP_RISE) -> lip edge (@ D); |nz| ~0.62
+    band(tris, lift(ring_Rw, D - LIP_RISE), lift(ring_lip, D), outward=False)
+    # inner cavity wall: vertical, cavity floor -> chamfer start
+    band(tris, lift(ring_Rw, wall), lift(ring_Rw, D - LIP_RISE), outward=False)
+    # cavity floor annulus at z=wall: collar outer -> cavity wall, faces up
+    band(tris, lift(ring_rc, wall), lift(ring_Rw, wall), outward=False)
+    # rod-bore collar: outer wall, top annulus (faces up), bore wall, blind-bore floor disc
+    band(tris, lift(ring_rc, wall), lift(ring_rc, wall + ch), outward=True)
+    band(tris, lift(ring_rod, wall + ch), lift(ring_rc, wall + ch), outward=False)
+    band(tris, lift(ring_rod, wall), lift(ring_rod, wall + ch), outward=False)
+    disc_fan(tris, ring_rod, wall, up=True)
 
-    # ---- outer skin: vertical body then narrowing cap, every facet faces up-and-out (nz >= 0) ----
-    for i in range(len(zs) - 1):
-        band(tris, lift(outer_rings[i], zs[i]), lift(outer_rings[i + 1], zs[i + 1]), outward=True)
-    # ---- inner cavity skin: faces in-and-down, |nz| < 0.58 by the slope cap (below support thresh) ----
-    for i in range(len(zin) - 1):
-        band(tris, lift(inner_rings[i], zin[i]), lift(inner_rings[i + 1], zin[i + 1]), outward=False)
-    # ---- base: widest flat annulus at z=0 (underside on the bed) + cavity floor + rod-bore collar ----
-    band(tris, lift(rod_ring, 0.0), lift(outer_rings[0], 0.0), outward=True)      # base underside, -z
-    band(tris, lift(rod_ring, wall), lift(inner_rings[0], wall), outward=False)   # cavity floor, +z
-    band(tris, lift(rod_ring, 0.0), lift(rod_ring, wall), outward=False)          # rod bore lining, -r
-    # ---- top rim annulus at z=H: outer rim stepped down to the OPEN pour hole (faces up) ----
-    band(tris, lift(inner_rings[-1], H), lift(outer_rings[-1], H), outward=False)  # pour rim, +z
+    shell_bad, shell_tot = overhang_count(tris)          # the drum shell alone MUST be 0
 
-    shell_bad, shell_tot = overhang_count(tris)         # the SHELL FORM alone must be ~0
-
-    # ---- NAME wrapped on the vertical body band (~37% H, constant radius = size, raised ribs) ----
+    # NAME on the drum SIDE — plate-style rim lettering, wrapped mid-wall (self-supporting bead).
+    # NOT on the bed face: raised text printed face-down would squish into the bed.
     name = a.name
     if name:
-        band_cy = 0.37 * H                              # inside the straight body (below z_knee = 0.45*H)
-        name_h = 0.10 * H
-        arc_budget = 1.7 * size                         # ~97deg of the forward-facing arc
+        name_h = 0.40 * D
+        arc_budget = 1.9 * R                             # ~109deg of the forward-facing arc
         w = text_width(name, name_h)
         if w > arc_budget:
             name_h *= arc_budget / w
-        emboss_on_cylinder(tris, name, cyl_radius=size, z_center=band_cy,
+        emboss_on_cylinder(tris, name, cyl_radius=R, z_center=D / 2.0,
                            angle_center_rad=0.0, height_mm=name_h)
 
-    cav = cavity_volume(size, wall, side_n)
-    info = dict(size=size, H=H, r_top=r_top, port_r=port_r, rod_r=rod_r, z_knee=z_knee, vf=vf, cav=cav,
-                mass=cav * a.fill_density / 1.0e6,              # kg (mm^3 * g/cc / 1e6)
+    cav = cavity_volume(R, a.aspect, wall, side_n, rc_out)
+    info = dict(R=R, D=D, rod_r=rod_r, rc_out=rc_out, ch=ch, vf=vf, cav=cav,
+                mass=cav * a.fill_density / 1.0e6,       # kg (mm^3 * g/cc / 1e6)
                 shell_bad=shell_bad, shell_tot=shell_tot)
     return tris, info
 
@@ -475,9 +459,29 @@ def build_grip(a):
     cap_at(tris, outer2d, [bore2d], L, up=True)                 # top cap
     band(tris, lift(outer2d, 0.0), lift(outer2d, L), outward=True)      # fluted outer wall
     band(tris, lift(bore2d, 0.0), lift(bore2d, L), outward=False)       # rod bore wall
-
     info = dict(grip_R=grip_R, L=L, bore_r=bore_r, ridges=ridges)
     return tris, info
+
+
+# ----------------------------------------------------------------------------- assembled viz
+def build_assembled(a):
+    """VIZ ONLY — never print this file. The dumbbell as assembled: [drum][grip tube][drum] on a
+    shared axis along X, open faces inward against the grip ends, grip length between the two open
+    rims, lying horizontal on the table (lowest drum point at z=0). Proper rotations only, so the
+    soup stays watertight (three disjoint closed solids)."""
+    end_tris, einfo = build_end(a)
+    grip_tris, ginfo = build_grip(a)
+    D, R = einfo["D"], einfo["R"]
+    hg = a.grip_len / 2.0
+
+    tris = []
+    for (p0, p1, p2) in end_tris:                        # LEFT drum: mesh +z -> +x (open rim at -hg)
+        tris.append(tuple((v[2] - hg - D, -v[1], v[0] + R) for v in (p0, p1, p2)))
+    for (p0, p1, p2) in end_tris:                        # RIGHT drum: mesh +z -> -x (open rim at +hg)
+        tris.append(tuple((-v[2] + hg + D, v[1], v[0] + R) for v in (p0, p1, p2)))
+    for (p0, p1, p2) in grip_tris:                       # grip: mesh z 0..L -> x -hg..+hg
+        tris.append(tuple((v[2] - hg, v[1], -v[0] + R) for v in (p0, p1, p2)))
+    return tris, dict(total_len=2.0 * D + a.grip_len, R=R, D=D, grip_R=ginfo["grip_R"])
 
 
 # ----------------------------------------------------------------------------- io helpers
@@ -498,12 +502,15 @@ def main():
     ap.add_argument("--fill-density", type=float, default=1.9, help="cast fill density g/cc (gypsum+sand ~1.9)")
     ap.add_argument("--grip-dia", type=float, default=32.0, help="grip outer diameter mm")
     ap.add_argument("--grip-len", type=float, default=130.0, help="grip length mm")
-    ap.add_argument("--name", default="GIFT", help="name embossed on each end's side band")
+    ap.add_argument("--name", default="OLEG", help="name wrapped on each end's drum side")
     ap.add_argument("--core-dia", type=float, default=6.35, help="rod core diameter mm (bamboo 6.35 / steel ~12)")
     ap.add_argument("--wall", type=float, default=1.6, help="shell / sleeve wall thickness mm")
+    ap.add_argument("--aspect", type=float, default=0.55, help="end drum depth/dia ratio (plate look ~0.55)")
     ap.add_argument("--points", type=int, default=96, help="samples around round ends")
     ap.add_argument("--part", choices=("end", "grip", "all"), default="all")
     ap.add_argument("--out", default=None, help="output STL path (base name; 'all' derives _end/_grip)")
+    ap.add_argument("--viz", action="store_true",
+                    help="ALSO write <stem>_assembled.stl — the full dumbbell lying on its side (VIZ ONLY)")
     a = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -518,15 +525,18 @@ def main():
         bad, tot = overhang_report(path)                # measured from the emitted STL (whole part)
         text_bad = bad - info['shell_bad']              # residual = raised-text beads (self-supporting)
         print(f"  PRINTABLE: {info['shell_bad']} downward faces >45deg off vertical above the base "
-              f"(target ~0)  [dome shell; {info['shell_tot']} facets]")
+              f"(target 0)  [drum shell; {info['shell_tot']} facets]")
         if text_bad > 0:
-            print(f"  (+{text_bad} downfacing micro-facets = the raised-NAME beads on the vertical body "
-                  f"band; raised text on a vertical wall is self-supporting, no support)")
-        print(f"  dome base Ø{2*info['size']:.1f}mm, height {info['H']:.1f}mm (base-down, self-supporting)")
+            print(f"  (+{text_bad} downfacing micro-facets = the raised-NAME bead on the drum side; "
+                  f"raised text on a vertical wall is self-supporting, no support)")
+        print(f"  drum Ø{2*info['R']:.1f} x {info['D']:.1f}mm deep (aspect {a.aspect:g}), wall {a.wall:g}, "
+              f"prints closed-face-down")
+        print(f"  rim lip {LIP_IN:g}mm inward (gypsum axial lock, chamfered underside), "
+              f"collar socket Ø{2*info['rod_r']:.2f} x {info['ch']:.0f}mm deep at the face centre")
         print(f"  target per-end fill {info['vf']/1e3:.0f} cc -> modeled cavity {info['cav']/1e3:.0f} cc "
               f"= {info['mass']:.2f} kg gypsum/end ({2*info['mass']:.2f} kg total, target {a.weight:g})")
-        print(f"  rod bore Ø{2*info['rod_r']:.2f} (base/grip side), OPEN pour hole Ø{2*info['port_r']:.1f} (top), "
-              f"name '{a.name}' on the side — ROD CORE MANDATORY, ends identical for balance, POUR UNPROVEN")
+        print(f"  name '{a.name}' wrapped on the drum side — ROD CORE MANDATORY, "
+              f"ends identical for balance, POUR UNPROVEN")
 
     if a.part in ("grip", "all"):
         tris, info = build_grip(a)
@@ -534,6 +544,13 @@ def main():
         _emit(path, tris, "GRIP")
         print(f"  grip Ø{a.grip_dia:g} x {info['L']:g}mm, {info['ridges']} flutes, "
               f"through-bore Ø{2*info['bore_r']:.2f} for the rod core")
+
+    if a.viz:
+        tris, info = build_assembled(a)
+        path = f"{stem}_assembled{ext}"
+        _emit(path, tris, "ASSEMBLED")
+        print(f"  VIZ ONLY (do not print): [drum][grip][drum] on one axis, open faces inward, "
+              f"{info['total_len']:.0f}mm end to end, lying horizontal")
 
 
 if __name__ == "__main__":
