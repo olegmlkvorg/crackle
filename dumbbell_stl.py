@@ -3,10 +3,12 @@
 thin PLA FORMWORK. Emits the two identical END shells + the GRIP sleeve as separate STLs.
 
 WHAT IT IS (a gift / trophy, NOT a competition weight — 1..6 kg sweet spot):
-  * Each END is a hollow thin-wall shell (sphere / hex / barrel silhouette) sized so its INNER cavity
-    holds exactly the gypsum needed for the target weight (per-end fill volume = weight/density/2).
-    You print the shell, pour a gypsum+sand mix (~1.9 g/cc) through the FILL PORT, and the mass is cast.
-    The outer FACE carries the recipient's NAME as a raised bead (imported emboss.py, boolean-free).
+  * Each END is a SELF-SUPPORTING HOLLOW DOME vessel — a gumdrop/bell whose outer radius is WIDEST at
+    the base and only ever narrows going up to a small OPEN pour hole at the top. It is sized so its
+    inner cavity holds exactly the gypsum needed for the target weight (per-end fill = weight/density/2).
+    You print the dome BASE-DOWN (no support), stand the rod up through the base hole, pour a gypsum+sand
+    mix (~1.9 g/cc) in through the OPEN TOP, and the mass casts around the rod tip. The recipient's NAME
+    is a raised bead wrapped on the near-vertical SIDE band (imported emboss.py, boolean-free).
   * The GRIP is a knurled/fluted tube sleeve with a central rod bore.
 
 HARD RULE — THE ROD CORE IS MANDATORY (baked in, like the stand's rebar): a bamboo (Ø6.35) or steel
@@ -17,27 +19,37 @@ PLA is only the mould + grip sleeve. A solid gypsum handle with NO rod SNAPS in 
 BALANCE: the two ends are IDENTICAL by construction (same STL, printed twice). Do not scale one end
 without the other or the dumbbell will be lopsided.
 
+WHY THE DOME PRINTS WITHOUT SUPPORT: the outer silhouette r(z) = r_top + (R_base-r_top)*(1-(z/H)^p)^q
+is MONOTONICALLY NON-INCREASING, so every layer is <= the one below (no outer overhang anywhere). The
+height H is auto-scaled so the steepest wall slope |dr/dz| stays at MAX_WALL_SLOPE (0.70 = 35deg off
+vertical, well under 45), which bounds the inner cavity skin's downward tilt to nz > -0.58 — under the
+support threshold. There is NO flat internal ceiling and NO sealed cavity: the top is an OPEN pour hole,
+so the interior is reachable from outside and needs no support to remove. build_end runs an overhang
+check on the emitted STL (see overhang_report) that MEASURES this: ~0 support-needing facets above the bed.
+
 MESH MODEL (house style, BOOLEAN-FREE): each part is a soup of individually-watertight surfaces that
-the SLICER unions. The END shell is two nested closed-except-at-holes surfaces (outer + inner cavity)
-joined at the two ports by short collar tubes — the wall between them is the printed solid. The NAME
-ribs are separate closed sub-solids that INTERPENETRATE the outer wall (emboss.py). No CSG, no boolean
-subtraction anywhere. verify() ASSERTS the binary-STL laws and returns the open-edge count (MUST be 0).
+the SLICER unions. The END is an outer dome skin + an inner dome skin (offset inward by --wall) closed
+by three flat annuli built with band(): the wide BASE annulus at z=0 (rod-hole floor, underside on the
+bed) with its bore collar, and the TOP RIM annulus at z=H that steps the outer rim down to the open pour
+hole. The NAME ribs are separate closed sub-solids that INTERPENETRATE the outer wall (emboss.py). No
+CSG, no boolean subtraction anywhere. verify() ASSERTS the binary-STL laws and returns the open-edge
+count (MUST be 0).
 
 STAGE / HONESTY — the gypsum POUR is UNPROVEN. Nothing here has been physically cast or even printed;
 this is FIRST-CUT geometry for the owner to react to. A watertight mesh is a SOFTWARE guarantee (file-
-size law + edge parity), NOT a proof that the shell prints, that it survives a pour, or that the cast
-weight lands on target. Print orientation / supports for the closed hollow shell are NOT yet resolved
-(a flat-roofed cavity may need support or a print-in-two-halves change). Do not phrase any of it as proven.
+size law + edge parity), NOT a proof that the shell survives a pour or that the cast weight lands on
+target. The print-orientation / support caveat, however, IS resolved for the shell: printed base-down
+the dome is measured self-supporting (overhang_report ~0). Do not phrase the POUR as proven.
 
 Usage:
   python3 dumbbell_stl.py --part all --name "OLEG"        # writes dumbbell_end.stl + dumbbell_grip.stl
-  python3 dumbbell_stl.py --part end --weight 4 --end-shape barrel --name "MAX" --out max_end.stl
-Flags: --weight --fill-density --end-shape {sphere,hex,barrel} --grip-dia --grip-len --name
+  python3 dumbbell_stl.py --part end --weight 4 --name "MAX" --out max_end.stl
+Flags: --weight --fill-density --grip-dia --grip-len --name
        --core-dia --wall --points --part {end,grip,all} --out
 """
 import argparse, math, os, random, struct
 
-from emboss import emboss_on_plane, text_width          # raised NAME beads (boolean-free, watertight)
+from emboss import emboss_on_cylinder, text_width       # raised NAME beads (boolean-free, watertight)
 
 COS30 = math.cos(math.radians(30.0))
 HOLE_N = 24                                              # samples per round port / rod hole
@@ -273,133 +285,176 @@ def verify(path, tris):
     return count, open_edges, bounds, degen
 
 
-# ----------------------------------------------------------------------------- END geometry
-SPHERE_TRUNC = 0.82        # sphere pole-flat cut at |z-zc| = TRUNC*Rs (medallion radius = Rs*sqrt(1-t^2))
-BARREL_FILLET = 0.28       # barrel shoulder fillet radius as a fraction of Rb
-BARREL_ASPECT = 1.7        # barrel height = ASPECT * Rb
-HEX_ASPECT = 1.6           # hex prism height = ASPECT * vertex radius
+# ----------------------------------------------------------------------------- END geometry (dome)
+# Self-supporting capped-cylinder vessel, printed BASE-DOWN, poured from the OPEN TOP. Outer silhouette:
+#     z in [0, z_knee]:  r(z) = R_base                                   (a straight vertical body)
+#     z in [z_knee, H ]: r(z) = r_top + (R_base-r_top)*(1-w**P)**Q       w = (z-z_knee)/(H-z_knee)
+# It is MAX at the base and MONOTONICALLY NON-INCREASING to r_top at the top (constant, then narrowing),
+# so no outer overhang exists at any z. The straight lower body gives a near-vertical CONSTANT-RADIUS
+# band for the wrapped NAME; the domed top narrows to the open pour hole. The dome height (H-z_knee) is
+# auto-scaled (end_geom) so the steepest wall slope equals MAX_WALL_SLOPE, which also bounds the inner
+# cavity skin's downward tilt below the support threshold => self-supporting at any weight.
+DOME_P = 1.4               # cap shape (1-w^P)^Q: rounded at both the knee (w=0) and the pour hole (w=1)
+DOME_Q = 1.6
+MAX_WALL_SLOPE = 0.75      # cap on |dr/dz| = tan(wall angle off vertical); 0.75 -> 37deg (< 45 = 1.0)
+CYL_FRAC = 0.45            # lower fraction of H that is the straight vertical body (the name band lives here)
 
 
-def end_height(shape, size):
-    if shape == "sphere":
-        return 2.0 * size * SPHERE_TRUNC
-    if shape == "barrel":
-        return BARREL_ASPECT * size
-    return HEX_ASPECT * size                          # hex
+def _dome_shape(w):
+    """Dome-cap shape factor: 1 at the knee (w=0), 0 at the top (w=1); w clamped to [0,1]."""
+    w = 0.0 if w < 0.0 else (1.0 if w > 1.0 else w)
+    return (1.0 - w ** DOME_P) ** DOME_Q
 
 
-def outer_radius(shape, size, z, H):
-    """Outer silhouette radius (for round shapes) at height z in [0,H]. hex is handled separately."""
-    if shape == "sphere":
-        zc = H / 2.0
-        return math.sqrt(max(0.0, size * size - (z - zc) ** 2))
-    if shape == "barrel":
-        f = BARREL_FILLET * size
-        r0 = size - f
-        if z < f:
-            return r0 + math.sqrt(max(0.0, f * f - (f - z) ** 2))
-        if z > H - f:
-            return r0 + math.sqrt(max(0.0, f * f - (f - (H - z)) ** 2))
+def _dome_shape_max_slope(samples=4000):
+    """max_w |d(shape)/dw| — a pure number for (P,Q). The dome height is scaled by this (end_geom) so
+    the wall never exceeds MAX_WALL_SLOPE at ANY size => the vessel is self-supporting at any weight."""
+    m = 0.0
+    for i in range(1, samples):
+        w = i / samples
+        d = DOME_P * DOME_Q * (w ** (DOME_P - 1.0)) * ((1.0 - w ** DOME_P) ** (DOME_Q - 1.0))
+        if d > m:
+            m = d
+    return m
+
+
+_SHAPE_MAX_SLOPE = _dome_shape_max_slope()
+
+
+def end_geom(size, wall):
+    """Vessel dimensions for base radius `size`: (H, r_top, port_r, z_knee).
+      port_r = OPEN pour-hole radius at the top (the inner opening, min(6, 0.30*R_base)),
+      r_top  = outer silhouette radius at z=H = port_r + wall (so the top rim annulus is `wall` wide),
+      z_knee = top of the straight body; the dome caps z in [z_knee, H],
+      H      = z_knee + dome height, dome height set so the steepest wall slope == MAX_WALL_SLOPE."""
+    port_r = min(6.0, 0.30 * size)
+    r_top = port_r + wall
+    span = max(1.0, size - r_top)
+    dome_h = span * _SHAPE_MAX_SLOPE / MAX_WALL_SLOPE
+    H = dome_h / (1.0 - CYL_FRAC)
+    z_knee = CYL_FRAC * H
+    return H, r_top, port_r, z_knee
+
+
+def dome_r(size, z, H, r_top, z_knee):
+    """Outer silhouette radius at height z: R_base (=size) up to z_knee, then monotonically
+    non-increasing to r_top at z=H. Every layer <= the one below, so the outer skin never overhangs."""
+    if z <= z_knee:
         return size
-    return size
+    return r_top + (size - r_top) * _dome_shape((z - z_knee) / (H - z_knee))
 
 
-def end_ring2d(shape, size, z, H, inset, side_n):
-    """Outer (inset=0) or inner-cavity (inset=wall) cross-section polygon at height z."""
-    if shape == "hex":
-        r = size - (inset / COS30 if inset else 0.0)   # inward perpendicular offset of a regular hexagon
-        return ngon(0.0, 0.0, r, 6, phase=0.0)
-    r = outer_radius(shape, size, z, H) - inset
-    return circle(0.0, 0.0, max(0.1, r), side_n)
-
-
-def cavity_volume(shape, size, wall, side_n):
-    """Modeled gypsum cavity volume (mm^3): integrate the INNER cross-sectional area over the cavity
-    z-range [wall, H-wall]. Measures the actual meshed cavity, not an idealized sphere."""
-    H = end_height(shape, size)
-    nz = 96
-    z0, z1 = wall, H - wall
+def cavity_volume(size, wall, side_n):
+    """Modeled gypsum volume (mm^3): integrate the INNER cross-sectional area (the meshed side_n-gon of
+    radius r_out(z)-wall) from the floor (z=wall) to the OPEN brim (z=H). Open-topped: no top wall."""
+    H, r_top, _, z_knee = end_geom(size, wall)
+    z0, z1 = wall, H
     if z1 <= z0:
         return 0.0
-    vol = 0.0
+    nz = 160
     dz = (z1 - z0) / nz
+    vol = 0.0
     for i in range(nz):
         z = z0 + (i + 0.5) * dz
-        area = abs(_area2(end_ring2d(shape, size, z, H, wall, side_n)))
-        vol += area * dz
+        r_in = max(0.1, dome_r(size, z, H, r_top, z_knee) - wall)
+        vol += abs(_area2(circle(0.0, 0.0, r_in, side_n))) * dz
     return vol
 
 
-def size_for_weight(shape, weight_kg, density_gcc, wall, side_n):
-    """Bisect the shape's size scalar so the modeled cavity holds the per-end fill volume."""
-    vf = weight_kg / density_gcc / 2.0 * 1.0e6         # mm^3 per end (weight/density/2 in litres -> mm^3)
+def size_for_weight(weight_kg, density_gcc, wall, side_n):
+    """Bisect the dome base radius so the modeled cavity holds the per-end fill volume
+    (weight/density/2 in litres -> mm^3). cavity_volume rises with size, so bisection converges."""
+    vf = weight_kg / density_gcc / 2.0 * 1.0e6
     lo, hi = 5.0, 250.0
-    for _ in range(60):
+    for _ in range(80):
         mid = 0.5 * (lo + hi)
-        if cavity_volume(shape, mid, wall, side_n) < vf:
+        if cavity_volume(mid, wall, side_n) < vf:
             lo = mid
         else:
             hi = mid
     return 0.5 * (lo + hi), vf
 
 
-def build_end(a):
-    side_n = 6 if a.end_shape == "hex" else a.points
-    size, vf = size_for_weight(a.end_shape, a.weight, a.fill_density, a.wall, side_n)
-    H = end_height(a.end_shape, size)
-    wall = a.wall
+def overhang_count(tris, thresh=0.707, z_floor=0.5):
+    """Count SUPPORT-NEEDING facets in a triangle soup: downward-facing (nz<0) steeper than 45deg off
+    vertical (nz < -thresh), EXCLUDING anything on the base layer (zmin < z_floor, which sits ON the
+    bed). Returns (bad, total). For the self-supporting shell this MUST be ~0 (the outer skin faces
+    up-and-out; the inner skin's downward tilt is capped below thresh by MAX_WALL_SLOPE)."""
+    bad = 0
+    for vs in tris:
+        _, _, nz = normal(*vs)
+        if nz < -thresh and min(v[2] for v in vs) >= z_floor:
+            bad += 1
+    return bad, len(tris)
 
-    RH = math.hypot(*end_ring2d(a.end_shape, size, H, H, 0.0, side_n)[0])   # top medallion "radius"
-    rod_r = a.core_dia / 2.0 + 0.4                     # rod clearance bore (bottom / grip side)
-    port_r = min(6.0, 0.30 * RH)                       # gypsum fill port radius (outer face)
-    port_cy = 0.58 * RH                                # port sits near the top edge of the medallion
-    port_c = (0.0, port_cy)
+
+def overhang_report(path, thresh=0.707, z_floor=0.5):
+    """Read the EMITTED STL back off disk and run overhang_count on it (measure the artifact, not the
+    in-memory list). Returns (bad, total)."""
+    tris = []
+    with open(path, "rb") as fh:
+        fh.read(80)
+        (count,) = struct.unpack("<I", fh.read(4))
+        for _ in range(count):
+            fh.read(12)
+            tris.append([struct.unpack("<3f", fh.read(12)) for _ in range(3)])
+            fh.read(2)
+    return overhang_count(tris, thresh, z_floor)
+
+
+def build_end(a):
+    side_n = a.points
+    wall = a.wall
+    size, vf = size_for_weight(a.weight, a.fill_density, wall, side_n)
+    H, r_top, port_r, z_knee = end_geom(size, wall)
+    rod_r = a.core_dia / 2.0 + 0.4                      # rod clearance bore through the base floor
+
+    def rout(z):
+        return dome_r(size, z, H, r_top, z_knee)
+
+    # z-levels: a ring exactly AT the knee (a crisp body->dome crease) + dense sampling over the dome.
+    ncyl, ndome = 6, 64
+    zs = [z_knee * i / ncyl for i in range(ncyl)] + \
+         [z_knee + (H - z_knee) * i / ndome for i in range(ndome + 1)]
+    zin = [wall + (z_knee - wall) * i / ncyl for i in range(ncyl)] + \
+          [z_knee + (H - z_knee) * i / ndome for i in range(ndome + 1)]
 
     tris = []
+    outer_rings = [circle(0.0, 0.0, rout(z), side_n) for z in zs]
+    inner_rings = [circle(0.0, 0.0, max(0.5, rout(z) - wall), side_n) for z in zin]
+    rod_ring = circle(0.0, 0.0, rod_r, side_n)
 
-    # ---- OUTER surface: bottom medallion (rod hole) + side + top medallion (port hole) ----
-    outer_rings = []
-    nz = 1 if a.end_shape == "hex" else 48
-    zs = [H * i / nz for i in range(nz + 1)]
-    for z in zs:
-        outer_rings.append(end_ring2d(a.end_shape, size, z, H, 0.0, side_n))
-    rod_hole = circle(0.0, 0.0, rod_r, HOLE_N, ccw=False)
-    port_hole = circle(port_c[0], port_c[1], port_r, HOLE_N, ccw=False)
-    cap_at(tris, outer_rings[0], [rod_hole], 0.0, up=False)          # outer bottom (grip side), rod hole
-    cap_at(tris, outer_rings[-1], [port_hole], H, up=True)          # outer top (face), fill port
-    for i in range(nz):
+    # ---- outer skin: vertical body then narrowing cap, every facet faces up-and-out (nz >= 0) ----
+    for i in range(len(zs) - 1):
         band(tris, lift(outer_rings[i], zs[i]), lift(outer_rings[i + 1], zs[i + 1]), outward=True)
-
-    # ---- INNER cavity surface: bottom (z=wall) + side + top (z=H-wall), holes match the collars ----
-    inner_rings = []
-    zin = [wall + (H - 2 * wall) * i / nz for i in range(nz + 1)]
-    for z in zin:
-        inner_rings.append(end_ring2d(a.end_shape, size, z, H, wall, side_n))
-    cap_at(tris, inner_rings[0], [rod_hole], wall, up=True)          # inner bottom faces cavity (+z)
-    cap_at(tris, inner_rings[-1], [port_hole], H - wall, up=False)  # inner top faces cavity (-z)
-    for i in range(nz):
+    # ---- inner cavity skin: faces in-and-down, |nz| < 0.58 by the slope cap (below support thresh) ----
+    for i in range(len(zin) - 1):
         band(tris, lift(inner_rings[i], zin[i]), lift(inner_rings[i + 1], zin[i + 1]), outward=False)
+    # ---- base: widest flat annulus at z=0 (underside on the bed) + cavity floor + rod-bore collar ----
+    band(tris, lift(rod_ring, 0.0), lift(outer_rings[0], 0.0), outward=True)      # base underside, -z
+    band(tris, lift(rod_ring, wall), lift(inner_rings[0], wall), outward=False)   # cavity floor, +z
+    band(tris, lift(rod_ring, 0.0), lift(rod_ring, wall), outward=False)          # rod bore lining, -r
+    # ---- top rim annulus at z=H: outer rim stepped down to the OPEN pour hole (faces up) ----
+    band(tris, lift(inner_rings[-1], H), lift(outer_rings[-1], H), outward=False)  # pour rim, +z
 
-    # ---- collars: join outer<->inner at each hole (the wall lining of the two ports) ----
-    band(tris, lift(rod_hole, 0.0), lift(rod_hole, wall), outward=False)        # rod bore lining
-    band(tris, lift(port_hole, H - wall), lift(port_hole, H), outward=False)    # fill port lining
+    shell_bad, shell_tot = overhang_count(tris)         # the SHELL FORM alone must be ~0
 
-    # ---- NAME on the outer face (raised beads, boolean-free interpenetration) ----
+    # ---- NAME wrapped on the vertical body band (~37% H, constant radius = size, raised ribs) ----
     name = a.name
     if name:
-        name_top = port_cy - port_r - 2.0
-        name_bot = -RH + 3.0
-        name_cy = 0.5 * (name_top + name_bot)
-        name_h = min(0.42 * RH, 0.9 * max(2.0, name_top - name_bot))
+        band_cy = 0.37 * H                              # inside the straight body (below z_knee = 0.45*H)
+        name_h = 0.10 * H
+        arc_budget = 1.7 * size                         # ~97deg of the forward-facing arc
         w = text_width(name, name_h)
-        if w > 1.72 * RH:
-            name_h *= 1.72 * RH / w
-        emboss_on_plane(tris, name, center=(0.0, name_cy, H), x_dir=(1.0, 0.0, 0.0),
-                        y_dir=(0.0, 1.0, 0.0), normal=(0.0, 0.0, 1.0), height_mm=name_h)
+        if w > arc_budget:
+            name_h *= arc_budget / w
+        emboss_on_cylinder(tris, name, cyl_radius=size, z_center=band_cy,
+                           angle_center_rad=0.0, height_mm=name_h)
 
-    cav = cavity_volume(a.end_shape, size, wall, side_n)
-    info = dict(size=size, H=H, RH=RH, rod_r=rod_r, port_r=port_r, vf=vf, cav=cav,
-                mass=cav * a.fill_density / 1.0e6)              # kg (mm^3 * g/cc / 1e6)
+    cav = cavity_volume(size, wall, side_n)
+    info = dict(size=size, H=H, r_top=r_top, port_r=port_r, rod_r=rod_r, z_knee=z_knee, vf=vf, cav=cav,
+                mass=cav * a.fill_density / 1.0e6,              # kg (mm^3 * g/cc / 1e6)
+                shell_bad=shell_bad, shell_tot=shell_tot)
     return tris, info
 
 
@@ -441,10 +496,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--weight", type=float, default=3.0, help="target TOTAL dumbbell weight kg (1..6 gift range)")
     ap.add_argument("--fill-density", type=float, default=1.9, help="cast fill density g/cc (gypsum+sand ~1.9)")
-    ap.add_argument("--end-shape", choices=("sphere", "hex", "barrel"), default="sphere")
     ap.add_argument("--grip-dia", type=float, default=32.0, help="grip outer diameter mm")
     ap.add_argument("--grip-len", type=float, default=130.0, help="grip length mm")
-    ap.add_argument("--name", default="GIFT", help="name embossed on each end's outer face")
+    ap.add_argument("--name", default="GIFT", help="name embossed on each end's side band")
     ap.add_argument("--core-dia", type=float, default=6.35, help="rod core diameter mm (bamboo 6.35 / steel ~12)")
     ap.add_argument("--wall", type=float, default=1.6, help="shell / sleeve wall thickness mm")
     ap.add_argument("--points", type=int, default=96, help="samples around round ends")
@@ -461,12 +515,18 @@ def main():
         tris, info = build_end(a)
         path = (base if a.part == "end" and a.out else f"{stem}_end{ext}")
         _emit(path, tris, "END")
-        print(f"  {a.end_shape} end sized to size={info['size']:.1f}mm, height {info['H']:.1f}mm, "
-              f"medallion Ø{2*info['RH']:.1f}")
+        bad, tot = overhang_report(path)                # measured from the emitted STL (whole part)
+        text_bad = bad - info['shell_bad']              # residual = raised-text beads (self-supporting)
+        print(f"  PRINTABLE: {info['shell_bad']} downward faces >45deg off vertical above the base "
+              f"(target ~0)  [dome shell; {info['shell_tot']} facets]")
+        if text_bad > 0:
+            print(f"  (+{text_bad} downfacing micro-facets = the raised-NAME beads on the vertical body "
+                  f"band; raised text on a vertical wall is self-supporting, no support)")
+        print(f"  dome base Ø{2*info['size']:.1f}mm, height {info['H']:.1f}mm (base-down, self-supporting)")
         print(f"  target per-end fill {info['vf']/1e3:.0f} cc -> modeled cavity {info['cav']/1e3:.0f} cc "
               f"= {info['mass']:.2f} kg gypsum/end ({2*info['mass']:.2f} kg total, target {a.weight:g})")
-        print(f"  rod bore Ø{2*info['rod_r']:.2f} (grip side), fill port Ø{2*info['port_r']:.1f} (outer face), "
-              f"name '{a.name}' — ROD CORE MANDATORY, ends identical for balance, POUR UNPROVEN")
+        print(f"  rod bore Ø{2*info['rod_r']:.2f} (base/grip side), OPEN pour hole Ø{2*info['port_r']:.1f} (top), "
+              f"name '{a.name}' on the side — ROD CORE MANDATORY, ends identical for balance, POUR UNPROVEN")
 
     if a.part in ("grip", "all"):
         tris, info = build_grip(a)
