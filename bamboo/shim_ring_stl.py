@@ -8,8 +8,10 @@ O7.0. A shim ring slips onto the rod and fills the per-stick difference:
 
   RING per 0.1 mm grade (5.8 5.9 6.0 6.1 6.2):
     ID    = the rod grade (TPU stretches a hair onto the stick = stays put)
-    wall  = (BORE - SHIM_COMPRESS - rod)/2, floored at TPU_WALL_MIN 0.4 -- the stack
-            rod+2*wall is SHIM_COMPRESS (0.15) under the bore so the TPU squeezes = grip.
+    wall  = (BORE + SHIM_COMPRESS - rod)/2, floored at TPU_WALL_MIN 0.4 -- the stack
+            rod+2*wall is SHIM_COMPRESS (0.15) OVER the bore, so the TPU must be squeezed
+            to enter and that squeeze is the grip. It read 'under' until 2026-08-03 and every
+            shim rattled; a shim smaller than its bore holds nothing.
             The 6.1 and 6.2 grades sit ON the 0.4 print floor, so their squeeze allowance
             shrinks to 0.10/0.00 (noted per ring; a 6.2 stick is a direct TPU-free-ish fit).
     SPLIT by a 20deg gap: clips onto a rod mid-length, and the gap is extra squeeze room.
@@ -57,7 +59,7 @@ def grades():
 
 def ring_dims(rod):
     """(ID, wall, OD, squeeze) for a grade. All from rod_constants -- no magic numbers."""
-    wall = max(RC.TPU_WALL_MIN, (RC.BORE - RC.SHIM_COMPRESS - rod) / 2.0)
+    wall = max(RC.TPU_WALL_MIN, (RC.BORE + RC.SHIM_COMPRESS - rod) / 2.0)
     od = rod + 2.0 * wall
     return rod, wall, od, RC.BORE - od
 
@@ -166,9 +168,18 @@ def verify_ring(path, rod, wall, od, squeeze):
         ("watertight", unpaired == 0, "%d unpaired edges" % unpaired),
         ("bore ID == rod %.1f" % rod, abs(id_meas - rod) < 0.02,
          "%.3f measured (TPU squeezes onto the stick)" % id_meas),
-        ("OD == %.2f = bore - %.2f" % (od, squeeze), abs(od_meas - od) < 0.02,
+        ("OD == %.2f = bore + %.2f" % (od, squeeze), abs(od_meas - od) < 0.02,
          "%.3f measured; squeeze allowance %.2f%s" % (od_meas, squeeze,
           " (ON the 0.4 wall floor)" if wall <= RC.TPU_WALL_MIN + 1e-9 else "")),
+        # ABSOLUTE grip test, added 2026-08-03. The check above compares the emitted OD to a
+        # number computed by the SAME formula that sizes it, so it passed happily while every
+        # shim came out 0.15 UNDER the bore and gripped nothing. Self-consistency is not
+        # correctness. This one tests the only thing that matters against an external constant:
+        # a shim grips if and only if it is BIGGER than the hole it must be squeezed into.
+        ("GRIPS: OD %.2f > bore %.2f" % (od_meas, RC.BORE), od_meas > RC.BORE + 0.05,
+         "squeeze into the bore %+.2f mm (a shim smaller than its bore holds nothing)"
+         % (od_meas - RC.BORE)),
+
         ("wall >= %.1f" % RC.TPU_WALL_MIN, wall_meas >= RC.TPU_WALL_MIN - 0.02,
          "%.3f measured" % wall_meas),
         ("split gap present", not in_gap, "%d verts inside the %gdeg gap window"
@@ -210,7 +221,7 @@ def main():
                     help="undersize a wall to PROVE the gate fires")
     a = ap.parse_args()
     print("SHIM FAMILY: rods MEASURE %g-%g -> ring per 0.1 grade; bore O%g FLAT; "
-          "stack = rod + 2*wall = bore - %g squeeze (wall floored at %g). "
+          "stack = rod + 2*wall = bore + %g squeeze (wall floored at %g). "
           "TPU on the K1C, 205C, model fan 20%%; gauge in PLA."
           % (RC.ROD_MIN, RC.ROD_MAX, RC.BORE, RC.SHIM_COMPRESS, RC.TPU_WALL_MIN))
     for rod in grades():

@@ -34,7 +34,11 @@ PLA_CRUSH_MPA = 28.0     # printed-PLA bearing crush. PROVENANCE: handbook-ballp
                          # value, not measured on our PLA -- it is the figure the v1 12 mm
                          # socket sat AT (the v1 joints creaked; consistent, not proof)
 SAFETY = 4.0             # crush / working stress
-SHIM_COMPRESS = 0.15     # mm the TPU shim stack is undersized vs the bore so it squeezes = grip
+SHIM_COMPRESS = 0.15     # mm the TPU shim stack is OVERSIZED vs the bore, so it must be squeezed
+                         # to enter and that squeeze IS the grip. The comment here used to read
+                         # "undersized ... so it squeezes", which is self-contradictory: undersized
+                         # rattles. The generator followed the wrong half of that sentence and every
+                         # shim came out 0.15 UNDER the bore, gripping nothing. Fixed 2026-08-03.
 TPU_WALL_MIN = 0.4       # thinnest printable TPU shim wall (single perimeter)
 
 
