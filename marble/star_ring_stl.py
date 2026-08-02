@@ -120,10 +120,15 @@ def main():
             out.append((p[0] + bx / bm * d, p[1] + by / bm * d))
         return out
 
+    # TWO-ZONE bore (Oleg caught the 2.1deg near-straight cone 2026-08-02: the mouth cone is
+    # 5.7deg, so a uniform taper cannot seat flush). Lower half: STRAIGHT at tip_bot (grips the
+    # straight male body). Upper half: 5.7deg cone MATCHING the mouth face slope -> flush wedge.
+    CONE_SLOPE = (MOUTH_FACE_D - MALE_FACE_D) / 2.0 / 16.0   # mm radius per mm height = the joint cone
+    tip_top = tip_bot + CONE_SLOPE * (h / 2.0)               # matched rise over the upper zone
     levels = []                                           # (z, inner2d, outer2d) per loft ring
     for iz in range(NZ + 1):
         f = iz / NZ
-        tip = tip_bot + (tip_top - tip_bot) * f
+        tip = tip_bot if f <= 0.5 else tip_bot + (f - 0.5) * 2.0 * (tip_top - tip_bot)
         mid = ring2d(tip)
         levels.append((h * f, parallel(mid, -a.wall / 2.0), parallel(mid, a.wall / 2.0)))
     inner = levels[0][1]; outer = levels[0][2]            # base ring (function checks reference it)
