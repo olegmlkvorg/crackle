@@ -315,9 +315,9 @@ def main():
     ap.add_argument("--cols", type=int, default=6)
     ap.add_argument("--rows", type=int, default=6)
     ap.add_argument("--ring-od", type=float, default=22.0, help="ring outer diameter (mm)")
-    ap.add_argument("--cs-w", type=float, default=1.4, help="cross-section radial width (mm)")
-    ap.add_argument("--cs-b", type=float, default=1.8, help="cross-section axial half-height (mm)")
-    ap.add_argument("--tilt", type=float, default=22.0, help="row tilt from horizontal (deg)")
+    ap.add_argument("--cs-w", type=float, default=1.2, help="cross-section radial width (mm)")
+    ap.add_argument("--cs-b", type=float, default=2.6, help="cross-section axial half-height (mm)")
+    ap.add_argument("--tilt", type=float, default=30.0, help="row tilt from horizontal (deg)")
     ap.add_argument("--pitch-x", type=float, default=None, help="column pitch (auto from geometry)")
     ap.add_argument("--pitch-y", type=float, default=None, help="row pitch (auto from geometry)")
     ap.add_argument("--nmaj", type=int, default=96, help="major segments per ring")
@@ -331,7 +331,7 @@ def main():
     # measured, not derived: 0.75/0.375*od left same-row rings coplanar-overlapping (clearance
     # 0.000, would fuse). Swept 2026-08-02: dx=1.05*od, dy=0.425*od give 0.60+ mm at od 20.
     dx = args.pitch_x if args.pitch_x is not None else 1.05 * args.ring_od
-    dy = args.pitch_y if args.pitch_y is not None else 0.418 * args.ring_od
+    dy = args.pitch_y if args.pitch_y is not None else 0.40 * args.ring_od
 
     if args.link_only:
         # two threaded rings: rows 0 and 1, straddler pair (row0 col0, row1 col0)
