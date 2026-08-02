@@ -18,13 +18,22 @@ if (!stlPath || stlPath.startsWith('--')) {
   process.exit(2);
 }
 const scenario = arg('scenario', 'chute');
-if (scenario !== 'chute') {
-  console.error(`unknown scenario: ${scenario}`);
+if (scenario !== 'chute' && scenario !== 'sorter') {
+  console.error(`unknown scenario: ${scenario} (chute | sorter)`);
   process.exit(2);
 }
+// SORTER: the chute's rail crest is a sieve, so the SAME geometry must give DIFFERENT outcomes
+// for different marbles. --expect says which one this run is asserting.
+const expect = arg('expect', 'ride');
+if (scenario === 'sorter' && expect !== 'ride' && expect !== 'shaft') {
+  console.error(`--expect must be ride or shaft`);
+  process.exit(2);
+}
+const marbleD = Number(arg('marble', 16));
 
 const { positions, triCount } = parseBinarySTL(readFileSync(stlPath));
 const sim = await createSim(positions, {
+  marbleRadiusMM: marbleD / 2,
   entrySpeedMM: Number(arg('speed', DEFAULTS.entrySpeedMM)),
   friction: Number(arg('friction', DEFAULTS.friction)),
   restitution: Number(arg('restitution', DEFAULTS.restitution)),
@@ -41,7 +50,8 @@ console.log(`[qa_sim] tris=${triCount}  bbox z ${g.bbox.min[2].toFixed(1)}..${g.
   `crestR=${g.crestR.toFixed(1)}mm  helix zone z ${g.zone.min.toFixed(1)}..${g.zone.max.toFixed(1)}mm  ` +
   `exitZ<${g.exitZ.toFixed(1)}mm  descentDir=${g.descentDir > 0 ? '+theta' : '-theta'}`);
 console.log(`[qa_sim] drop at [${g.entry.posMM.map((v) => v.toFixed(1)).join(', ')}]mm  ` +
-  `speed=${sim.opts.entrySpeedMM}mm/s  dt=1/${Math.round(1 / sim.opts.dt)}  scenario=${scenario}`);
+  `speed=${sim.opts.entrySpeedMM}mm/s  dt=1/${Math.round(1 / sim.opts.dt)}  marble=O${marbleD}  ` +
+  `scenario=${scenario}${scenario === 'sorter' ? ' expect=' + expect : ''}`);
 
 const maxSteps = Math.ceil((maxTime + 2) / sim.opts.dt);
 for (let i = 0; i < maxSteps; i++) {
@@ -55,6 +65,22 @@ console.log(`[qa_sim] turns=${fmt(v.turns)}  maxR(zone)=${fmt(v.maxRInZoneMM, 1)
   `(margin ${fmt(v.railMarginMM, 1)}mm)  descent=${fmt(v.descentTimeS)}s  exit@${fmt(v.exitTimeS)}s  ` +
   `stall=${fmt(v.stallTimeS, 1)}s  lowestZ=${fmt(v.lowestZMM, 1)}mm`);
 
+if (scenario === 'sorter') {
+  // In a sorter a centre drop is the CORRECT answer for an undersized marble, so the chute
+  // gate's verdict is not the question. What happened is: did it go down the shaft, or ride?
+  const wentShaft = tracker.escaped?.kind === 'CENTER-DROP';
+  const rode = !wentShaft && v.turns >= 1.0;
+  const got = wentShaft ? 'SHAFT' : rode ? 'RIDE' : 'NEITHER';
+  console.log(`[qa_sim] outcome=${got} (expected ${expect.toUpperCase()})`);
+  if (got === expect.toUpperCase()) {
+    console.log(`[qa_sim] PASS: SORT: a O${marbleD} marble ${wentShaft ?
+      'falls through the crest into the shaft' : 'rides the spiral past the crest'}.`);
+    process.exit(0);
+  }
+  console.log(`[qa_sim] FAIL: SORT: a O${marbleD} marble came out ${got}, wanted ` +
+    `${expect.toUpperCase()}. The crest does not sort these two sizes at this entry speed.`);
+  process.exit(1);
+}
 if (v.pass) {
   console.log('[qa_sim] PASS: ORBIT: marble stays captive, descends, exits.');
   process.exit(0);

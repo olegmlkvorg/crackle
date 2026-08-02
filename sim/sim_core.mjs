@@ -71,6 +71,40 @@ export function analyzeChute(positions) {
   }
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const H = maxZ - minZ;
+  // PER-Z AXIS, fitted as a STRAIGHT LINE. A single bbox centre is only the axis if the part is
+  // upright, and the chute can now LEAN (--lean shears the wave, up to 16 deg at default pitch,
+  // walking the axis 49mm sideways over a segment). With a fixed centre every radius the tracker
+  // measures would be wrong and it would call a perfectly good leaning part an escape.
+  // The estimator matters: a per-band CENTROID does not work, because at any height the wall
+  // sweeps from rail crest to pocket as it goes round, so the band centroid sits off-axis and
+  // rotates with the helix. Measured, that spurious wobble moved crestR from 20.4 to 18.0 on a
+  // part whose axis does not move at all. A shear is linear in z, so fit a LINE: the helical
+  // eccentricity is periodic and averages out of the fit, and an upright part just gets slope 0.
+  const NBAND = 40;
+  const bandSum = new Float64Array(NBAND * 4);
+  for (let i = 0; i < n; i++) {
+    const z = positions[i * 3 + 2];
+    let b = Math.floor(((z - minZ) / (H || 1)) * NBAND);
+    if (b < 0) b = 0; if (b >= NBAND) b = NBAND - 1;
+    bandSum[b * 4] += positions[i * 3];
+    bandSum[b * 4 + 1] += positions[i * 3 + 1];
+    bandSum[b * 4 + 2] += z;
+    bandSum[b * 4 + 3] += 1;
+  }
+  let sz = 0, sx = 0, sy = 0, szz = 0, szx = 0, szy = 0, m = 0;
+  for (let b = 0; b < NBAND; b++) {
+    const c = bandSum[b * 4 + 3];
+    if (!c) continue;
+    const bx = bandSum[b * 4] / c, by = bandSum[b * 4 + 1] / c, bz = bandSum[b * 4 + 2] / c;
+    sz += bz; sx += bx; sy += by; szz += bz * bz; szx += bz * bx; szy += bz * by; m++;
+  }
+  const den = m * szz - sz * sz;
+  const kx = Math.abs(den) < 1e-9 ? 0 : (m * szx - sz * sx) / den;
+  const ky = Math.abs(den) < 1e-9 ? 0 : (m * szy - sz * sy) / den;
+  const x0 = m ? sx / m - kx * (sz / m) : cx;
+  const y0 = m ? sy / m - ky * (sz / m) : cy;
+  const centerAt = (z) => [x0 + kx * z, y0 + ky * z];
+  const axisLeanDeg = (Math.atan(Math.hypot(kx, ky)) * 180) / Math.PI;
   // Helix zone: middle band, clear of the entry funnel above and outrun below.
   const zone = { min: minZ + 0.25 * H, max: minZ + 0.76 * H };
   // Rail crest radius = outermost surface inside the helix zone.
@@ -78,7 +112,8 @@ export function analyzeChute(positions) {
   for (let i = 0; i < n; i++) {
     const z = positions[i * 3 + 2];
     if (z > zone.min && z < zone.max) {
-      const r = Math.hypot(positions[i * 3] - cx, positions[i * 3 + 1] - cy);
+      const ct = centerAt(z);
+      const r = Math.hypot(positions[i * 3] - ct[0], positions[i * 3 + 1] - ct[1]);
       if (r > crestR) crestR = r;
     }
   }
@@ -112,7 +147,8 @@ export function analyzeChute(positions) {
   for (let i = 0; i < n; i++) {
     const z = positions[i * 3 + 2];
     if (z < eb0 || z > eb1) continue;
-    const x = positions[i * 3] - cx, y = positions[i * 3 + 1] - cy;
+    const ce = centerAt(z);
+    const x = positions[i * 3] - ce[0], y = positions[i * 3 + 1] - ce[1];
     const b = Math.floor(((Math.atan2(y, x) + Math.PI) / (2 * Math.PI)) * NE) % NE;
     const r = Math.hypot(x, y);
     if (r < entryMinR[b]) entryMinR[b] = r;
@@ -121,14 +157,18 @@ export function analyzeChute(positions) {
   for (let b = 0; b < NE; b++) if (entryMinR[b] < best) { best = entryMinR[b]; entryBin = b; }
   const entryTheta = ((entryBin + 0.5) / NE) * 2 * Math.PI - Math.PI;
   const entryR = Math.min(best + 4, crestR - 6); // ride the surface, clear of crest
+  const entryZ = eb1 + 6;
+  const entryC = centerAt(entryZ);
   const entry = {
-    posMM: [cx + entryR * Math.cos(entryTheta), cy + entryR * Math.sin(entryTheta), eb1 + 6],
+    posMM: [entryC[0] + entryR * Math.cos(entryTheta),
+            entryC[1] + entryR * Math.sin(entryTheta), entryZ],
     // small tangential shove in the descent direction (configurable upstream)
     dirTangent: [descentDir * -Math.sin(entryTheta), descentDir * Math.cos(entryTheta), 0],
   };
+  const exitZ0 = minZ + 0.15 * H;
   return {
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
-    center: [cx, cy], H, zone, crestR, descentDir, entry,
+    center: [cx, cy], centerAt, axisLeanDeg, H, zone, crestR, descentDir, entry,
     exitZ: minZ + 0.15 * H,
   };
 }
@@ -187,7 +227,9 @@ export async function createSim(positions, opts = {}) {
 
   function state() {
     const p = marbleBody.translation(), v = marbleBody.linvel();
-    const x = p.x / MM - geo.center[0], y = p.y / MM - geo.center[1];
+    const zNow = p.z / MM;
+    const ct = geo.centerAt ? geo.centerAt(zNow) : geo.center;
+    const x = p.x / MM - ct[0], y = p.y / MM - ct[1];
     const theta = Math.atan2(y, x);
     if (prevTheta !== null) {
       let d = theta - prevTheta;
