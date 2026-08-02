@@ -6,21 +6,33 @@ joint to experiment with, lego style"). One parametric generator, one part per -
 THE LEGO PRINCIPLE: ONE socket standard everywhere + quantized geometry, so any joint combines
 with any other.
 
-SOCKET STANDARD (every part accepts the same 1/4in (O6.35) bamboo rod the same way):
-  bore   SNUG O7.05 default (--fit slide -> O7.65) -- the MEASURED bamboo press constant
-         (+0.70 on the rod, stave-shelf coupon 2026-07-27). Fit flagged UNPROVEN on this new
-         geometry until a coupon prints: the constant was calibrated on walked vertical bores,
-         these are horizontal teardrop bores.
-  depth  12.0 mm blind
+SOCKET STANDARD (v2, 2026-08-02 -- every constant imports from rod_constants.py; a magic
+number here is a bug):
+  rod    the sticks MEASURE O5.8-6.2 variable per stick (calipers 2026-08-02), NOT the nominal
+         6.35 the v1 kit assumed
+  bore   O7.0 FLAT, everywhere. Stick to the stick size: clears the fattest stick by 0.8; the
+         graded TPU shim rings (shim_ring_stl.py) fill the per-stick difference and provide the
+         grip the old +0.70 press constant used to buy. No fit variants any more.
+  depth  DERIVED, not picked (rod_constants.derive_socket_depth): a 610 mm rod with 20 N on the
+         end puts M = 12200 N.mm on the joint; the prying couple crushes PLA at the mouth and
+         blind end at sigma = 2M/(w d^2). v1's 12 mm sat AT the ~28 MPa crush figure; the
+         derived 24.10 mm sits at 7 MPa = crush/4. Every part got LONGER -- that is the point.
   wall   >= 2.4 mm of material around every bore (measured off the emitted mesh)
   pin    O3.0 vertical cross-pin hole through every socket at 6.0 from the mouth (the stave
          retainer trick: bamboo skewer locks the rod)
   roof   horizontal bores carry a 46deg teardrop roof (facet nz = -0.695 > the -0.707 gate;
          a round bore ceiling is a spanning overhang and fails qa_stl PRINTABLE)
 
-QUANTIZED: port width W=13 everywhere, one part height H (13.6 at snug), one boss length 13.4,
-angles from {45, 60, 90, 120} (angle15 = the 165deg bent-rod-end kink, the stave ~14deg number
-rounded to the 15 grid).
+NO DEAD FILLER (v2): every planar multi-socket part (sleeve L90 T X Y120 hub6) carries an OPEN
+middle -- the hub interior is a through-void with 2.4 walls, so the plastic between the blind
+ends is a hole, not filler. Self-verify shoots a vertical ray through the hub centre and FAILS
+if it hits anything (--sabotage filler proves the gate fires). The tetra keeps its middle: its
+three walked bores now converge to within ~2 mm of the axis at the floor -- that middle IS
+bore, not filler (measured note printed).
+
+QUANTIZED: port width W=13 everywhere, one planar part height H (~13.5), one boss length
+DEPTH+1.4, angles from {45, 60, 90, 120} (angle15 = the 165deg bent-rod-end kink, the stave
+~14deg number rounded to the 15 grid).
 
 KIT: sleeve L90 T X Y120 hub6 tetra saddle angle15 foot
   tetra NOTE: a true tetrahedral node needs bores tilted 54.7deg from vertical -- past the ~40deg
@@ -28,8 +40,9 @@ KIT: sleeve L90 T X Y120 hub6 tetra saddle angle15 foot
   3 sockets splayed 30deg from vertical as walked oblique bores (1/cos30 pre-stretch, the
   stave_hub technique), pin = horizontal O3 teardrop channel through the outer wall into each
   bore (single-wall pin: a through-pin would need an unwalkable 60deg hole; said honestly here).
-  saddle NOTE: grips a BOWED rod mid-arc. R>=1000 sagitta over the 13.6mm clip is 0.02mm --
-  locally straight, so the clip bore is a straight O7.05 channel with a 5.70 mouth (0.90 x rod).
+  saddle NOTE: grips a BOWED rod mid-arc. R>=1000 sagitta over the ~13.5mm clip is 0.02mm --
+  locally straight, so the clip bore is a straight O7.0 channel with a 0.90 x rod mouth (add a
+  shim ring under the clip for thin sticks, same as the sockets).
 
 CONSTRUCTION: watertight-by-construction z-loft. Each part = hub prism + socket blocks glued on
 exact shared port rectangles, all lofted on ONE shared z-layer list (no T-vertices). Where the
@@ -39,9 +52,10 @@ vertex-for-vertex, so edge parity survives. Every part is checked by measuring t
 (re-read from disk), and a failing part is quarantine-renamed .FAILED.
 
 Usage:
-  python3 bamboo_joints_stl.py --part all [--fit snug|slide] [--out-dir DIR]
+  python3 bamboo_joints_stl.py --part all [--out-dir DIR]
   python3 bamboo_joints_stl.py --part hub6
   python3 bamboo_joints_stl.py --part sleeve --sabotage bore --out-dir /tmp/x   # prove gates fire
+  python3 bamboo_joints_stl.py --part hub6 --sabotage filler                    # prove void gate
 """
 import argparse
 import math
@@ -49,14 +63,16 @@ import os
 import struct
 import sys
 
+import rod_constants as RC
+
 # ---------------------------------------------------------------- constants
-ROD_D = 6.35                 # 1/4in bamboo rod
-FIT = {"snug": 7.05, "slide": 7.65}   # measured bamboo constants (stave shelf)
-DEPTH = 12.0                 # socket depth, blind
+ROD_D = RC.ROD_NOM           # rods MEASURE 5.8-6.2; nominal mid used for ratios only
+BORE = RC.BORE               # O7.0 FLAT socket bore, no fit variants (shims do the fitting)
+DEPTH = RC.derive_socket_depth()      # 24.10 -- DERIVED (arithmetic in rod_constants docstring)
 WALL_MIN = 2.4               # min wall around every bore
 BOT_WALL = 2.5               # designed wall under the bore (>= WALL_MIN)
-W = 13.0                     # port width = hub side length, everywhere
-LB = 13.4                    # boss (block) length: DEPTH + 1.4 blind wall + hub behind it
+W = 13.0                     # port width = hub side length, everywhere (bore + 2 walls = 11.8)
+LB = DEPTH + 1.4             # boss (block) length: derived depth + 1.4 blind wall (hub behind)
 PIN_D = 3.0                  # cross-pin (bamboo skewer)
 PIN_FROM_MOUTH = 6.0
 ROOF_DEG = 46.0              # teardrop roof angle from horizontal (facet nz -0.695 > -0.707)
@@ -69,6 +85,8 @@ PINR = (PIN_D / 2.0) / math.cos(math.pi / PIN_N)   # outscribed: inscribed circl
 POCKET_M = 8                 # pocket chain segments (must divide PIN_N/2)
 TRI_TILT = 30.0              # tripod socket tilt from vertical (printable walked bore)
 PARTS = ("sleeve", "L90", "T", "X", "Y120", "hub6", "tetra", "saddle", "angle15", "foot")
+VOID_PARTS = ("sleeve", "L90", "T", "X", "Y120", "hub6")   # hub middle = through-void, 2.4 walls
+PLA_G_PER_MM3 = 1.24e-3      # PLA density, for the grams report
 
 
 def geom(r):
@@ -321,25 +339,53 @@ def bore_w(z, r):
     return 0.0 if w < 1e-6 else w
 
 
+NSEG = max(3, int(math.ceil(LB / 4.5)))   # long-edge subdivision: the derived-depth block is
+                                          # ~2x longer, and a 2-vert top cap boundary starves
+                                          # ring_merge of angular coverage around the pin
+                                          # (flipped cap slivers measured on the emitted v2
+                                          # sleeve, 2026-08-02); walls, region-B loops and caps
+                                          # all share these verts so parity survives
+
+
+def _long_edge(v, forward):
+    """Interior subdivision verts of a block long edge at lateral v, walking +u or -u."""
+    us = [LB * k / NSEG for k in range(1, NSEG)]
+    return [(u, v) for u in (us if forward else us[::-1])]
+
+
 def block_loop(z, r, wport):
     """Region-B cross-section loop of a socket block, local coords u in [0,LB] (0=glue,
-    LB=mouth), v lateral. Single CCW loop, 4+2+2+2*(POCKET_M+1)+2 = 26 verts, closing (glue)
-    segment skipped."""
+    LB=mouth), v lateral. Single CCW loop, closing (glue) segment skipped. Long edges carry
+    the same NSEG subdivision as block_outer5 so region seams stay vertex-matched."""
     h = bore_w(z, r) / 2.0
     hw = wport / 2.0
     ub = LB - DEPTH
     pc = LB - PIN_FROM_MOUTH
-    pts = [(0.0, -hw), (LB, -hw), (LB, -h)]
+    pts = [(0.0, -hw)] + _long_edge(-hw, True) + [(LB, -hw), (LB, -h)]
     pts += pocket_chain(pc, -1, h)
     pts += [(ub, -h), (ub, h)]
     pts += pocket_chain(pc, +1, h)
-    pts += [(LB, h), (LB, hw), (0.0, hw)]
+    pts += [(LB, h), (LB, hw)] + _long_edge(hw, False) + [(0.0, hw)]
     return (pts, {len(pts) - 1})
 
 
 def block_outer5(wport):
     hw = wport / 2.0
-    return ([(0.0, -hw), (LB, -hw), (LB, 0.0), (LB, hw), (0.0, hw)], {4})
+    pts = ([(0.0, -hw)] + _long_edge(-hw, True) + [(LB, -hw), (LB, 0.0), (LB, hw)]
+           + _long_edge(hw, False) + [(0.0, hw)])
+    return (pts, {len(pts) - 1})
+
+
+def dedupe_zs(zs, eps=2e-3):
+    """Merge layer heights closer than eps. Two analytically-different heights that ROUND to
+    the same 3dp (e.g. a phi-step at 2.67129 vs a vertex-crossing at 2.67088 when r=3.5) weave
+    a micro-band whose edges double-count in the parity check -- measured on the emitted v2
+    sleeve, 2026-08-02."""
+    out = []
+    for z in sorted(zs):
+        if not out or z - out[-1] > eps:
+            out.append(z)
+    return out
 
 
 def bore_band_zs(r):
@@ -359,7 +405,18 @@ def bore_band_zs(r):
             zs.add(zc - math.sqrt(r * r - h * h))          # bottom (circle) side
         if h < r * C45:
             zs.add(z45 + (r * C45 - h) * T_ROOF)           # roof side
-    return sorted(zs)
+    # keep a clear window around the h=PINR crossings: the chain re-parameterizes there
+    # (straight spread <-> clipped polygon), and a foreign layer a few microns away turns
+    # that re-parameterization into down-facing slivers (measured at z=9.46 on the emitted
+    # v2 sleeve, 2026-08-02 -- the derived-depth kit moved the phi grid onto the crossing)
+    cross = set()
+    if PINR < r:
+        cross.add(zc - math.sqrt(r * r - PINR * PINR))
+    if PINR < r * C45:
+        cross.add(z45 + (r * C45 - PINR) * T_ROOF)
+    zs = {z for z in zs
+          if z in cross or all(abs(z - czz) > 0.06 for czz in cross)}
+    return dedupe_zs(zs)
 
 
 def emit_block(sink, tf, r, wport, z_extra=()):
@@ -398,17 +455,47 @@ def block_z_list(r, z_extra=()):
     """Every z where any block has a layer -- the hub must loft on the same list (no T-verts)."""
     _zc, _z45, zapex, H = geom(r)
     zs = [0.0] + bore_band_zs(r) + [zapex, H] + list(z_extra)
-    return sorted(set(zs))
+    return dedupe_zs(zs)
 
 
-def emit_hub(sink, poly, port_sides, r, z_extra=(), caps=(True, True), zs=None):
-    """Convex hub prism on the shared z list; port sides skipped. poly CCW."""
+def hub_void(poly, inset):
+    """Hole loop for an OPEN hub middle: the (regular, origin-centred) hub polygon scaled so
+    every edge moves inward by `inset`. Returned CW = a hole for loft/ring_merge."""
+    apo = min(poly[i][0] * n[0] + poly[i][1] * n[1]
+              for i, n in enumerate(_edge_normals(poly)))
+    s = (apo - inset) / apo
+    assert s > 0.15, "hub too small to void"
+    return [(x * s, y * s) for (x, y) in poly][::-1]
+
+
+def _edge_normals(poly):
+    """Unit outward normals of a CCW polygon's edges (edge i = poly[i]->poly[i+1])."""
+    out = []
+    n = len(poly)
+    for i in range(n):
+        p0, p1 = poly[i], poly[(i + 1) % n]
+        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+        L = math.hypot(dx, dy)
+        out.append((dy / L, -dx / L))
+    return out
+
+
+def emit_hub(sink, poly, port_sides, r, z_extra=(), caps=(True, True), zs=None, void=None):
+    """Convex hub prism on the shared z list; port sides skipped. poly CCW. void = optional CW
+    hole loop -> the hub middle is a through-void (caps become rings)."""
     _zc, _z45, _zapex, H = geom(r)
     if zs is None:
         zs = block_z_list(r, z_extra)
-    loop = (poly, set(port_sides))
-    loft(sink, [(z, [loop]) for z in zs], IDENT)
-    tris = cap_from_indices(poly, earclip(poly))
+    loops = [(poly, set(port_sides))]
+    if void is not None:
+        loops.append((void, set()))
+    loft(sink, [(z, loops) for z in zs], IDENT)
+    if void is None:
+        tris = cap_from_indices(poly, earclip(poly))
+    else:
+        cx = sum(p[0] for p in poly) / len(poly)
+        cy = sum(p[1] for p in poly) / len(poly)
+        tris = ring_merge(poly, void, (cx, cy))
     if caps[0]:
         emit_cap(sink, tris, zs[0], False, IDENT)
     if caps[1]:
@@ -432,19 +519,28 @@ def hub_ports(poly, sides, r, wport=W):
     return out
 
 
+def hub_poly(name, wport):
+    """The hub polygon + port-side indices for a planar part. ONE code path: the builder lofts
+    it, the verifier measures the emitted void against it."""
+    if name in ("sleeve", "L90", "T", "X"):
+        h = wport / 2.0
+        poly = [(h, -h), (h, h), (-h, h), (-h, -h)]  # CCW: sides 0:+x 1:+y 2:-x 3:-y
+        sides = {"sleeve": [0, 2], "L90": [0, 1], "T": [0, 2, 1], "X": [0, 1, 2, 3]}[name]
+        return poly, sides
+    if name in ("Y120", "hub6"):
+        poly = [(wport * math.cos(math.radians(60 * k)),
+                 wport * math.sin(math.radians(60 * k))) for k in range(6)]
+        return poly, ([0, 2, 4] if name == "Y120" else [0, 1, 2, 3, 4, 5])
+    raise ValueError(name)
+
+
 def part_planar(name, r, sabotage=None):
     """All hub+blocks planar parts. Returns (tris, sockets, note)."""
     wport = 10.0 if sabotage == "wall" else W
     rb = r - 0.25 if sabotage == "bore" else r
     sink = Sink()
-    if name in ("sleeve", "L90", "T", "X"):
-        h = wport / 2.0
-        poly = [(h, -h), (h, h), (-h, h), (-h, -h)]  # CCW: sides 0:+x 1:+y 2:-x 3:-y
-        sides = {"sleeve": [0, 2], "L90": [0, 1], "T": [0, 2, 1], "X": [0, 1, 2, 3]}[name]
-    elif name in ("Y120", "hub6"):
-        poly = [(wport * math.cos(math.radians(60 * k)),
-                 wport * math.sin(math.radians(60 * k))) for k in range(6)]
-        sides = [0, 2, 4] if name == "Y120" else [0, 1, 2, 3, 4, 5]
+    if name in ("sleeve", "L90", "T", "X", "Y120", "hub6"):
+        poly, sides = hub_poly(name, wport)
     elif name == "angle15":
         a = math.radians(7.5)
         t = 2.0
@@ -464,12 +560,17 @@ def part_planar(name, r, sabotage=None):
     else:
         raise ValueError(name)
     assert _area2(poly) > 0, "hub polygon must be CCW"
+    void = None
+    note = ""
+    if name in VOID_PARTS and sabotage != "filler":
+        void = hub_void(poly, WALL_MIN)
+        note = "OPEN middle: hub interior is a through-void, %.1f walls" % WALL_MIN
     ports = hub_ports(poly, sides, rb, wport)
-    emit_hub(sink, poly, sides, rb)
+    emit_hub(sink, poly, sides, rb, void=void)
     for tf, _m in ports:
         emit_block(sink, tf, rb, wport)
     sockets = [m for _tf, m in ports]
-    return sink.tris, sockets, ""
+    return sink.tris, sockets, note
 
 
 def part_foot(r, sabotage=None):
@@ -519,7 +620,7 @@ def part_saddle(r, sabotage=None):
     wport = 10.0 if sabotage == "wall" else W
     rb = r - 0.25 if sabotage == "bore" else r
     sink = Sink()
-    rc = FIT["snug"] / 2.0                      # clip cradle = the same standard bore
+    rc = BORE / 2.0                             # clip cradle = the same standard O7.0 bore
     ro = rc + 2.4                               # ring wall
     hw = wport / 2.0
     mouth = 0.90 * ROD_D                        # 5.715 opening, in the 0.8-0.92 spec band
@@ -577,22 +678,30 @@ def hub_ports_from_segment(p0, p1, wport):
 # ---------------------------------------------------------------- tripod
 def part_tetra(r, sabotage=None):
     """Tetra fallback: TRUE tetra bores would tilt 54.7deg (unwalkable, >40deg proven ceiling)
-    -> 3-leg tripod node, sockets 30deg from vertical, walked oblique bores (stave technique)."""
+    -> 3-leg tripod node, sockets 30deg from vertical, walked oblique bores (stave technique).
+
+    v2 KILLS THE FILLER two ways (feedback 2026-08-02):
+      TAPER  the outer wall follows the walked bores down at the same 30deg instead of a
+             cylinder sized for the mouths -- an outward-leaning wall (nz>0 inside, 30deg lean
+             outside) prints clean; the old cylinder was mostly dead plastic at the bottom.
+      CORE   the middle above the bore convergence is a blind CONE void (apex down, widening
+             up, open at the top face). A hole that widens going up exposes only UP-facing
+             wall, so it needs no support and no roof. Radius stops at RHO_M/2: the derived
+             star-shape bound for the top-cap merge (tangency of the wedge-corner chord)."""
     rb = r - 0.25 if sabotage == "bore" else r
     sink = Sink()
     tilt = math.radians(TRI_TILT)
-    zc_, z45_, zapex_, H = geom(rb)             # reuse H so the kit is one height
-    FLOOR = H - DEPTH * math.cos(tilt)          # bore vertical extent below the top face
+    FLOOR = BOT_WALL                            # wall under the blind ends
+    H = FLOOR + DEPTH * math.cos(tilt)          # derived: full socket depth along the 30deg axis
     a_r = rb / math.cos(tilt)                   # radial semi-axis (pre-stretch)
     b_t = rb                                    # tangential semi-axis
-    RHO_M = 12.5                                # mouth centre radius (top face)
     walk = DEPTH * math.sin(tilt)
-    rho0 = RHO_M - walk
-    R_AP = RHO_M + a_r + (10.0 - 7.05) / 2.0 if sabotage == "wall" else RHO_M + a_r + 2.4
+    # mouth radius DERIVED from the blind-end separation: adjacent bores 120deg apart at floor
+    # radius rho0 sit sqrt(3)*rho0 apart; keep >= 2 ellipse semi-axes + WALL_MIN between axes
+    rho0 = (2.0 * a_r + WALL_MIN) / math.sqrt(3.0)
+    RHO_M = rho0 + walk                         # mouth centre radius (top face)
+    wall_add = (10.0 - BORE) / 2.0 if sabotage == "wall" else WALL_MIN
     NO = 36
-    R_OUT = R_AP / math.cos(math.pi / NO)
-    outer = [(R_OUT * math.cos(2 * math.pi * k / NO), R_OUT * math.sin(2 * math.pi * k / NO))
-             for k in range(NO)]
     boss_ang = [0.0, 2 * math.pi / 3, 4 * math.pi / 3]
     E = 24
     zp = H - PIN_FROM_MOUTH * math.cos(tilt)    # pin channel centre height (mid-socket-ish)
@@ -603,6 +712,31 @@ def part_tetra(r, sabotage=None):
 
     def rho(z):
         return rho0 + (z - FLOOR) * math.tan(tilt)
+
+    def r_apo(z):
+        """Outer wall apothem at height z: bore ellipse + wall, tapering with the walk."""
+        return rho(max(z, FLOOR)) + a_r + wall_add
+
+    def outer_ring(z):
+        rr = r_apo(z) / math.cos(math.pi / NO)
+        return [(rr * math.cos(2 * math.pi * k / NO), rr * math.sin(2 * math.pi * k / NO))
+                for k in range(NO)]
+
+    R_AP = r_apo(H)                             # top-face apothem (mouth level)
+    R_OUT = R_AP / math.cos(math.pi / NO)
+    RV_MAX = RHO_M / 2.0                        # core-void ceiling: top-cap star-shape bound
+    z_apex = FLOOR + max(a_r + WALL_MIN - rho0, 0.0) / math.tan(tilt)   # rv birth height
+    z_kink = FLOOR + (RV_MAX + a_r + WALL_MIN - rho0) / math.tan(tilt)  # rv hits RV_MAX
+
+    def rv(z):
+        if sabotage == "filler":
+            return 0.0
+        return max(0.0, min(rho(z) - a_r - WALL_MIN, RV_MAX))
+
+    def void_loop(z):
+        rr = rv(z)
+        return [(rr * math.cos(-2 * math.pi * k / NO), rr * math.sin(-2 * math.pi * k / NO))
+                for k in range(NO)]             # CW = hole; angles align with outer_ring's
 
     def ell_center(z, ang):
         rr = rho(z)
@@ -639,6 +773,7 @@ def part_tetra(r, sabotage=None):
         survives the topology change."""
         c = chan_w(z)
         hc = c / 2.0
+        ring = outer_ring(z)
         pts = []
         for k in range(NO):
             ang_k = 2 * math.pi * k / NO
@@ -647,15 +782,15 @@ def part_tetra(r, sabotage=None):
                 if abs(((ang_k - ang + math.pi) % (2 * math.pi)) - math.pi) < 1e-9:
                     site = ang
             if site is None:
-                pts.append(outer[k])
+                pts.append(ring[k])
                 continue
             ang = site
-            va = outer[k]
+            va = ring[k]
             ca, sa = math.cos(ang), math.sin(ang)
 
             def on_edge(sgn):
                 # point with tangential coord sgn*hc on the outer edge flanking v_k
-                nb = outer[(k + (1 if sgn > 0 else -1)) % NO]
+                nb = ring[(k + (1 if sgn > 0 else -1)) % NO]
                 tv = -va[0] * sa + va[1] * ca
                 tn = -nb[0] * sa + nb[1] * ca
                 f = 0.0 if abs(tn - tv) < 1e-12 else (sgn * hc - tv) / (tn - tv)
@@ -686,21 +821,25 @@ def part_tetra(r, sabotage=None):
             pts.extend([eA] + wall(eA, iA) + [iA] + chain + [iB] + wall(eB, iB)[::-1] + [eB])
         return (pts, set())
 
-    # region 1: solid below floor
+    # region 1: solid below floor (tapered outer only -- void is born above FLOOR)
     zs1 = [0.0, FLOOR]
-    loft(sink, [(z, [(outer, set())]) for z in zs1], IDENT)
+    loft(sink, [(z, [(outer_ring(z), set())]) for z in zs1], IDENT)
     # bore floor discs (blind floors), facing up
     for ang in boss_ang:
         hl = hole_loop(FLOOR, ang)
         c = ell_center(FLOOR, ang)
         fan = [(c, hl[(j + 1) % E], hl[j]) for j in range(E)]   # hl is CW -> reversed for +z
         emit_cap(sink, fan, FLOOR, True, IDENT)
-    # region 2: outer + 3 walking holes, FLOOR..zp_bot
+    # region 2: outer + 3 walking holes + core void, FLOOR..zp_bot. The void loop is carried
+    # degenerate (rv=0, all verts at the axis) below its apex: zero-area quads drop, and the
+    # first real circle fans onto the apex point -- the same pinch trick as the pin pockets.
     def holes_layers(zs):
-        return [(z, [(outer, set())] + [(hole_loop(z, ang), set()) for ang in boss_ang])
-                for z in zs]
+        return [(z, [(outer_ring(z), set())]
+                 + [(hole_loop(z, ang), set()) for ang in boss_ang]
+                 + [(void_loop(z), set())]) for z in zs]
     n2 = 4
-    zs2 = [FLOOR + (zp_bot - FLOOR) * k / n2 for k in range(n2 + 1)]
+    zs2 = dedupe_zs([FLOOR + (zp_bot - FLOOR) * k / n2 for k in range(n2 + 1)]
+                    + [z_apex])
     loft(sink, holes_layers(zs2), IDENT)
     # channel band: merged loop, zp_bot..zp_apex (pinch at both ends). Fine steps near the
     # pinches + exact layers where the gap swallows an ellipse-polygon vertex.
@@ -718,19 +857,29 @@ def part_tetra(r, sabotage=None):
             zsC.add(zp + dz)                               # upper circle side
         if hs < pr * C45:
             zsC.add(zp45 + (pr * C45 - hs) * T_ROOF)       # roof side
-    loft(sink, [(z, [merged_loop(z)]) for z in sorted(zsC)], IDENT)
-    # region 3: outer + holes, zp_apex..H
+    zsC.add(z_kink)                                        # core void hits RV_MAX in this band
+    loft(sink, [(z, [merged_loop(z), (void_loop(z), set())]) for z in dedupe_zs(zsC)], IDENT)
+    # region 3: outer + holes + void, zp_apex..H
     n3 = 3
     zs3 = [zp_apex + (H - zp_apex) * k / n3 for k in range(n3 + 1)]
     loft(sink, holes_layers(zs3), IDENT)
-    # bottom cap
-    fanb = [(outer[0], outer[j], outer[j + 1]) for j in range(1, NO - 1)]
+    # bottom cap (solid: the void never reaches the bed)
+    ring0 = outer_ring(0.0)
+    fanb = [(ring0[0], ring0[j], ring0[j + 1]) for j in range(1, NO - 1)]
     emit_cap(sink, fanb, 0.0, False, IDENT)
-    # top cap: 3 sectors, each a ring between pie slice and its mouth ellipse
+    # top cap: 3 annular wedges between the outer ring and the open core void, each merged
+    # with its mouth ellipse. Void verts share the outer ring's angles, so the wedge inner
+    # arc reuses the void loop's verts index-for-index (parity with the void wall loft).
     per = NO // 3
+    ring_h = outer_ring(H)
+    void_h = void_loop(H)
     for s, ang in enumerate(boss_ang):
         k0 = (s * per - per // 2) % NO
-        sector = [(0.0, 0.0)] + [outer[(k0 + j) % NO] for j in range(per + 1)]
+        sector = [ring_h[(k0 + j) % NO] for j in range(per + 1)]
+        if rv(H) > 1e-9:
+            sector += [void_h[(NO - (k0 + j)) % NO] for j in range(per, -1, -1)]
+        else:
+            sector += [(0.0, 0.0)]
         hl = hole_loop(H, ang)
         emit_cap(sink, ring_merge(sector, hl, ell_center(H, ang)), H, True, IDENT)
     sockets = []
@@ -739,15 +888,21 @@ def part_tetra(r, sabotage=None):
         axis = (-math.sin(tilt) * math.cos(ang), -math.sin(tilt) * math.sin(ang),
                 -math.cos(tilt))                 # pointing down into the socket
         sockets.append({"type": "oblique", "mouth": (mouth_c[0], mouth_c[1], H),
-                        "axis": axis, "ang": ang, "zp": zp, "R_out": R_OUT})
+                        "axis": axis, "ang": ang, "zp": zp, "R_out": R_OUT,
+                        "rho_zp": rho(zp), "rho0": rho0, "floor": FLOOR, "a_r": a_r,
+                        "H": H, "rv_top": rv(H), "wall_add": wall_add, "tilt": tilt})
     note = ("TETRA FALLBACK: true 109.5deg tetra needs 54.7deg bores > the 40deg walked-bore "
-            "ceiling -> 3-leg tripod node, 30deg splay, single-wall pin channels")
+            "ceiling -> 3-leg tripod node, 30deg splay, single-wall pin channels; filler killed "
+            "by the 30deg outer TAPER + a blind core cone void (O%.1f at the top face); what "
+            "remains near the floor is bore convergence: blind ends %.1f mm off the axis"
+            % (2 * rv(H), rho0 - a_r))
     return sink.tris, sockets, note
 
 
 # ------------------------------------------------------------------ output
 def write_stl(path, tris):
-    hdr = b"crackle bamboo joint kit - LEGO for bent bamboo, snug O7.05 sockets"
+    hdr = b"crackle bamboo kit v2 - O7.0 flat bores, derived depth, open middles"
+    assert len(hdr) <= 80
     with open(path, "wb") as fh:
         fh.write(hdr.ljust(80, b"\0"))
         fh.write(struct.pack("<I", len(tris)))
@@ -798,7 +953,17 @@ def ray_up_crossings(tris, x, y):
 
 
 # -------------------------------------------------------------- self-verify
-def verify(path, r_std, sockets, note, expect_bbox=60.0):
+def mesh_volume(tris):
+    """Signed volume by the divergence theorem (outward CCW winding -> positive)."""
+    v = 0.0
+    for a, b, c in tris:
+        v += (a[0] * (b[1] * c[2] - b[2] * c[1])
+              - a[1] * (b[0] * c[2] - b[2] * c[0])
+              + a[2] * (b[0] * c[1] - b[1] * c[0]))
+    return abs(v) / 6.0
+
+
+def verify(path, r_std, sockets, note, expect_bbox=120.0, part=None):
     """Measure the EMITTED file. Any FAIL -> quarantine rename + exit 1."""
     tris = read_stl(path)
     verts = set()
@@ -814,6 +979,32 @@ def verify(path, r_std, sockets, note, expect_bbox=60.0):
     dx, dy, dz = max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)
     checks.append(("bbox <= %g" % expect_bbox, dx <= expect_bbox and dy <= expect_bbox,
                    "%.1f x %.1f x %.1f mm" % (dx, dy, dz)))
+    if part in VOID_PARTS:
+        # FEEDBACK 2026-08-02: "the joint space is wasted ... the middle part is pure filler".
+        # A vertical ray through the hub centre must hit NOTHING (open through-void).
+        ncross = ray_up_crossings(tris, 0.0, 0.0)
+        checks.append(("middle OPEN (no filler)", ncross == 0,
+                       "%d ray hits through the hub centre (0 = through-void)" % ncross))
+        # void wall measured off the emitted mesh: interior verts vs the hub edge planes
+        poly, _sides = hub_poly(part, W)
+        nrms = _edge_normals(poly)
+        apo = min(poly[i][0] * n[0] + poly[i][1] * n[1] for i, n in enumerate(nrms))
+        inner = [max(v[0] * n[0] + v[1] * n[1] for n in nrms) for v in verts
+                 if max(v[0] * n[0] + v[1] * n[1] for n in nrms) < apo - 0.5]
+        if inner:
+            vwall = apo - max(inner)
+            checks.append(("void wall >= %.1f" % WALL_MIN, vwall >= WALL_MIN - 0.02,
+                           "%.2f mm hub ring around the void (measured)" % vwall))
+        else:
+            checks.append(("void wall >= %.1f" % WALL_MIN, False, "no void verts found"))
+    if part == "saddle":
+        # clip mouth opening, measured at the inner lips of the emitted mesh
+        lips = [v for v in verts if 1.9 < v[0] < 2.6 and 0.5 < abs(v[1]) < 4.0]
+        gap = 2.0 * min(abs(v[1]) for v in lips)
+        ratio = gap / ROD_D
+        checks.append(("clip mouth 0.8-0.92x rod", 0.80 <= ratio <= 0.92,
+                       "opening %.2f = %.3fx O%g rod (snaps on, does not fall off)"
+                       % (gap, ratio, ROD_D)))
     for si, s in enumerate(sockets):
         tag = "S%d" % si
         if s["type"] == "planar":
@@ -852,8 +1043,9 @@ def verify(path, r_std, sockets, note, expect_bbox=60.0):
             deep = [(u, v, z) for u, v, z in loc
                     if 0.3 <= u <= LB - 0.5 and abs(v) <= r_std - 0.2 and 2.7 <= z <= H - 2.7]
             depth = LB - min(u for u, _v, _z in deep)
-            checks.append((tag + " depth >= %g" % DEPTH, depth >= DEPTH - 0.05,
-                           "%.2f mm blind" % depth))
+            checks.append((tag + " depth >= DERIVED %.2f" % DEPTH, depth >= DEPTH - 0.05,
+                           "%.2f mm blind (depth is sqrt(2M/(w*sigma)), not a picked number)"
+                           % depth))
             # pin: vertical ray through the pin axis must cross NOTHING (clear through-channel)
             pc = LB - PIN_FROM_MOUTH
             px = ox + pc * nx
@@ -896,26 +1088,45 @@ def verify(path, r_std, sockets, note, expect_bbox=60.0):
                            "min bin-radius %.3f..%.3f vs %.3f (%d bins)"
                            % (min(bins.values()), max(bins.values()), r_std, len(bins))))
             depth = max(sax for sax, _rr, _v in bore) + 1.0
-            checks.append((tag + " depth >= %g" % DEPTH, depth >= DEPTH - 0.6,
+            checks.append((tag + " depth >= DERIVED %.2f" % DEPTH, depth >= DEPTH - 0.6,
                            "%.1f mm along the 30deg axis" % depth))
             floor_z = min(v[2] for _s, _r2, v in bore)
-            wall_out = min(s["R_out"] * math.cos(math.pi / 36) - math.hypot(v[0], v[1])
-                           for _s, _r2, v in bore)
+
+            def apo_built(z):
+                # the tapered outer wall apothem the part was built with
+                return (s["rho0"] + (max(z, s["floor"]) - s["floor"]) * math.tan(s["tilt"])
+                        + s["a_r"] + s["wall_add"])
+            # wall measured from verts ON the bore surface only (rr ~ r): the channel-notch
+            # wall interpolants live INSIDE the wall thickness and are not bore surface
+            wall_out = min(apo_built(v[2]) - math.hypot(v[0], v[1])
+                           for _s2, rr2, v in bore if rr2 <= r_std + 0.15)
             wmin = min(floor_z, wall_out)
             checks.append((tag + " wall >= %.1f" % WALL_MIN, wmin >= WALL_MIN - 0.05,
-                           "floor %.2f outer %.2f (measured)" % (floor_z, wall_out)))
+                           "floor %.2f outer %.2f (measured vs tapered wall)"
+                           % (floor_z, wall_out)))
+            if si == 0:
+                # THE FILLER GATE: the core cone void must be open from the top face down --
+                # a probe dropped at r=2 into the mouth must cross NO surface (solid middle
+                # would put the top cap in its way; --sabotage filler proves this fires)
+                p0 = (2.0, 0.0, s["H"] + 5.0)
+                p1 = (2.0, 0.0, s["H"] * 0.55)
+                hits = seg_crossings(tris, p0, p1)
+                checks.append(("core void OPEN (no filler)", hits == 0,
+                               "%d hits on a probe into the core mouth (0 = open), "
+                               "void O%.1f at the top face" % (hits, 2 * s["rv_top"])))
             # pin channel: horizontal ray from outside toward the bore centre at zp
             zp = s["zp"]
             ca, sa = math.cos(ang), math.sin(ang)
             p0 = ((s["R_out"] + 2.0) * ca, (s["R_out"] + 2.0) * sa, zp)
-            walk_r = (12.5 - DEPTH * math.sin(tilt)) + (zp - (geom(r_std)[3] - DEPTH * math.cos(tilt))) * math.tan(tilt)
-            p1 = (walk_r * ca, walk_r * sa, zp)
+            p1 = (s["rho_zp"] * ca, s["rho_zp"] * sa, zp)
             hits = seg_crossings(tris, p0, p1)
             checks.append((tag + " pin O%.1f channel clear" % PIN_D, hits == 0,
                            "%d hits outer->bore-axis at z=%.1f (0=clear, single-wall)" % (hits, zp)))
     ok = all(c[1] for c in checks)
     ntris = len(tris)
-    print("%s: %d tris" % (path, ntris))
+    vol = mesh_volume(tris)
+    print("%s: %d tris, %.0f mm3 = %.1f g PLA (measured)" % (path, ntris, vol,
+                                                             vol * PLA_G_PER_MM3))
     if note:
         print("  NOTE %s" % note)
     for name, good, msg in checks:
@@ -976,14 +1187,14 @@ def build_one(name, r, out_dir, sabotage=None):
     tris, sockets, note = BUILDERS[name](r, sabotage)
     out = os.path.join(out_dir, "%s.stl" % name.lower())
     write_stl(out, tris)
-    verify(out, r, sockets, note)
+    verify(out, r, sockets, note, part=name)
     return out
 
 
 def family_viz(out_dir, files):
     """Lay every kit part out in a grid in one viz STL (render aid, not a print file)."""
     cols = 4
-    pitch = 62.0
+    pitch = 92.0             # parts grew with the derived socket depth (widest ~74 mm)
     tris = []
     for i, f in enumerate(files):
         part = read_stl(f)
@@ -1004,17 +1215,21 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--part", required=True, choices=PARTS + ("all",))
-    ap.add_argument("--fit", choices=("snug", "slide"), default="snug")
     ap.add_argument("--out-dir", default=os.path.dirname(os.path.abspath(__file__)))
-    ap.add_argument("--sabotage", choices=("bore", "wall"), default=None,
+    ap.add_argument("--sabotage", choices=("bore", "wall", "filler"), default=None,
                     help="deliberately wrong build to PROVE the function gates fire")
     a = ap.parse_args()
-    r = FIT[a.fit] / 2.0
+    r = BORE / 2.0
     _zc, _z45, _zapex, H = geom(r)
-    print("SOCKET STANDARD: bore O%.2f %s x %g deep, wall >= %g, pin O%g at %g from mouth, "
-          "H=%.1f, port W=%g  (fit constant from stave coupon; UNPROVEN on this horizontal "
-          "teardrop geometry until a coupon prints)"
-          % (FIT[a.fit], a.fit.upper(), DEPTH, WALL_MIN, PIN_D, PIN_FROM_MOUTH, H, W))
+    M = RC.DESIGN_LOAD_N * RC.ROD_LEN
+    print("SOCKET STANDARD v2: bore O%.2f FLAT (rods MEASURE %g-%g; TPU shims fill the gap), "
+          "wall >= %g, pin O%g at %g from mouth, H=%.1f, port W=%g"
+          % (BORE, RC.ROD_MIN, RC.ROD_MAX, WALL_MIN, PIN_D, PIN_FROM_MOUTH, H, W))
+    print("DEPTH %.2f mm DERIVED: M = %g N x %g mm = %g N.mm; sigma = 2M/(w d^2); "
+          "d = sqrt(2*%g/(%g*%g)) at %g MPa = crush/%g  (v1's 12 mm sat AT the %g MPa crush)"
+          % (DEPTH, RC.DESIGN_LOAD_N, RC.ROD_LEN, M, M, RC.ROD_NOM,
+             RC.PLA_CRUSH_MPA / RC.SAFETY, RC.PLA_CRUSH_MPA / RC.SAFETY, RC.SAFETY,
+             RC.PLA_CRUSH_MPA))
     names = list(PARTS) if a.part == "all" else [a.part]
     files = [build_one(n, r, a.out_dir, a.sabotage) for n in names]
     if a.part == "all" and not a.sabotage:
