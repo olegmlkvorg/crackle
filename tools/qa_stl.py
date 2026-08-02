@@ -45,6 +45,7 @@ import struct
 import sys
 from collections import Counter
 
+FABRIC_MIN_FACE = 47.0  # deg floor for fabric downward faces (45 + 2 margin, low-fan TPU)
 DOWN_NZ = -0.707        # unit-normal nz below this = downward-facing
 BED_Z = 0.5             # mm; centroid at/below this sits on the bed
 SPAN_MARGIN = 6.0       # mm inside the band wall radius = a real span, not a wall bead
@@ -210,7 +211,91 @@ def _min_clearance(comp_tris):
     return math.sqrt(best2), pair
 
 
-def run_file(path, cls, bed, allow, clear_min):
+
+def _layer_continuity(body_tris, dz=0.4, walk=1.1, sample=0.6):
+    """THE support-free ground truth: slice the mesh at dz planes; every bit of material in layer k
+    must sit within `walk` (XY) of material in layer k-1, or be part of a BRIDGE RUN (an unsupported
+    span whose ends are supported). Face-angle rules are necessary but NOT sufficient (a tilted
+    ring's crest passes the face rule yet prints in mid-air -- Oleg caught it, 2026-08-02).
+    Returns (bridge_runs, longest_run_mm, unsupported_orphans) where orphans = unsupported points
+    NOT in a bridge (no supported ends) -- those are hard failures."""
+    minz = min(v[2] for t in body_tris for v in t)
+    maxz = max(v[2] for t in body_tris for v in t)
+    layers = []
+    zc = minz + dz
+    while zc < maxz:
+        pts = []
+        for a, b, c in body_tris:
+            zs = (a[2], b[2], c[2])
+            if max(zs) < zc or min(zs) > zc:
+                continue
+            hits = []
+            for p, q in ((a, b), (b, c), (c, a)):
+                if (p[2] - zc) * (q[2] - zc) <= 0 and abs(q[2] - p[2]) > 1e-9:
+                    t_ = (zc - p[2]) / (q[2] - p[2])
+                    hits.append((p[0] + t_ * (q[0] - p[0]), p[1] + t_ * (q[1] - p[1])))
+            if len(hits) >= 2:
+                (x0, y0), (x1, y1) = hits[0], hits[1]
+                L = math.hypot(x1 - x0, y1 - y0)
+                n_ = max(1, int(L / sample))
+                for k in range(n_ + 1):
+                    f = k / n_
+                    pts.append((x0 + f * (x1 - x0), y0 + f * (y1 - y0)))
+        layers.append(pts)
+        zc += dz
+
+    def grid(pts):
+        g = {}
+        for (x, y) in pts:
+            g.setdefault((int(x // 2), int(y // 2)), []).append((x, y))
+        return g
+
+    runs = []
+    orphans = 0
+    for k in range(1, len(layers)):
+        below = grid(layers[k - 1])
+        unsup = []
+        for (x, y) in layers[k]:
+            cx, cy = int(x // 2), int(y // 2)
+            ok = False
+            for gx in (cx - 1, cx, cx + 1):
+                for gy in (cy - 1, cy, cy + 1):
+                    for (bx, by) in below.get((gx, gy), ()):
+                        if (x - bx) ** 2 + (y - by) ** 2 <= walk * walk:
+                            ok = True
+                            break
+                    if ok: break
+                if ok: break
+            if not ok:
+                unsup.append((x, y))
+        if not unsup:
+            continue
+        # cluster unsupported points into runs (1.5mm neighbour joins)
+        unused = list(unsup)
+        while unused:
+            seed = unused.pop()
+            run = [seed]
+            changed = True
+            while changed:
+                changed = False
+                for p in unused[:]:
+                    if any((p[0]-q[0])**2 + (p[1]-q[1])**2 <= 2.25 for q in run):
+                        run.append(p); unused.remove(p); changed = True
+            xs = [p[0] for p in run]; ys = [p[1] for p in run]
+            span = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+            # a run is a BRIDGE if supported material sits within walk of BOTH extreme ends
+            supported = [p for p in layers[k] if p not in unsup]
+            def _near(pt):
+                return any((pt[0]-sx)**2 + (pt[1]-sy)**2 <= (walk*1.5)**2 for (sx, sy) in supported)
+            e1 = min(run, key=lambda p: p[0]*1000 + p[1]); e2 = max(run, key=lambda p: p[0]*1000 + p[1])
+            if _near(e1) and _near(e2):
+                runs.append(span)
+            else:
+                orphans += len(run)
+    return runs, (max(runs) if runs else 0.0), orphans
+
+
+def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0):
     """Run all checks for one file. Returns True if every check passed."""
     print("== %s [%s] ==" % (path, cls))
     fails = [0]
@@ -467,9 +552,13 @@ def run_file(path, cls, bed, allow, clear_min):
             ang = math.degrees(math.acos(min(1.0, abs(_nz))))
             if ang < shallow:
                 shallow = ang
-        report("OVERHANG", n_over == 0,
-               "%d downward faces shallower than 45deg above z=%.1f; shallowest downward face "
-               "overall = %.1f deg from horizontal" % (n_over, BED_Z, shallow))
+        n_margin = sum(1 for _nz, z, _r in faces
+                       if z > BED_Z and _nz < 0
+                       and math.degrees(math.acos(min(1.0, abs(_nz)))) < FABRIC_MIN_FACE)
+        report("OVERHANG", n_over == 0 and n_margin == 0,
+               "%d faces < 45deg, %d faces < %.0fdeg floor (45 + 2 margin for low-fan TPU); "
+               "shallowest downward face = %.1f deg from horizontal"
+               % (n_over, n_margin, FABRIC_MIN_FACE, shallow))
 
         on_bed = sum(1 for mz in comp_minz if mz <= BED_Z)
         report("BED-ALL", on_bed == ncomp,
@@ -483,6 +572,14 @@ def run_file(path, cls, bed, allow, clear_min):
                       "  worst pair components %s<->%s" % pr if pr[0] is not None else ""))
         else:
             report("CLEARANCE", False, "only %d component -- a fabric needs >=2 rings" % ncomp)
+
+        body = [(t[0], t[1], t[2]) for t in tris3d] if tris3d else \
+               [t for ct in comp_tris for t in ct]
+        runs, longest, orphans = _layer_continuity(body)
+        report("LAYERCONT", orphans == 0 and longest <= bridge_max,
+               "%d bridge runs (longest %.1f mm, allowed %.1f), %d unsupported orphan points -- "
+               "every layer must land on the layer below; bridges are a MEASURED allowance, not free"
+               % (len(runs), longest, bridge_max, orphans))
 
     # -- 7 BED ----------------------------------------------------------------
     if minx == float("inf"):
@@ -512,13 +609,15 @@ def main():
                     help="max bbox X and Y in mm (default 340)")
     ap.add_argument("--allow-overhang", type=int, default=0,
                     help="spanning overhang faces tolerated (default 0)")
+    ap.add_argument("--bridge-max", type=float, default=8.0,
+                    help="fabric: longest tolerated bridge run mm (crest of a tilted ring bridges)")
     ap.add_argument("--clear-min", type=float, default=0.45,
                     help="fabric: min pairwise surface clearance in mm (default 0.45)")
     args = ap.parse_args()
 
     failed = 0
     for path in args.stl:
-        if not run_file(path, args.cls, args.bed, args.allow_overhang, args.clear_min):
+        if not run_file(path, args.cls, args.bed, args.allow_overhang, args.clear_min, args.bridge_max):
             failed += 1
     n = len(args.stl)
     if failed:
