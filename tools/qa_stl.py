@@ -295,7 +295,7 @@ def _layer_continuity(body_tris, dz=0.4, walk=1.1, sample=0.6):
     return runs, (max(runs) if runs else 0.0), orphans
 
 
-def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0):
+def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None):
     """Run all checks for one file. Returns True if every check passed."""
     print("== %s [%s] ==" % (path, cls))
     fails = [0]
@@ -589,6 +589,25 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0):
         report("BED", dx <= bed and dy <= bed,
                "bbox %.1f x %.1f x %.1f mm (X,Y limit %g)" % (dx, dy, dz, bed))
 
+    # TRANSIT. Opt-in, because most parts have no bore. Added 2026-08-03 after a bend guide
+    # passed six checks including one NAMED "threadable" and could not admit a stick. A check
+    # whose name claims a property must measure that property, so this one calls the measuring
+    # code in transit.py rather than a proxy. See Assist/guides/retro-bore-transit.md.
+    if transit_dia:
+        try:
+            import transit as _t
+        except ImportError:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import transit as _t
+        try:
+            r = _t.check(path, transit_dia)
+            ok, msg = r["ok"], r["msg"]
+        except Exception as e:
+            # A probe that errors must FAIL, never pass quietly. A broken probe reporting
+            # success is how several wrong conclusions got made in this project.
+            ok, msg = False, "transit probe failed: %s" % e
+        report("TRANSIT", ok, msg)
+
     return fails[0] == 0
 
 
@@ -613,11 +632,16 @@ def main():
                     help="fabric: longest tolerated bridge run mm (crest of a tilted ring bridges)")
     ap.add_argument("--clear-min", type=float, default=0.45,
                     help="fabric: min pairwise surface clearance in mm (default 0.45)")
+    ap.add_argument("--transit", type=float, default=None, metavar="DIA",
+                    help="also prove a rigid DIA mm part can be THREADED through this part's bore, "
+                         "measured off the mesh (tools/transit.py). Use it on anything a rod, "
+                         "marble or shaft must pass through.")
     args = ap.parse_args()
 
     failed = 0
     for path in args.stl:
-        if not run_file(path, args.cls, args.bed, args.allow_overhang, args.clear_min, args.bridge_max):
+        if not run_file(path, args.cls, args.bed, args.allow_overhang, args.clear_min,
+                        args.bridge_max, args.transit):
             failed += 1
     n = len(args.stl)
     if failed:
