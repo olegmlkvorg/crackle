@@ -41,7 +41,15 @@ so slicer VASE mode prints them as one continuous wall. Z-monotonic by construct
 import math, os, struct
 
 # ---- the kit connection standard: BOND v2.1 (surface path dimensions, mm) ----
-LINE_W        = 1.2      # vase line width the fit is designed around (Oleg: "assuming 1.2mm line width")
+LINE_W        = 0.95     # MEASURED 2026-08-02 off the gcode that printed four chutes: commanded
+                         # line_width = 1.0 x filament_flow_ratio 0.95, cross-checked against the
+                         # deposited cross-section of 9653 real extruding moves (0.4670 mm2/mm at
+                         # 0.56 layer = a 0.95mm bead with rounded ends). It was 1.2 from Oleg's
+                         # opening estimate and NOBODY EVER CHECKED IT, so every socket shipped
+                         # 0.25mm loose per face: the land seated at 0.37 instead of 0.12 and the
+                         # snap peaked at 0.43, under the 0.45 floor. That is the loose connector.
+                         # Only socket_r() uses this, so a corrected socket still takes an
+                         # already-printed spigot, and takes it TIGHTER.
 COUPLE_L      = 16.0     # engagement length: socket depth = spigot length
 SPIGOT_BASE_D = 56.0     # male path at the base (top of the spigot), end of the exit cone
 SPIGOT_TIP_D  = 52.0     # male path at the tip AND over the whole cylindrical land
