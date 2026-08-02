@@ -1,0 +1,5 @@
+[qa_sim] assets/spiral_chute_snapshot.stl
+[qa_sim] tris=149472  bbox z 0.0..235.3mm  crestR=20.4mm  helix zone z 58.8..178.8mm  exitZ<35.3mm  descentDir=-theta
+[qa_sim] drop at [-1.6, -12.3, 213.1]mm  speed=100mm/s  dt=1/480  scenario=chute
+[qa_sim] turns=3.74  maxR(zone)=10.2mm vs crest 20.4mm (margin 10.2mm)  descent=0.76s  exit@0.91s  stall=0.0s  lowestZ=36.2mm
+[qa_sim] PASS — ORBIT: marble stays captive, descends, exits.
