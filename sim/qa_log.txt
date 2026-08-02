@@ -1,13 +1,20 @@
 [qa_sim] assets/spiral_chute_snapshot.stl
 [qa_sim] tris=149472  bbox z 0.0..235.3mm  crestR=20.4mm  helix zone z 58.8..178.8mm  exitZ<35.3mm  descentDir=-theta
-[qa_sim] drop at [-1.6, -12.3, 213.1]mm  speed=100mm/s  dt=1/480  marble=O16  scenario=chute
+[qa_sim] drop at [-1.6, -12.3, 213.1]mm  speed=100mm/s  dt=1/480  marble=O16  scenario=chute  feed=gutter
 [qa_sim] turns=3.54  maxR(zone)=10.3mm vs crest 20.4mm (margin 10.1mm)  descent=0.75s  exit@0.91s  stall=0.0s  lowestZ=34.6mm
 [qa_sim] PASS: ORBIT: marble stays captive, descends, exits.
 
--- sorter scenario, the claim that did NOT survive (crest set between O16 and O12) --
+-- the sorter, fed down the middle as a funnel would --
 [qa_sim] /tmp/s_16_12.stl
 [qa_sim] tris=131040  bbox z 0.0..203.1mm  crestR=20.5mm  helix zone z 50.8..154.3mm  exitZ<30.5mm  descentDir=-theta
-[qa_sim] drop at [13.4, -5.5, 184.7]mm  speed=100mm/s  dt=1/480  marble=O12  scenario=sorter expect=shaft
-[qa_sim] turns=3.17  maxR(zone)=13.5mm vs crest 20.5mm (margin 7.0mm)  descent=0.82s  exit@0.93s  stall=0.1s  lowestZ=31.1mm
-[qa_sim] outcome=RIDE (expected SHAFT)
-[qa_sim] FAIL: SORT: a O12 marble came out RIDE, wanted SHAFT. The crest does not sort these two sizes at this entry speed.
+[qa_sim] drop at [13.4, -5.5, 184.7]mm  speed=100mm/s  dt=1/480  marble=O12  scenario=sorter expect=shaft  feed=axis
+[qa_sim] turns=0.00  maxR(zone)=0.0mm vs crest 20.5mm (margin 20.5mm)  descent=n/as  exit@n/as  stall=0.0s  lowestZ=109.9mm
+[qa_sim] outcome=SHAFT (expected SHAFT)
+[qa_sim] PASS: SORT: a O12 marble falls through the crest into the shaft.
+
+[qa_sim] /tmp/s_16_12.stl
+[qa_sim] tris=131040  bbox z 0.0..203.1mm  crestR=20.5mm  helix zone z 50.8..154.3mm  exitZ<30.5mm  descentDir=-theta
+[qa_sim] drop at [13.4, -5.5, 184.7]mm  speed=100mm/s  dt=1/480  marble=O16  scenario=sorter expect=ride  feed=axis
+[qa_sim] turns=2.01  maxR(zone)=10.3mm vs crest 20.5mm (margin 10.2mm)  descent=0.73s  exit@0.79s  stall=0.1s  lowestZ=31.1mm
+[qa_sim] outcome=RIDE (expected RIDE)
+[qa_sim] PASS: SORT: a O16 marble rides the spiral past the crest.

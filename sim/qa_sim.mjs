@@ -30,6 +30,10 @@ if (scenario === 'sorter' && expect !== 'ride' && expect !== 'shaft') {
   process.exit(2);
 }
 const marbleD = Number(arg('marble', 16));
+// FEED MATTERS MORE THAN SIZE. A marble already in the gutter rides whatever its diameter; the
+// crest only sorts what arrives down the middle, which is what a funnel on top actually delivers.
+// Default the sorter to axis feed, because testing a sorter on gutter feed answers nothing.
+const feed = arg('feed', scenario === 'sorter' ? 'axis' : 'gutter');
 
 const { positions, triCount } = parseBinarySTL(readFileSync(stlPath));
 const sim = await createSim(positions, {
@@ -51,8 +55,13 @@ console.log(`[qa_sim] tris=${triCount}  bbox z ${g.bbox.min[2].toFixed(1)}..${g.
   `exitZ<${g.exitZ.toFixed(1)}mm  descentDir=${g.descentDir > 0 ? '+theta' : '-theta'}`);
 console.log(`[qa_sim] drop at [${g.entry.posMM.map((v) => v.toFixed(1)).join(', ')}]mm  ` +
   `speed=${sim.opts.entrySpeedMM}mm/s  dt=1/${Math.round(1 / sim.opts.dt)}  marble=O${marbleD}  ` +
-  `scenario=${scenario}${scenario === 'sorter' ? ' expect=' + expect : ''}`);
+  `scenario=${scenario}${scenario === 'sorter' ? ' expect=' + expect : ''}  feed=${feed}`);
 
+if (feed === 'axis') {
+  const zTop = sim.geo.zone.max + 0.10 * sim.geo.H;
+  const c = sim.geo.centerAt(zTop);
+  sim.drop([c[0], c[1], zTop], [0, 0, 0]);   // at rest, down the middle
+}
 const maxSteps = Math.ceil((maxTime + 2) / sim.opts.dt);
 for (let i = 0; i < maxSteps; i++) {
   const s = sim.step();
@@ -68,6 +77,9 @@ console.log(`[qa_sim] turns=${fmt(v.turns)}  maxR(zone)=${fmt(v.maxRInZoneMM, 1)
 if (scenario === 'sorter') {
   // In a sorter a centre drop is the CORRECT answer for an undersized marble, so the chute
   // gate's verdict is not the question. What happened is: did it go down the shaft, or ride?
+  // CENTER-DROP ends the run by design, so this flag is the RIGHT thing to read here, but any
+  // depth or time read after it is where the watcher stopped, not the marble. Reading lowestZ
+  // after this flag once produced a "stalls partway down" result that was pure watcher artifact.
   const wentShaft = tracker.escaped?.kind === 'CENTER-DROP';
   const rode = !wentShaft && v.turns >= 1.0;
   const got = wentShaft ? 'SHAFT' : rode ? 'RIDE' : 'NEITHER';

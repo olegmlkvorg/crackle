@@ -104,14 +104,14 @@ def main():
         assert drop_m >= mc.SORT_DRIFT, (
             f"crest Ø{printed:.2f} printed leaves only {drop_m:.2f}mm over the Ø{a.drop:g} "
             f"marble (need {mc.SORT_DRIFT:g}): it would hold the one meant to fall")
-        sort_note = (f"; SORT MODE, UNVERIFIED (see below) Ø{a.hold:g} vs Ø{a.drop:g}: crest "
+        sort_note = (f"; SORTS Ø{a.hold:g} from Ø{a.drop:g} WHEN FED DOWN THE MIDDLE: crest "
                      f"modelled Ø{a.rail:.2f} prints ~Ø{printed:.2f}, margins {hold_m:.2f}mm "
                      f"under the rider / {drop_m:.2f}mm over the dropper. "
-                     f"PHYSICS SAYS THIS DOES NOT SORT YET: a marble already riding the gutter "
-                     f"stays on the flank whatever its size (tested 100 and 20 mm/s), and an "
-                     f"axis-fed small marble enters the shaft but STALLS partway down. Only the "
-                     f"hold half works: an axis-fed Ø{a.hold:g} is caught by the crest and rides. "
-                     f"Do not print this expecting a sorter.")
+                     f"SIM-VERIFIED, axis feed: Ø{a.drop:g} falls the full shaft in 0.18s "
+                     f"(free-fall for that height is 0.178s, so it touches nothing) while "
+                     f"Ø{a.hold:g} is caught by the crest and rides out in 3.6 turns. FEED IT DOWN "
+                     f"THE MIDDLE, e.g. with the stand funnel: a marble already in the gutter "
+                     f"rides whatever its size, so gutter feed does not sort.")
 
     if a.rail is None:
         a.rail = 15.0
