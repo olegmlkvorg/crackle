@@ -1,5 +1,26 @@
 # crackle — objects made of toolpath, not of shape
 
+## Layout (reorganized 2026-08-02)
+
+The repo root is the original toolpath-native gcode engine (path IS the product; the art pieces).
+Product part families live in domain folders, each self-contained (stdlib-only, co-located imports):
+
+    marble/   the marble-run kit: tapered-coupling standard, spiral chute, drop tube, catch cup,
+              star tension ring. One physical part printed so far (the chute, 2026-08-02).
+    stand/    the K2 printer-stand formwork: twisted-clover leg, foot cups, segmented platform,
+              pour funnel, TPU mixing bowl. Legs printed; pour unproven.
+    gift/     the personalization verticals: name-embossing engine (capsule-chain raised text),
+              cast dumbbell (drum form), weighted bin. Design stage; nothing cast.
+    fabric/   print-in-place chainmail (TPU): disjoint interlocked rings, Gauss-linking verified.
+              Design stage; nothing printed.
+    tools/    the gates and fleet tools: qa_stl.py (the STL quality gate: watertight, printable,
+              clearance with edge-edge, function classes), render_stand_stl.py (3-view renders),
+              push.py + watch-printers.sh (Moonraker fleet).
+    fixtures/ known-bad artifacts every gate must FAIL before its PASS means anything.
+
+A generator whose self-verify fails quarantine-renames its output `.FAILED`: a failing STL never
+sits in the tree looking ready.
+
 Python emits gcode **directly**. No CAD, no mesh, no STL, no slicer.
 
 A slicer's job is to take a shape and hide the machine. This does the opposite: the path *is* the
