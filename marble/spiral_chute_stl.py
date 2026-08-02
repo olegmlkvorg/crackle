@@ -10,9 +10,9 @@ flank catches it); too fast -> it climbs the flank outward-UPWARD and brushes th
 ceiling — both self-correcting. Descent = one pitch per lap, a rolling grade (~19°), not
 free-fall. The helix IS the vase spiral: single-valued r(θ,z), Z-monotonic.
 
-Coupling: standard kit collars — Ø56 female socket (top), Ø55 male spigot (bottom); the
-wave blends into plain cones over half a pitch at each end (entry hands the marble to the
-first full turn; exit lets the last turn pour into the spigot).
+Coupling: the kit BOND v2 (marble_common) — tapered female socket + groove (top), tapered
+male spigot + snap bump (bottom); the wave blends into plain cones at each end (entry hands
+the marble to the first full turn; exit lets the last turn pour into the spigot).
 
 Usage: python3 spiral_chute_stl.py [--turns 4] [--pitch 28] [--rail 15] [--pocket 44]
                                    [--floor-frac 0.54] [--points 144] [--out spiral_chute.stl]
@@ -104,26 +104,28 @@ def main():
     def add_ring(z):
         w = blend(z)
         if w == 0.0:                               # plain profile outside the wave zone
-            if z <= mc.COUPLE_L:                    # tapered male spigot: tip -> base
-                r = mc.SPIGOT_TIP_R + (mc.SPIGOT_BASE_R - mc.SPIGOT_TIP_R) * (z / mc.COUPLE_L)
+            if z <= mc.COUPLE_L:                    # BOND v2 male spigot: cone + snap bump
+                r = mc.spigot_r(z)
             elif z < z_w0: r = mc.SPIGOT_BASE_R + (pocket_r - mc.SPIGOT_BASE_R) * (z - mc.COUPLE_L) / h_cone_lo
             elif z <= z_w1: r = pocket_r
             elif z < total - mc.COUPLE_L: r = pocket_r + (mc.SOCKET_BOT_R - pocket_r) * (z - z_w1) / h_cone_hi
-            else:                                   # tapered female socket: bottom -> mouth
-                r = mc.SOCKET_BOT_R + (mc.SOCKET_MOUTH_R - mc.SOCKET_BOT_R) * (z - (total - mc.COUPLE_L)) / mc.COUPLE_L
+            else:                                   # BOND v2 female socket: cone + groove
+                r = mc.socket_r(z - (total - mc.COUPLE_L))
             rows.append((z, [r] * N))
         else:
             radii = [pocket_r - w * (pocket_r - wave(z / P - k / N)) for k in range(N)]
             rows.append((z, radii))
 
-    add_ring(0.0); add_ring(mc.COUPLE_L)           # spigot
+    n_b = int(round(mc.COUPLE_L / mc.BOND_DZ))     # spigot: sampled fine (the bump lives here)
+    for i in range(n_b + 1): add_ring(mc.COUPLE_L * i / n_b)
     steps = int(h_cone_lo / 2) + 1
     for i in range(1, steps + 1): add_ring(mc.COUPLE_L + h_cone_lo * i / steps)
     n_wave = int(wave_h / a.zstep)
     for i in range(1, n_wave + 1): add_ring(z_w0 + wave_h * i / n_wave)
     steps = int(h_cone_hi / 2) + 1
     for i in range(1, steps + 1): add_ring(z_w1 + h_cone_hi * i / steps)
-    add_ring(total)
+    for i in range(1, n_b + 1):                    # socket: sampled fine (the groove lives here)
+        add_ring(total - mc.COUPLE_L + mc.COUPLE_L * i / n_b)
 
     tris = mc.grid_tris(rows, N)
     mc.write_stl(a.out, tris)

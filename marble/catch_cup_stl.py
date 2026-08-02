@@ -25,7 +25,8 @@ def profile(belly, floor, couple):
     for i in range(1, 17):
         t = i / 16
         p.append((z + dz * t, rb - dr * (1 - math.cos(math.pi * t)) / 2))
-    p.append((z + dz + couple, mc.SOCKET_MOUTH_R))    # tapered female socket: neck -> mouth
+    p += mc.socket_profile(z + dz)[1:]                # BOND v2 female socket: neck -> mouth
+    #                                    ([1:] — the shoulder already ends on the socket-bottom ring)
     top = z + dz + couple
     return p, top
 

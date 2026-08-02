@@ -70,8 +70,9 @@ def main():
 
     fig = plt.figure(figsize=(17, 11), facecolor=BG)
     fig.suptitle("MARBLE RUN KIT — pour the funnel, orbit the spiral, fall the tube, land in the cup\n"
-                 f"stack {H:.0f} mm tall — every joint: Ø{mc.SOCKET_D:g} socket over Ø{mc.SPIGOT_D:g} "
-                 f"spigot, {mc.COUPLE_L:g} mm overlap — RENDER ONLY: not yet printed, fit untested",
+                 f"stack {H:.0f} mm tall — every joint: BOND v2 Ø{mc.SOCKET_MOUTH_D:g}-mouth socket over "
+                 f"Ø{mc.SPIGOT_BASE_D:g}-base spigot, {mc.COUPLE_L:g} mm overlap, friction seat + snap detent "
+                 f"— RENDER ONLY: not yet printed, fit untested",
                  color=INK, family="monospace", fontsize=13)
 
     # ---- panel 1: assembled tower, isometric ----

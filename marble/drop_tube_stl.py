@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """DROP TUBE STL — the simplest marble-run link: a straight vertical fall.
 
-Bottom-up: tapered male spigot -> cone in to the Ø24 marble bore -> straight bore -> cone out
-to the tapered female socket at the top. Marbles fall from the part above straight through.
-Ends use the shared kit standard (marble_common: tapered nest, female path +1.6mm over male so the
-single walls clear). Open surface, single-valued r(z): slice VASE mode (one continuous wall, Z-monotonic).
+Bottom-up: BOND v2 male spigot (cone + snap bump) -> cone in to the Ø24 marble bore -> straight
+bore -> cone out to the BOND v2 female socket (cone + groove) at the top. Marbles fall from the
+part above straight through. Ends use the shared kit standard (marble_common: friction seat
+0.5 entry -> 0.12 seat + snap detent). Open surface, single-valued r(z): slice VASE mode.
 
 Usage: python3 drop_tube_stl.py [--length 120] [--bore 24] [--points 120] [--out drop_tube.stl]
 """
