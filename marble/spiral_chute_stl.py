@@ -17,7 +17,7 @@ the marble to the first full turn; exit lets the last turn pour into the spigot)
 Usage: python3 spiral_chute_stl.py [--turns 4] [--pitch 28] [--rail 15] [--pocket 44]
                                    [--floor-frac 0.54] [--points 144] [--out spiral_chute.stl]
 """
-import argparse, math
+import argparse, math, os
 
 import marble_common as mc
 
@@ -63,18 +63,53 @@ def main():
     ap.add_argument("--turns", type=int, default=4, help="full gutter turns")
     ap.add_argument("--pitch", type=float, default=32.0,
                     help="helix pitch mm/turn (>=30 so a Ø16 marble fits the gutter mouth)")
-    ap.add_argument("--rail", type=float, default=15.0,
-                    help="rail crest dia mm — MUST be < marble Ø16 to keep it captive")
+    ap.add_argument("--rail", type=float, default=None,
+                    help="rail crest dia mm (default 15) — MUST be < marble Ø16 to keep it "
+                         "captive. In sort mode, overrides the derived crest and gets checked.")
     ap.add_argument("--pocket", type=float, default=44.0, help="pocket (outer wave) dia mm")
     ap.add_argument("--floor-frac", type=float, default=0.50,
                     help="fraction of pitch used by the up-facing floor flank")
     ap.add_argument("--points", type=int, default=144, help="points per ring")
     ap.add_argument("--zstep", type=float, default=0.5, help="ring spacing mm in the wave zone")
+    ap.add_argument("--hold", type=float, default=None,
+                    help="SORT MODE: marble dia mm that must RIDE the spiral (with --drop)")
+    ap.add_argument("--drop", type=float, default=None,
+                    help="SORT MODE: marble dia mm that must FALL through the central shaft")
+    ap.add_argument("--lean", type=float, default=0.0,
+                    help="tilt the helix axis off vertical, deg. Bond ends stay vertical and "
+                         "circular, so the segment still couples; the stack steps sideways.")
     ap.add_argument("--out", default="spiral_chute.stl")
     a = ap.parse_args()
 
+    # SORT MODE. The chute has always been a sieve and nobody had named it: the wall is
+    # single-valued r(theta,z), so the minimum radius over theta is the rail crest at EVERY
+    # height, and the central shaft is a clear tube of exactly the rail diameter running the
+    # whole tower. Anything smaller than the crest free-falls the axis; anything bigger rides
+    # the spiral. Setting the crest BETWEEN two marble sizes turns that into a sorter.
+    sort_note = ""
+    if (a.hold is None) != (a.drop is None):
+        raise SystemExit("sort mode needs BOTH --hold and --drop (the two marble sizes to split)")
+    if a.hold is not None:
+        # An explicit --rail pins the crest and is CHECKED against both marbles below; without
+        # one, sort_gate derives the midpoint (and raises when the sizes are too close to split).
+        a.rail = a.rail if a.rail is not None else mc.sort_gate(a.hold, a.drop)
+        printed = a.rail - mc.HOLE_SHRINK              # what the machine will actually make
+        hold_m, drop_m = a.hold - printed, printed - a.drop
+        assert hold_m >= mc.SORT_DRIFT, (
+            f"crest Ø{printed:.2f} printed leaves only {hold_m:.2f}mm under the Ø{a.hold:g} "
+            f"marble (need {mc.SORT_DRIFT:g}): it would drop the one meant to ride")
+        assert drop_m >= mc.SORT_DRIFT, (
+            f"crest Ø{printed:.2f} printed leaves only {drop_m:.2f}mm over the Ø{a.drop:g} "
+            f"marble (need {mc.SORT_DRIFT:g}): it would hold the one meant to fall")
+        sort_note = (f"; SORTS Ø{a.hold:g} (rides) from Ø{a.drop:g} (falls the shaft): crest "
+                     f"modelled Ø{a.rail:.2f} prints ~Ø{printed:.2f}, margins {hold_m:.2f}mm "
+                     f"under the rider / {drop_m:.2f}mm over the dropper")
+
+    if a.rail is None:
+        a.rail = 15.0
     rail_r, pocket_r = a.rail / 2, a.pocket / 2
-    assert a.rail <= mc.MARBLE_D - 1.0, "--rail must undercut the marble by >=1 mm (captivity)"
+    if a.hold is None:
+        assert a.rail <= mc.MARBLE_D - 1.0, "--rail must undercut the marble by >=1 mm (captivity)"
     assert pocket_r < mc.SPIGOT_TIP_R, "--pocket must stay inside the spigot tip dia"
     grade = math.degrees(math.atan(a.pitch / (2 * math.pi * 13.0)))
 
@@ -127,15 +162,67 @@ def main():
     for i in range(1, n_b + 1):                    # socket: sampled fine (the groove lives here)
         add_ring(total - mc.COUPLE_L + mc.COUPLE_L * i / n_b)
 
+    free_ch = 2 * min(min(r) for _, r in rows)     # measured from the emitted rings
+    pocket_m = 2 * max(tab)
+
+    z_lean0, z_lean1 = mc.COUPLE_L, total - mc.COUPLE_L
+    if a.lean:
+        rows = mc.shear_rows(rows, a.lean, z_lean0, z_lean1)
     tris = mc.grid_tris(rows, N)
     mc.write_stl(a.out, tris)
     v = mc.verify_stl(a.out)
-    free_ch = 2 * min(min(r) for _, r in rows)     # measured from the emitted rings
-    pocket_m = 2 * max(tab)
+
+    lean_note = ""
+    if a.lean:
+        # MEASURED off the emitted mesh, both ways: the wall lean the shear cost us, and the
+        # lateral step the segment actually delivers (bond-zone centres, not the design number).
+        import struct as _s
+        with open(a.out, "rb") as f:
+            f.read(84)
+            lo_x = [1e30, -1e30]; hi_x = [1e30, -1e30]
+            for _ in range(v["tris"]):
+                f.read(12)
+                for _ in range(3):
+                    x, y, z = _s.unpack("<3f", f.read(12))
+                    tgt = lo_x if z <= mc.COUPLE_L else (hi_x if z >= z_lean1 else None)
+                    if tgt is not None:
+                        tgt[0] = min(tgt[0], x); tgt[1] = max(tgt[1], x)
+                f.read(2)
+        step = ((hi_x[0] + hi_x[1]) - (lo_x[0] + lo_x[1])) / 2      # centre-to-centre in x
+        want = (z_lean1 - z_lean0) * math.tan(math.radians(a.lean))
+        budget = mc.lean_budget(v["max_lean"])
+        checks = [
+            ("wall lean <= 55", v["max_lean"] <= 55.0,
+             f"measured {v['max_lean']:.0f}° from vertical, {budget:+.0f}° of budget left"),
+            ("step delivered", abs(step - want) < 0.5,
+             f"measured bond-to-bond step {step:.2f}mm vs designed {want:.2f}mm"),
+        ]
+        ok = True
+        for name, good, msg in checks:
+            print("  %s %-18s %s" % ("PASS" if good else "FAIL", name, msg))
+            ok = ok and good
+        if not ok:
+            os.replace(a.out, a.out + ".FAILED")
+            raise SystemExit(
+                f"\nLEAN {a.lean:g}° REFUSED: measured wall lean {v['max_lean']:.0f}° against the "
+                f"55° vase ceiling.\nTilt does NOT cost a degree of wall lean per degree of lean: "
+                f"the shear rotates the surface normal, and the steepest facet is not the one "
+                f"facing the tilt, so the wall gains only ~0.25° per degree.\nMEASURED ceilings "
+                f"(the sweep that found them is in the repo history, each one fails at +1°):\n"
+                f"  --pitch 32 (default)  leans to 16°  (49mm sideways per segment)\n"
+                f"  --pitch 38            leans to 22°  (81mm sideways per segment)\n"
+                f"  --pitch 44            leans to 23°  (98mm sideways per segment)\n"
+                f"A relaxed wave buys the tilt: pitch 38 measures 47° unsheared where the default "
+                f"measures 51°.\nThe 45° floor underneath is marble_common.CONE_SLOPE (the end "
+                f"transition cones), not the wave.\n{a.out} quarantined to .FAILED.")
+        lean_note = (f", LEANING {a.lean:g}° (measured wall lean {v['max_lean']:.0f}°, "
+                     f"{budget:.0f}° left; the segment steps {step:.1f}mm sideways bond to bond)")
+
     mc.report(a.out, v, note=(
         f"{a.turns} captive turns, pitch {P:g} (drop/lap), measured rail Ø{free_ch:.1f} "
         f"(< marble Ø{mc.MARBLE_D:g}, captive) / pocket Ø{pocket_m:.1f}, "
-        f"gutter mouth ~{mouth:.1f} mm at the ride radius, rolling grade ~{grade:.0f}°"))
+        f"gutter mouth ~{mouth:.1f} mm at the ride radius, rolling grade ~{grade:.0f}°"
+        + lean_note + sort_note))
 
 
 if __name__ == "__main__":

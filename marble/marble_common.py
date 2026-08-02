@@ -183,34 +183,110 @@ def rev_rings(profile, n_pts):
     return [(z, [r] * n_pts) for z, r in profile]
 
 
+def _row(row):
+    """A grid row is (z, radii) or (z, radii, (cx, cy)). The optional centre is what makes a
+    LEANING part possible: a vertical shear TRANSLATES each horizontal ring and leaves it
+    perfectly circular, so bond ends still mate. Rows without a centre read as (0, 0)."""
+    if len(row) == 3:
+        z, radii, c = row
+        return z, radii, c[0], c[1]
+    z, radii = row
+    return z, radii, 0.0, 0.0
+
+
+def shear_rows(rows, lean_deg, z0, z1):
+    """Tilt the part between z0 and z1 by lean_deg, holding everything below z0 at x=0 and
+    carrying everything above z1 rigidly across at the full offset.
+
+    offset(z) = 0                     z <= z0     (bottom bond zone: untouched, vertical)
+              = (z - z0) * tan(lean)  z0 < z < z1 (the tilted body)
+              = (z1 - z0) * tan(lean) z >= z1     (top bond zone: translated, still vertical)
+
+    Both bond zones stay vertical and circular, so a leaning segment still couples to every
+    straight part in the kit; the stack just steps sideways by the offset each segment.
+    """
+    t = math.tan(math.radians(lean_deg))
+    out = []
+    for row in rows:
+        z, radii, cx, cy = _row(row)
+        dx = 0.0 if z <= z0 else (z1 - z0) * t if z >= z1 else (z - z0) * t
+        out.append((z, radii, (cx + dx, cy)))
+    return out
+
+
+def lean_budget(measured_max_lean_deg, ceiling=55.0):
+    """Degrees of tilt still available before the vase-printable wall-lean ceiling.
+    Shear adds its angle straight onto the downhill wall, so the budget is what is left."""
+    return ceiling - measured_max_lean_deg
+
+
 def grid_tris(rows, n_pts, close=True):
-    """rows = [(z, [r_0..r_{n-1}]), ...] bottom->top; quads between rings -> triangles.
-    Same winding as funnel_stl.py."""
-    def pt(z, radii, k):
+    """rows = [(z, [r_0..r_{n-1}]), ...] or [(z, radii, (cx, cy)), ...] bottom->top;
+    quads between rings -> triangles. Same winding as funnel_stl.py."""
+    def pt(z, radii, cx, cy, k):
         th = 2 * math.pi * k / n_pts
-        return (radii[k] * math.cos(th), radii[k] * math.sin(th), z)
+        return (cx + radii[k] * math.cos(th), cy + radii[k] * math.sin(th), z)
     tris = []
     rng = n_pts if close else n_pts - 1
     for i in range(len(rows) - 1):
-        z0, r0 = rows[i]; z1, r1 = rows[i + 1]
+        z0, r0, cx0, cy0 = _row(rows[i]); z1, r1, cx1, cy1 = _row(rows[i + 1])
         for k in range(rng):
             k1 = (k + 1) % n_pts
-            p00 = pt(z0, r0, k); p01 = pt(z0, r0, k1)
-            p10 = pt(z1, r1, k); p11 = pt(z1, r1, k1)
+            p00 = pt(z0, r0, cx0, cy0, k); p01 = pt(z0, r0, cx0, cy0, k1)
+            p10 = pt(z1, r1, cx1, cy1, k); p11 = pt(z1, r1, cx1, cy1, k1)
             tris.append((p00, p10, p11)); tris.append((p00, p11, p01))
     return tris
 
 
-def disc_tris(z, r, n_pts, up=False):
+def disc_tris(z, r, n_pts, up=False, centre=(0.0, 0.0)):
     """Closed floor cap (for the catch cup): triangle fan at height z."""
     tris = []
-    c = (0.0, 0.0, z)
+    cx, cy = centre
+    c = (cx, cy, z)
     for k in range(n_pts):
         th0 = 2 * math.pi * k / n_pts; th1 = 2 * math.pi * (k + 1) / n_pts
-        a = (r * math.cos(th0), r * math.sin(th0), z)
-        b = (r * math.cos(th1), r * math.sin(th1), z)
+        a = (cx + r * math.cos(th0), cy + r * math.sin(th0), z)
+        b = (cx + r * math.cos(th1), cy + r * math.sin(th1), z)
         tris.append((c, a, b) if up else (c, b, a))
     return tris
+
+
+# ---- the sort kit: the chute has always been a sieve, nobody had named it ----
+# MEASURED 2026-08-02 off the emitted spiral_chute mesh: the wall is single-valued r(theta,z),
+# so the minimum radius over theta is the rail crest at EVERY height (7.50mm, dead constant over
+# the whole wave zone). The central shaft is therefore a clear O15.00 tube running the full
+# tower, and the rail crest diameter IS the sort threshold: anything smaller free-falls the
+# axis, anything larger rides the spiral.
+HOLE_SHRINK = 0.25   # printed hole comes out ~0.25mm under the model (Creality vase empirics)
+SORT_DRIFT  = 0.35   # crest print drift + marble out-of-round, per side. ASSUMED, not measured
+                     # on a printed crest: the gauge print is what turns this into a measurement.
+
+
+def sort_min_separation():
+    """Smallest (hold_d - drop_d) a printed crest can honestly separate.
+    The crest has to clear the dropping marble AND block the riding one, so it needs
+    SORT_DRIFT of margin on each side, and the whole feature sits HOLE_SHRINK under nominal."""
+    return 2 * SORT_DRIFT + HOLE_SHRINK
+
+
+def sort_gate(hold_d, drop_d):
+    """Rail crest diameter that drops <= drop_d and holds >= hold_d. Raises when the two
+    marble sizes are too close for a printed crest to tell apart."""
+    need = sort_min_separation()
+    if hold_d - drop_d < need:
+        raise ValueError(
+            f"cannot sort O{drop_d:g} from O{hold_d:g}: separation {hold_d - drop_d:.2f}mm < "
+            f"{need:.2f}mm required (2 x {SORT_DRIFT:g} drift + {HOLE_SHRINK:g} hole shrink). "
+            f"Pick marbles at least {need:.2f}mm apart, or print the gauge and measure the real "
+            f"drift before trusting a tighter gate.")
+    return (hold_d + drop_d) / 2 + HOLE_SHRINK      # model bigger: it prints smaller
+
+
+# ---- the structure grid: how close two towers may stand ----
+# Derived from the real part faces, not picked: neighbouring towers must clear at their widest,
+# which is the socket MOUTH (the pocket wave is narrower), plus a finger gap to assemble.
+FINGER_GAP  = 8.0    # mm between neighbouring mouths: enough to get a hand between towers
+GRID_PITCH  = SOCKET_MOUTH_D + FINGER_GAP
 
 
 def write_stl(path, tris):
