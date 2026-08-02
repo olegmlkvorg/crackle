@@ -110,8 +110,10 @@ def main():
                      f"SIM-VERIFIED, axis feed: Ø{a.drop:g} falls the full shaft in 0.18s "
                      f"(free-fall for that height is 0.178s, so it touches nothing) while "
                      f"Ø{a.hold:g} is caught by the crest and rides out in 3.6 turns. FEED IT DOWN "
-                     f"THE MIDDLE, e.g. with the stand funnel: a marble already in the gutter "
-                     f"rides whatever its size, so gutter feed does not sort.")
+                     f"THE MIDDLE TO WITHIN ~1mm: MEASURED, 2mm off centre already clips the crest and the "
+                     f"marble rides instead. The O55 pour funnel scatters far wider than that and "
+                     f"sorts NOTHING. No part aims this well yet. A guide tube sized between the two "
+                     f"marbles would be its own sieve and is the better design.")
 
     if a.rail is None:
         a.rail = 15.0
