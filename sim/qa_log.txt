@@ -8,7 +8,7 @@
 [qa_sim] /tmp/s_16_12.stl
 [qa_sim] tris=131040  bbox z 0.0..203.1mm  crestR=20.5mm  helix zone z 50.8..154.3mm  exitZ<30.5mm  descentDir=-theta
 [qa_sim] drop at [13.4, -5.5, 184.7]mm  speed=100mm/s  dt=1/480  marble=O12  scenario=sorter expect=shaft  feed=axis
-[qa_sim] turns=0.00  maxR(zone)=0.0mm vs crest 20.5mm (margin 20.5mm)  descent=n/as  exit@n/as  stall=0.0s  lowestZ=109.9mm
+[qa_sim] turns=0.00  maxR(zone)=0.0mm vs crest 20.5mm (margin 20.5mm)  descent=n/as  exit@n/as  stall=0.0s  lowestZ=109.9mm  <- run ENDED at the centre-drop flag, so this depth is where the WATCHER stopped, NOT where the marble stopped
 [qa_sim] outcome=SHAFT (expected SHAFT)
 [qa_sim] PASS: SORT: a O12 marble falls through the crest into the shaft.
 

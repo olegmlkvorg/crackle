@@ -70,9 +70,15 @@ for (let i = 0; i < maxSteps; i++) {
 
 const v = tracker.verdict();
 const fmt = (x, d = 2) => (x === null ? 'n/a' : x.toFixed(d));
+// The tracker ENDS the run on CENTER-DROP, so depth and time after that flag describe where the
+// WATCHER stopped, not the marble. This log is published verbatim, and reading a stopped-watcher
+// depth as a stall already produced one wrong published claim. Say it in the log itself.
+const watcherStopped = tracker.escaped?.kind === 'CENTER-DROP';
 console.log(`[qa_sim] turns=${fmt(v.turns)}  maxR(zone)=${fmt(v.maxRInZoneMM, 1)}mm vs crest ${fmt(v.crestRMM, 1)}mm ` +
   `(margin ${fmt(v.railMarginMM, 1)}mm)  descent=${fmt(v.descentTimeS)}s  exit@${fmt(v.exitTimeS)}s  ` +
-  `stall=${fmt(v.stallTimeS, 1)}s  lowestZ=${fmt(v.lowestZMM, 1)}mm`);
+  `stall=${fmt(v.stallTimeS, 1)}s  lowestZ=${fmt(v.lowestZMM, 1)}mm` +
+  (watcherStopped ? '  <- run ENDED at the centre-drop flag, so this depth is where the WATCHER '
+    + 'stopped, NOT where the marble stopped' : ''));
 
 if (scenario === 'sorter') {
   // In a sorter a centre drop is the CORRECT answer for an undersized marble, so the chute
