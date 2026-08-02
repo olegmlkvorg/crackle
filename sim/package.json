@@ -1,0 +1,17 @@
+{
+  "name": "crackle-sim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "3D physics sims for printed parts: the SAME sim_core.mjs runs the headless QA gate (qa_sim.mjs) and the self-contained browser viewer (viewer.html).",
+  "scripts": {
+    "qa": "node qa_sim.mjs assets/spiral_chute_snapshot.stl --scenario chute",
+    "qa:bad": "node make_bad.mjs shallow && node qa_sim.mjs assets/bad_shallow_pitch.stl --scenario chute",
+    "viewer": "node build_viewer.mjs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.3",
+    "esbuild": "^0.28.1",
+    "three": "^0.185.1"
+  }
+}
