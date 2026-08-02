@@ -1,5 +1,25 @@
 #!/usr/bin/env python3
-"""SORT HEAD STL -- the piece that makes the sorting chute actually sort.
+"""SORT HEAD STL -- a sorter that works, and it does NOT use the chute to do it.
+
+READ THIS FIRST, because the name is misleading and the honest version matters more.
+Adversarial verification 2026-08-03 measured what actually happens: on all nine sorted pours the
+marble travels 0 degrees of gutter and stays within 1.00mm of the axis inside the chute's own wave
+band, and the rejected marble never enters the chute at all. NEITHER MARBLE EVER TOUCHES THE
+SPIRAL. Delete the chute and the sort result is identical. This part is a standalone sieve that
+happens to be shaped like a chute fitting, not the piece that makes a chute sort.
+
+KNOWN FUNCTIONAL DEFECT, measured at all nine offsets under two material settings: the rejected
+marble does not stay in the catch bowl to be picked out. It settles at r=0.01, dead centre, ON the
+sieve mouth. It PLUGS the bore. The first rejected marble stops the sorter until a hand moves it.
+
+UNTESTED PRINT RISK: the part stands on a O12.60 single-wall tube for its first 133mm, a 10.6:1
+slenderness ratio, then carries a O100 bowl at 222mm. That is roughly 237 consecutive layers of
+about 0.8s each at the kit speed. Nothing in this kit gates for slenderness or minimum layer time.
+It may simply not stand up.
+
+The original framing follows, kept because the geometry reasoning in it is still correct.
+
+SORT HEAD STL -- the piece that was meant to make the sorting chute actually sort.
 
 The chute's rail crest separates marbles by size, but only for a marble arriving on the axis:
 MEASURED, 2mm off centre and it clips the crest and rides the spiral. So the crest is the wrong
@@ -282,6 +302,46 @@ def shift_z(src, dst, dz):
     return n
 
 
+def shift_is_pure(src, dst, dz):
+    """RE-READ both emitted files and prove dst really is src moved by dz in z and nothing else.
+    Counting triangles cannot see a wrong dz, a shifted axis or a scaled copy, and dz is
+    load-bearing: chain_test.mjs seats the head by trusting that dst's z=0 IS the spigot tip, so a
+    wrong number here silently moves the head against the chute and every sim result with it.
+    Returns (n, max |dx|,|dy| error, max |dz - dz_wanted| error, z of the spigot-tip plane in dst)."""
+    def recs(p):
+        with open(p, "rb") as f:
+            f.read(80)
+            (n,) = struct.unpack("<I", f.read(4))
+            return n, f.read()
+    na, a = recs(src)
+    nb, b = recs(dst)
+    if na != nb:
+        return na, 9e9, 9e9, 9e9
+    exy = ez = 0.0
+    tip_z, tip_r = None, -1.0
+    for i in range(na):
+        ra = struct.unpack_from("<12fH", a, i * 50)
+        rb = struct.unpack_from("<12fH", b, i * 50)
+        for k in (3, 6, 9):
+            exy = max(exy, abs(rb[k] - ra[k]), abs(rb[k + 1] - ra[k + 1]))
+            ez = max(ez, abs((rb[k + 2] - ra[k + 2]) - dz))
+            r = math.hypot(rb[k], rb[k + 1])
+            if r > tip_r + 1e-6:            # the widest ring is the spigot base; the TIP plane is
+                tip_r = r                   # the lowest ring at exactly SPIGOT_TIP_R
+    with open(dst, "rb") as f:
+        f.read(84)
+        lo = 1e30
+        for _ in range(na):
+            f.read(12)
+            for _ in range(3):
+                x, y, z = struct.unpack("<3f", f.read(12))
+                if abs(math.hypot(x, y) - mc.SPIGOT_TIP_R) < 1e-3:
+                    lo = min(lo, z)
+            f.read(2)
+        tip_z = lo
+    return na, exy, ez, tip_z
+
+
 def straight_runs(path, tol=0.02):
     """Re-read the FILE and find every run of rings at the narrowest radius: this part has two of
     them (the lower tube and the upper tube) and both gates measure them off the mesh."""
@@ -320,6 +380,7 @@ def main():
     v = emit(out, b["prof"], a.points)
     seat_out = out.replace(".stl", "_seat0.stl")
     n_shift = shift_z(out, seat_out, -b["seat_local"])
+    n_pure, exy, ez, tip_z = shift_is_pure(out, seat_out, -b["seat_local"])
     meas_r, runs = straight_runs(out)
     f = b["fit"]
 
@@ -364,9 +425,14 @@ def main():
          f"exit cone {EXIT_LEAN:g})"),
         ("bed fit", a.mouth <= 340 and v["hi"][2] <= 340,
          f"O{a.mouth:g} x {v['hi'][2]:.0f}mm tall vs a 340 cube"),
-        ("sim copy is a pure translation", n_shift == v["tris"],
-         f"{seat_out}: {n_shift} triangles shifted {-b['seat_local']:.2f}mm so its z=0 is the "
-         f"spigot tip, which is how chain_test.mjs seats a head"),
+        # MEASURED off both files, not counted: same triangles, zero XY movement, the z step is
+        # the one asked for, and the spigot-tip plane really lands on z=0 (chain_test.mjs's rule)
+        ("sim copy is a pure translation",
+         n_shift == v["tris"] and n_pure == v["tris"] and exy <= 1e-4 and ez <= 1e-3
+         and abs(tip_z) <= 1e-3,
+         f"{seat_out}: {n_shift} triangles, XY moved {exy:.5f}mm (need 0), z step off by "
+         f"{ez:.5f}mm from {-b['seat_local']:.2f} (need 0), spigot-tip plane lands at "
+         f"z={tip_z:+.4f} (need 0), which is how chain_test.mjs seats a head"),
     ]
     if f:
         checks += [
