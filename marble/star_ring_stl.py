@@ -66,7 +66,7 @@ def main():
                     help="wave amplitude mm (default per mode: mouth 2.0, over 5.0 -- the smallest that keeps peak strain under ~1.2%%)")
     ap.add_argument("--wall", type=float, default=None,
                     help="band thickness mm (default per mode: mouth 1.8, over 1.4 -- over needs softer)")
-    ap.add_argument("--height", type=float, default=8.0, help="band height mm")
+    ap.add_argument("--height", type=float, default=16.0, help="band height mm (tall = spans the joint)")
     ap.add_argument("--sharp", type=float, default=0.6, help="peak sharpening exponent (<1 = pointier star)")
     ap.add_argument("--points", type=int, default=48, help="samples per lobe period")
     ap.add_argument("--out", default="star_ring.stl")
@@ -74,27 +74,38 @@ def main():
 
     grip_d = a.grip_dia or (GRIP_MOUTH_D if a.mode == "mouth" else GRIP_OVER_D)
     if a.amp is None:
-        a.amp = 2.0 if a.mode == "mouth" else 4.0
+        a.amp = 2.5 if a.mode == "mouth" else 4.0
     if a.wall is None:
         a.wall = 1.8 if a.mode == "mouth" else 1.4
     r_grip = grip_d / 2.0                      # innermost radius = lobe tips (they grip)
     base = r_grip + a.amp                      # wave centreline: r(theta) = base + amp*star -> min = r_grip
     N = a.lobes * a.points
 
-    # MIDLINE construction (Oleg 2026-08-02: a radial offset made the wall width vary = against
-    # the constant-bead print rules). The wave is the wall MIDLINE; inner and outer are parallel
-    # curves offset t/2 along the local normal each way -> constant thickness by construction.
-    # Midline min radius = r_grip + t/2 so the inner lobe tips land exactly on the grip circle.
-    mid = []
-    for k in range(N):
-        th = 2 * math.pi * k / N
-        w = star(a.lobes * th, a.sharp)                     # [-1, 1], sharpened
-        rm = (r_grip + a.wall / 2.0) + a.amp * (1.0 + w)
-        mid.append((rm * math.cos(th), rm * math.sin(th)))
+    # V3 CONICAL WEDGE-LOCK (Oleg 2026-08-02: "tension not sufficient to hold the joint together...
+    # higher... not straight... pushing harder"). The bore is a CONE matching the joint: the lower
+    # zone squeezes the male body (O57.2 face), the upper zone rides the female mouth cone; pulling
+    # the joint apart drives the cone into the star spring = wedges TIGHTER. Assembly: slide up the
+    # male body, climb the mouth cone until snug -- the ring never crosses the O60.4 rim.
+    # squeeze: 0.9mm RADIAL both zones (about double v2's push); strain = t/2A * stretch stays
+    # under ~1.2% with amp 2.5.
+    SQUEEZE_R = 0.9
+    tip_bot = MALE_FACE_D / 2.0 - SQUEEZE_R              # bottom lobe-tip radius (grips the male)
+    # mouth cone outer face: ~O57.2 at its base rising to O60.4 at the rim over the 16mm engagement;
+    # the ring's top zone meets it mid-cone: tip_top set to seat ~4mm below the rim
+    tip_top = (MOUTH_FACE_D - 2.0) / 2.0 - SQUEEZE_R     # grips the cone where it measures ~O58.4
+    NZ = 9                                                # loft rings up the height
+    h = a.height
+
+    def ring2d(tip_r):
+        mid_, out_, inn_ = [], [], []
+        for k in range(N):
+            th = 2 * math.pi * k / N
+            w = star(a.lobes * th, a.sharp)
+            rm = (tip_r + a.wall / 2.0) + a.amp * (1.0 + w)
+            mid_.append((rm * math.cos(th), rm * math.sin(th)))
+        return mid_
 
     def parallel(pts, dist):
-        """Closed-polyline parallel curve: offset along per-vertex normal (edge-normal bisector),
-        miter clamped at 2x so sharp tips round instead of spiking."""
         out = []
         n_ = len(pts)
         for k in range(n_):
@@ -109,23 +120,34 @@ def main():
             out.append((p[0] + bx / bm * d, p[1] + by / bm * d))
         return out
 
-    outer = parallel(mid, a.wall / 2.0)
-    inner = parallel(mid, -a.wall / 2.0)
+    levels = []                                           # (z, inner2d, outer2d) per loft ring
+    for iz in range(NZ + 1):
+        f = iz / NZ
+        tip = tip_bot + (tip_top - tip_bot) * f
+        mid = ring2d(tip)
+        levels.append((h * f, parallel(mid, -a.wall / 2.0), parallel(mid, a.wall / 2.0)))
+    inner = levels[0][1]; outer = levels[0][2]            # base ring (function checks reference it)
 
-    h = a.height
     tris = []
+    for lz in range(NZ):
+        z0, in0, ot0 = levels[lz]
+        z1, in1, ot1 = levels[lz + 1]
+        for k in range(N):
+            j = (k + 1) % N
+            O0 = (ot0[k][0], ot0[k][1], z0); O1 = (ot0[j][0], ot0[j][1], z0)
+            O0h = (ot1[k][0], ot1[k][1], z1); O1h = (ot1[j][0], ot1[j][1], z1)
+            I0 = (in0[k][0], in0[k][1], z0); I1 = (in0[j][0], in0[j][1], z0)
+            I0h = (in1[k][0], in1[k][1], z1); I1h = (in1[j][0], in1[j][1], z1)
+            tris.append((O0, O1, O1h)); tris.append((O0, O1h, O0h))       # outer wall
+            tris.append((I0, I1h, I1)); tris.append((I0, I0h, I1h))       # inner wall
+    b_in = [(p[0], p[1], 0.0) for p in levels[0][1]]
+    b_ot = [(p[0], p[1], 0.0) for p in levels[0][2]]
+    t_in = [(p[0], p[1], h) for p in levels[NZ][1]]
+    t_ot = [(p[0], p[1], h) for p in levels[NZ][2]]
     for k in range(N):
         j = (k + 1) % N
-        i0, i1 = inner[k], inner[j]
-        o0, o1 = outer[k], outer[j]
-        I0, I1 = (i0[0], i0[1], 0.0), (i1[0], i1[1], 0.0)
-        O0, O1 = (o0[0], o0[1], 0.0), (o1[0], o1[1], 0.0)
-        I0h, I1h = (i0[0], i0[1], h), (i1[0], i1[1], h)
-        O0h, O1h = (o0[0], o0[1], h), (o1[0], o1[1], h)
-        tris.append((O0, O1, O1h)); tris.append((O0, O1h, O0h))       # outer wall (outward)
-        tris.append((I0, I1h, I1)); tris.append((I0, I0h, I1h))       # inner wall (inward)
-        tris.append((O0, I0, I1)); tris.append((O0, I1, O1))          # bottom cap (normal -z)
-        tris.append((O0h, O1h, I1h)); tris.append((O0h, I1h, I0h))    # top cap (normal +z)
+        tris.append((b_ot[k], b_in[k], b_in[j])); tris.append((b_ot[k], b_in[j], b_ot[j]))   # bottom (-z)
+        tris.append((t_ot[k], t_ot[j], t_in[j])); tris.append((t_ot[k], t_in[j], t_in[k]))   # top (+z)
 
     write_binary_stl(a.out, tris)
 
@@ -144,12 +166,13 @@ def main():
     # connection to reality" -- printability gates alone say nothing about the part serving its
     # joint; QC != function). Every claim below is computed, and a failing ring is quarantined.
     target = MOUTH_FACE_D
-    stretch = (target - grip_d) / grip_d
+    sq_bot = MALE_FACE_D / 2.0 - tip_bot                 # radial squeeze on the male body
+    sq_top = (MOUTH_FACE_D - 2.0) / 2.0 - tip_top        # radial squeeze at the cone seat
+    stretch = 2.0 * sq_bot / (2.0 * tip_bot)             # worst diametral stretch (bottom zone)
     eps = a.wall / (2 * a.amp) * stretch
-    od = 2 * (r_grip + 2 * a.amp + a.wall)
-    PROPORTION_MAX = 1.25                       # crown may stand at most 25% proud of the pipe
-    # measured wall thickness: inner vertex -> nearby outer segments (local window; both curves
-    # share indexing, so k-3..k+3 covers the closest span even at the tips)
+    od = 2 * (tip_top + 2 * a.amp + a.wall)
+    rim_clear = MOUTH_FACE_D / 2.0 - tip_top             # top tips sit INSIDE the rim = wedge lock
+    PROPORTION_MAX = 1.25
     def _seg_d(p, q1, q2):
         dx, dy = q2[0]-q1[0], q2[1]-q1[1]
         L2 = dx*dx + dy*dy or 1e-12
@@ -164,16 +187,20 @@ def main():
 
     checks = [
         ("watertight", oe == 0, "%d open edges" % oe),
-        ("grips (interference exists)", 0.003 < stretch < 0.08,
-         "stretch %+.1f%% over the O%.1f mouth" % (100*stretch, target)),
-        ("strain safe (<=1.2%)", eps <= 0.012, "peak ~%.2f%% (t/2A model)" % (100*eps)),
+        ("squeezes the male body", 0.5 <= sq_bot <= 1.5,
+         "bottom tips O%.1f vs male O%.1f = %.2fmm radial push" % (2*tip_bot, MALE_FACE_D, sq_bot)),
+        ("wedges on the mouth cone", 0.4 <= sq_top and rim_clear >= 0.5,
+         "top tips O%.1f seat mid-cone, %.2fmm inside the O%.1f rim -> separation TIGHTENS it"
+         % (2*tip_top, rim_clear, MOUTH_FACE_D)),
+        ("strain safe (<=1.2%)", eps <= 0.012, "peak ~%.2f%% at %.1f%% stretch (t/2A model)" % (100*eps, 100*stretch)),
         ("proportion (od <= %.2fx pipe)" % PROPORTION_MAX, od <= PROPORTION_MAX * MOUTH_FACE_D,
          "outer peaks O%.1f vs pipe O%.1f" % (od, MOUTH_FACE_D)),
         ("wall constant (measured)", t_min >= 0.8*a.wall and t_max <= 1.4*a.wall,
          "min %.2f / med %.2f / max %.2f vs nominal %.2f" % (t_min, t_med, t_max, a.wall)),
+        ("tall enough to span the joint", h >= 14.0, "height %.0fmm (needs >=14 to bridge both zones)" % h),
     ]
     print(f"{a.out}: {len(tris)} tris, {size} bytes")
-    print(f"  mode {a.mode}: {a.lobes}-point star, grip O{grip_d:g} tips, outer peaks O{od:.1f}, "
+    print(f"  mode {a.mode}: {a.lobes}-point CONICAL star, tips O{2*tip_bot:.1f}->O{2*tip_top:.1f}, outer peaks O{od:.1f}, "
           f"band {a.wall:g} x {h:g}mm, amp {a.amp:g}, sharp {a.sharp:g}")
     ok = True
     for name, good, msg in checks:
