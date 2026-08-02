@@ -62,8 +62,10 @@ def main():
     ap.add_argument("--grip-dia", type=float, default=None,
                     help="lobe-tip inner circle mm (overrides the mode default)")
     ap.add_argument("--lobes", type=int, default=8, help="star points")
-    ap.add_argument("--amp", type=float, default=6.0, help="wave amplitude mm (bigger = softer spring)")
-    ap.add_argument("--wall", type=float, default=1.8, help="band thickness mm (thinner = softer)")
+    ap.add_argument("--amp", type=float, default=None,
+                    help="wave amplitude mm (default per mode: mouth 2.0, over 5.0 -- the smallest that keeps peak strain under ~1.2%%)")
+    ap.add_argument("--wall", type=float, default=None,
+                    help="band thickness mm (default per mode: mouth 1.8, over 1.4 -- over needs softer)")
     ap.add_argument("--height", type=float, default=8.0, help="band height mm")
     ap.add_argument("--sharp", type=float, default=0.6, help="peak sharpening exponent (<1 = pointier star)")
     ap.add_argument("--points", type=int, default=48, help="samples per lobe period")
@@ -71,19 +73,44 @@ def main():
     a = ap.parse_args()
 
     grip_d = a.grip_dia or (GRIP_MOUTH_D if a.mode == "mouth" else GRIP_OVER_D)
+    if a.amp is None:
+        a.amp = 2.0 if a.mode == "mouth" else 4.0
+    if a.wall is None:
+        a.wall = 1.8 if a.mode == "mouth" else 1.4
     r_grip = grip_d / 2.0                      # innermost radius = lobe tips (they grip)
     base = r_grip + a.amp                      # wave centreline: r(theta) = base + amp*star -> min = r_grip
     N = a.lobes * a.points
 
-    inner, outer = [], []
+    # MIDLINE construction (Oleg 2026-08-02: a radial offset made the wall width vary = against
+    # the constant-bead print rules). The wave is the wall MIDLINE; inner and outer are parallel
+    # curves offset t/2 along the local normal each way -> constant thickness by construction.
+    # Midline min radius = r_grip + t/2 so the inner lobe tips land exactly on the grip circle.
+    mid = []
     for k in range(N):
         th = 2 * math.pi * k / N
-        # inner surface radius in [r_grip, r_grip + 2A]: wave MINIMA are the lobe tips that grip
         w = star(a.lobes * th, a.sharp)                     # [-1, 1], sharpened
-        ri = r_grip + a.amp * (1.0 + w)
-        ro = ri + a.wall
-        inner.append((ri * math.cos(th), ri * math.sin(th)))
-        outer.append((ro * math.cos(th), ro * math.sin(th)))
+        rm = (r_grip + a.wall / 2.0) + a.amp * (1.0 + w)
+        mid.append((rm * math.cos(th), rm * math.sin(th)))
+
+    def parallel(pts, dist):
+        """Closed-polyline parallel curve: offset along per-vertex normal (edge-normal bisector),
+        miter clamped at 2x so sharp tips round instead of spiking."""
+        out = []
+        n_ = len(pts)
+        for k in range(n_):
+            p_prev, p, p_next = pts[k - 1], pts[k], pts[(k + 1) % n_]
+            e1 = (p[0] - p_prev[0], p[1] - p_prev[1])
+            e2 = (p_next[0] - p[0], p_next[1] - p[1])
+            n1 = (e1[1], -e1[0]); m1 = math.hypot(*n1) or 1e-12
+            n2 = (e2[1], -e2[0]); m2 = math.hypot(*n2) or 1e-12
+            bx, by = n1[0] / m1 + n2[0] / m2, n1[1] / m1 + n2[1] / m2
+            bm = math.hypot(bx, by) or 1e-9
+            d = min(2.0 * abs(dist) / bm, 2.0 * abs(dist)) * (1 if dist >= 0 else -1)
+            out.append((p[0] + bx / bm * d, p[1] + by / bm * d))
+        return out
+
+    outer = parallel(mid, a.wall / 2.0)
+    inner = parallel(mid, -a.wall / 2.0)
 
     h = a.height
     tris = []
@@ -113,17 +140,53 @@ def main():
             edges[e] = edges.get(e, 0) + 1
     oe = sum(1 for c in edges.values() if c != 2)
 
+    # ---- FUNCTION checks (Oleg 2026-08-02: "ring is clearly too big to be useful... no
+    # connection to reality" -- printability gates alone say nothing about the part serving its
+    # joint; QC != function). Every claim below is computed, and a failing ring is quarantined.
     target = MOUTH_FACE_D
     stretch = (target - grip_d) / grip_d
     eps = a.wall / (2 * a.amp) * stretch
     od = 2 * (r_grip + 2 * a.amp + a.wall)
-    print(f"{a.out}: {len(tris)} tris, {size} bytes, open edges {oe} [0=watertight]")
-    print(f"  mode {a.mode}: {a.lobes}-point star, grip Ø{grip_d:g} lobe tips, outer peaks Ø{od:.1f}, "
-          f"band {a.wall:g} x {h:g}mm, sharp {a.sharp:g}")
-    print(f"  must open +{100*stretch:.1f}% to pass the Ø{target:g} mouth -> peak PLA strain "
-          f"~{100*eps:.2f}% (t/2A={a.wall/(2*a.amp):.2f}; <1.5% = safe; beam estimate, print = proof)")
+    PROPORTION_MAX = 1.25                       # crown may stand at most 25% proud of the pipe
+    # measured wall thickness: inner vertex -> nearby outer segments (local window; both curves
+    # share indexing, so k-3..k+3 covers the closest span even at the tips)
+    def _seg_d(p, q1, q2):
+        dx, dy = q2[0]-q1[0], q2[1]-q1[1]
+        L2 = dx*dx + dy*dy or 1e-12
+        t_ = max(0.0, min(1.0, ((p[0]-q1[0])*dx + (p[1]-q1[1])*dy) / L2))
+        return math.hypot(p[0]-(q1[0]+t_*dx), p[1]-(q1[1]+t_*dy))
+    ths = []
+    for k in range(N):
+        d = min(_seg_d(inner[k], outer[(k+m) % N], outer[(k+m+1) % N]) for m in range(-3, 3))
+        ths.append(d)
+    ths.sort()
+    t_min, t_med, t_max = ths[0], ths[N//2], ths[-1]
+
+    checks = [
+        ("watertight", oe == 0, "%d open edges" % oe),
+        ("grips (interference exists)", 0.003 < stretch < 0.08,
+         "stretch %+.1f%% over the O%.1f mouth" % (100*stretch, target)),
+        ("strain safe (<=1.2%)", eps <= 0.012, "peak ~%.2f%% (t/2A model)" % (100*eps)),
+        ("proportion (od <= %.2fx pipe)" % PROPORTION_MAX, od <= PROPORTION_MAX * MOUTH_FACE_D,
+         "outer peaks O%.1f vs pipe O%.1f" % (od, MOUTH_FACE_D)),
+        ("wall constant (measured)", t_min >= 0.8*a.wall and t_max <= 1.4*a.wall,
+         "min %.2f / med %.2f / max %.2f vs nominal %.2f" % (t_min, t_med, t_max, a.wall)),
+    ]
+    print(f"{a.out}: {len(tris)} tris, {size} bytes")
+    print(f"  mode {a.mode}: {a.lobes}-point star, grip O{grip_d:g} tips, outer peaks O{od:.1f}, "
+          f"band {a.wall:g} x {h:g}mm, amp {a.amp:g}, sharp {a.sharp:g}")
+    ok = True
+    for name, good, msg in checks:
+        print("  %s %-28s %s" % ("PASS" if good else "FAIL", name, msg))
+        ok = ok and good
     print(f"  seats on: {'female mouth rim (crowns the joint)' if a.mode=='mouth' else 'male body below the joint (retainer)'}; "
           f"prints FLAT, no support, PLA")
+    if not ok:
+        failed = a.out + ".FAILED"
+        os.replace(a.out, failed)
+        print("  SELF-VERIFY: FAIL -> quarantined %s" % failed)
+        raise SystemExit(1)
+    print("  SELF-VERIFY: PASS")
 
 
 if __name__ == "__main__":
