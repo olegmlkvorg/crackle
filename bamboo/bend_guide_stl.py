@@ -35,8 +35,9 @@ WHAT v2 DOES
    Shallow angles are limited by slop, steep ones by strain, and which one bound is printed.
  - SHIMS THE BORES. Bore is the kit standard O7.0 with a graded split TPU ring from
    shim_ring_stl.py pressed into each boss, cutting wander from 1.85 mm to ~0.25 mm. That single
-   change is what makes shallow bends possible at all: at 2 deg a bare slide bore would need a
-   1.7 m jig, a shimmed one needs 86 mm of spacing.
+   change is what makes shallow bends possible at all: at 2 deg a bare slide bore needs 636 mm
+   of spacing = a 1.30 m bar, a shimmed one needs 86 mm of spacing. (Both MEASURED by running
+   `--angle 2 --bare` and `--angle 2` 2026-08-02; the earlier "1.7 m" here did not reproduce.)
  - REFUSES what it cannot do, with the number. Past ~9.5 deg the bar runs off the bed, and it
    says so instead of emitting a jig that lies on its own label.
  - Reports the DELIVERED angle and the force the middle boss has to hold.
@@ -254,7 +255,11 @@ def main():
     checks = [
         ("watertight", open_edges == 0, f"{open_edges} open edges"),
         ("bed fit", zmax <= BED and xr <= BED, f"{zmax:.0f} x {xr:.0f} mm vs {BED:.0f}"),
-        (f"authority >= {AUTHORITY:g}x", o >= AUTHORITY * w,
+        # tolerance, not slack: when the authority limit BINDS, solve_spacing returns exactly
+        # s = 3*A*w/theta, so o = theta*s/3 == A*w to the last bit -- and at --angle 1.1 it
+        # rounded to o - A*w = -1.11e-16 and the gate quarantined a jig its own solver had just
+        # produced at the boundary (reproduced 2026-08-02). 1e-9 mm is far below any real slop.
+        (f"authority >= {AUTHORITY:g}x", o >= AUTHORITY * w - 1e-9,
          f"sagitta {o:.2f}mm vs rod wander {w:.2f}mm = {o/w:.1f}x "
          f"(v1 shipped at 0.98x and held nothing)"),
         (f"strain R >= {R_MIN:.0f}", R_peak >= R_MIN - 0.5,
