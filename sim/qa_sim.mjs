@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// qa_sim.mjs — headless dynamic QA gate for printed-chute meshes.
+// qa_sim.mjs : headless dynamic QA gate for printed-chute meshes.
 //   node qa_sim.mjs <stl> --scenario chute [--speed mm/s] [--maxtime s] [--turns n]
 // Exit 0 = ORBIT (captive, descends, exits). Exit 1 = FAIL with measurements.
 // Steps the SAME sim_core the browser viewer runs.
@@ -56,9 +56,9 @@ console.log(`[qa_sim] turns=${fmt(v.turns)}  maxR(zone)=${fmt(v.maxRInZoneMM, 1)
   `stall=${fmt(v.stallTimeS, 1)}s  lowestZ=${fmt(v.lowestZMM, 1)}mm`);
 
 if (v.pass) {
-  console.log('[qa_sim] PASS — ORBIT: marble stays captive, descends, exits.');
+  console.log('[qa_sim] PASS: ORBIT: marble stays captive, descends, exits.');
   process.exit(0);
 } else {
-  for (const f of v.fails) console.log(`[qa_sim] FAIL — ${f}`);
+  for (const f of v.fails) console.log(`[qa_sim] FAIL: ${f}`);
   process.exit(1);
 }
