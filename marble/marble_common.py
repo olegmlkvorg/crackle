@@ -72,6 +72,37 @@ BORE_D     = 24.0   # default free marble path (marble + 8 mm of air)
 CONE_SLOPE = 1.0    # max |dr/dz| for transition cones (45° from vertical)
 
 
+def configure_bond(tip_d):
+    """Resize the WHOLE coupling to a new spigot-tip diameter, keeping every derived dimension
+    consistent. Call before building a part; it rewrites the module globals the profile
+    functions read.
+
+    WHY THIS EXISTS. Oleg, 2026-08-02: "the marble chute is our primary piece. and i doubt it
+    need to be this wide." He is right about where the fat is. The gutter is near minimal for a
+    O16 marble (the sim measured it riding at r=10.2 inside a O40.8 pocket), but O52/56 was
+    inherited from stand/funnel_stl.py's O55 spout and never derived from anything. A spigot only
+    has to clear the pocket.
+
+    The SHAPE of the bond does not scale with diameter and must not: the land length, the bump,
+    the groove and every clearance are set by print physics and by fingers, not by how big the
+    tube is. So this changes the diameters and leaves the detent alone."""
+    global SPIGOT_TIP_D, SPIGOT_BASE_D, SPIGOT_BASE_R, SPIGOT_TIP_R
+    global SOCKET_BOT_R, SOCKET_MOUTH_R, SOCKET_BOT_D, SOCKET_MOUTH_D, GRID_PITCH
+    cone = SPIGOT_BASE_D - SPIGOT_TIP_D          # keep the exit cone's RISE, not its ratio
+    SPIGOT_TIP_D = tip_d
+    SPIGOT_BASE_D = tip_d + cone
+    SPIGOT_BASE_R, SPIGOT_TIP_R = SPIGOT_BASE_D / 2, SPIGOT_TIP_D / 2
+    SOCKET_BOT_R, SOCKET_MOUTH_R = socket_r(0.0), socket_r(COUPLE_L)
+    SOCKET_BOT_D, SOCKET_MOUTH_D = 2 * SOCKET_BOT_R, 2 * SOCKET_MOUTH_R
+    GRID_PITCH = SOCKET_MOUTH_D + FINGER_GAP
+
+
+def min_bond_tip_d(pocket_d):
+    """Smallest spigot tip the gutter allows: the pocket has to fit through it, with a wall each
+    side and a hair of daylight. Derived, unlike the O52 it replaces."""
+    return pocket_d + 2 * LINE_W + 1.0
+
+
 def cone_h(r0, r1, slope=CONE_SLOPE):
     """Height a transition cone needs to stay within the print-safe slope."""
     return abs(r1 - r0) / slope

@@ -75,6 +75,9 @@ def main():
                     help="SORT MODE: marble dia mm that must RIDE the spiral (with --drop)")
     ap.add_argument("--drop", type=float, default=None,
                     help="SORT MODE: marble dia mm that must FALL through the central shaft")
+    ap.add_argument("--slim", action="store_true",
+                    help="shrink the coupling to the smallest the gutter allows. O52/56 was "
+                         "inherited from the funnel spout; a spigot only has to clear the pocket.")
     ap.add_argument("--lean", type=float, default=0.0,
                     help="tilt the helix axis off vertical, deg. Bond ends stay vertical and "
                          "circular, so the segment still couples; the stack steps sideways.")
@@ -110,10 +113,22 @@ def main():
     rail_r, pocket_r = a.rail / 2, a.pocket / 2
     if a.hold is None:
         assert a.rail <= mc.MARBLE_D - 1.0, "--rail must undercut the marble by >=1 mm (captivity)"
-    assert pocket_r < mc.SPIGOT_TIP_R, "--pocket must stay inside the spigot tip dia"
     grade = math.degrees(math.atan(a.pitch / (2 * math.pi * 13.0)))
 
     tab = wave_table(rail_r, pocket_r, a.floor_frac, a.pitch)
+    slim_note = ""
+    if a.slim:
+        # size the coupling off the MEASURED pocket, not the nominal --pocket: the fillet pass
+        # pulls the emitted pocket in by a few mm, and using the nominal would leave the bond
+        # bigger than it needs to be for no reason.
+        stock_mouth = mc.SOCKET_MOUTH_D
+        mc.configure_bond(mc.min_bond_tip_d(2 * max(tab)))
+        slim_note = (f"; SLIM coupling Ø{mc.SPIGOT_TIP_D:.1f}/Ø{mc.SPIGOT_BASE_D:.1f}, mouth "
+                     f"Ø{mc.SOCKET_MOUTH_D:.1f} (stock mouth Ø{stock_mouth:.1f})")
+    # the EMITTED pocket is what has to pass through the spigot, not the --pocket you asked for:
+    # the fillet pass pulls the wave in by a couple of mm and the mesh is the truth.
+    assert max(tab) < mc.SPIGOT_TIP_R, (
+        f"emitted pocket Ø{2*max(tab):.1f} does not fit through a Ø{mc.SPIGOT_TIP_D:.1f} spigot tip")
     mouth = a.pitch * (1 - (13.0 - rail_r) / (max(tab) - rail_r))  # measured gap at r=13
 
     def wave(u):
@@ -222,7 +237,7 @@ def main():
         f"{a.turns} captive turns, pitch {P:g} (drop/lap), measured rail Ø{free_ch:.1f} "
         f"(< marble Ø{mc.MARBLE_D:g}, captive) / pocket Ø{pocket_m:.1f}, "
         f"gutter mouth ~{mouth:.1f} mm at the ride radius, rolling grade ~{grade:.0f}°"
-        + lean_note + sort_note))
+        + lean_note + sort_note + slim_note))
 
 
 if __name__ == "__main__":
