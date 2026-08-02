@@ -10,6 +10,13 @@ Classes:
     vase-solid        closed solids fed to slicer VASE mode (e.g. leg.stl): as closed, but the
                       flat top/bottom caps never print (spiralize discards them), so instead of
                       PRINTABLE it checks SIDE-LEAN (lean of non-cap faces, |nz| < 0.95)
+    fabric            print-in-place lattices of DISJOINT interlocked solids (chainmail). Splits
+                      the soup into connected components (rings) and checks, PER COMPONENT:
+                      COMP-WATERTIGHT (edge parity within each ring), OVERHANG (no downward face
+                      nz < -0.707 above z=0.5 -- the global wallR span heuristic breaks on a lattice,
+                      so fabric uses a direct downward-face steepness gate = the >=45deg no-bridge
+                      rule), BED-ALL (every ring touches the bed), and CLEARANCE (point-to-triangle
+                      min surface distance between every ring pair >= --clear-min). Reports ring count.
 
 PRINTABLE tries the mesh AS-IS first; if that fails it retries FLIPPED (z -> maxz-z). A part that
 only passes flipped PASSES with an explicit "print UPSIDE-DOWN" note (e.g. the platform wedges,
@@ -45,7 +52,165 @@ BAND_H = 5.0            # mm z-band height for the wall-radius profile
 LEAN_MAX_DEG = 55.0     # vase-printable ceiling for wall lean from vertical
 
 
-def run_file(path, cls, bed, allow):
+def _components(tris3d):
+    """Connected components of the soup (shared rounded verts join tris). Returns a component-id
+    per triangle. Disjoint sub-solids (a chainmail lattice's rings share no verts) come out as
+    separate components. Same union-find the closed PRINTABLE check uses."""
+    parent = {}
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    keys = []
+    for (v0, v1, v2, _cx, _cy, _cz, _nz) in tris3d:
+        ks = [tuple(round(c, 3) for c in v) for v in (v0, v1, v2)]
+        for k in ks:
+            if k not in parent:
+                parent[k] = k
+        union(ks[0], ks[1]); union(ks[1], ks[2])
+        keys.append(ks[0])
+    ids = [find(k) for k in keys]
+    remap = {}
+    return [remap.setdefault(c, len(remap)) for c in ids]
+
+
+def _pt_tri_d2(p, a, b, c):
+    """Squared distance from point p to triangle abc (Ericson, Real-Time Collision Detection)."""
+    ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+    ap = (p[0] - a[0], p[1] - a[1], p[2] - a[2])
+    d1 = ab[0]*ap[0] + ab[1]*ap[1] + ab[2]*ap[2]
+    d2 = ac[0]*ap[0] + ac[1]*ap[1] + ac[2]*ap[2]
+    if d1 <= 0 and d2 <= 0:
+        return ap[0]**2 + ap[1]**2 + ap[2]**2
+    bp = (p[0] - b[0], p[1] - b[1], p[2] - b[2])
+    d3 = ab[0]*bp[0] + ab[1]*bp[1] + ab[2]*bp[2]
+    d4 = ac[0]*bp[0] + ac[1]*bp[1] + ac[2]*bp[2]
+    if d3 >= 0 and d4 <= d3:
+        return bp[0]**2 + bp[1]**2 + bp[2]**2
+    vc = d1*d4 - d3*d2
+    if vc <= 0 and d1 >= 0 and d3 <= 0:
+        v = d1 / (d1 - d3)
+        q = (a[0] + v*ab[0], a[1] + v*ab[1], a[2] + v*ab[2])
+        return (p[0]-q[0])**2 + (p[1]-q[1])**2 + (p[2]-q[2])**2
+    cp = (p[0] - c[0], p[1] - c[1], p[2] - c[2])
+    d5 = ab[0]*cp[0] + ab[1]*cp[1] + ab[2]*cp[2]
+    d6 = ac[0]*cp[0] + ac[1]*cp[1] + ac[2]*cp[2]
+    if d6 >= 0 and d5 <= d6:
+        return cp[0]**2 + cp[1]**2 + cp[2]**2
+    vb = d5*d2 - d1*d6
+    if vb <= 0 and d2 >= 0 and d6 <= 0:
+        w = d2 / (d2 - d6)
+        q = (a[0] + w*ac[0], a[1] + w*ac[1], a[2] + w*ac[2])
+        return (p[0]-q[0])**2 + (p[1]-q[1])**2 + (p[2]-q[2])**2
+    va = d3*d6 - d5*d4
+    if va <= 0 and (d4 - d3) >= 0 and (d5 - d6) >= 0:
+        w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        q = (b[0] + w*(c[0]-b[0]), b[1] + w*(c[1]-b[1]), b[2] + w*(c[2]-b[2]))
+        return (p[0]-q[0])**2 + (p[1]-q[1])**2 + (p[2]-q[2])**2
+    denom = 1.0 / (va + vb + vc)
+    v = vb * denom
+    w = vc * denom
+    q = (a[0] + ab[0]*v + ac[0]*w, a[1] + ab[1]*v + ac[1]*w, a[2] + ab[2]*v + ac[2]*w)
+    return (p[0]-q[0])**2 + (p[1]-q[1])**2 + (p[2]-q[2])**2
+
+
+def _seg_seg_d2(p1, p2, q1, q2):
+    """Squared min distance between segments p1p2 and q1q2 (Eberly clamp method)."""
+    dpx, dpy, dpz = p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]
+    dqx, dqy, dqz = q2[0]-q1[0], q2[1]-q1[1], q2[2]-q1[2]
+    rx, ry, rz = p1[0]-q1[0], p1[1]-q1[1], p1[2]-q1[2]
+    a = dpx*dpx + dpy*dpy + dpz*dpz
+    e = dqx*dqx + dqy*dqy + dqz*dqz
+    f = dqx*rx + dqy*ry + dqz*rz
+    if a <= 1e-12 and e <= 1e-12:
+        return rx*rx + ry*ry + rz*rz
+    if a <= 1e-12:
+        s = 0.0; t = min(1.0, max(0.0, f / e))
+    else:
+        c = dpx*rx + dpy*ry + dpz*rz
+        if e <= 1e-12:
+            t = 0.0; s = min(1.0, max(0.0, -c / a))
+        else:
+            b = dpx*dqx + dpy*dqy + dpz*dqz
+            den = a*e - b*b
+            s = min(1.0, max(0.0, (b*f - c*e) / den)) if den > 1e-12 else 0.0
+            t = (b*s + f) / e
+            if t < 0.0:
+                t = 0.0; s = min(1.0, max(0.0, -c / a))
+            elif t > 1.0:
+                t = 1.0; s = min(1.0, max(0.0, (b - c) / a))
+    cx = p1[0] + dpx*s - (q1[0] + dqx*t)
+    cy = p1[1] + dpy*s - (q1[1] + dqy*t)
+    cz = p1[2] + dpz*s - (q1[2] + dqz*t)
+    return cx*cx + cy*cy + cz*cz
+
+
+def _min_clearance(comp_tris):
+    """Min surface-to-surface distance over every component pair: point-to-triangle both ways PLUS
+    edge-to-edge (two skew tube surfaces can pass closest between edge interiors; vertex-face alone
+    overstated 0.016 where the true minimum was 0.000 -- found adversarially 2026-08-02).
+    comp_tris[k] = list of (v0,v1,v2) for component k. Returns (min_dist, (kA, kB))."""
+    bbs = []
+    for ct in comp_tris:
+        xs = [v[0] for t in ct for v in t]
+        ys = [v[1] for t in ct for v in t]
+        zs = [v[2] for t in ct for v in t]
+        bbs.append((min(xs), max(xs), min(ys), max(ys), min(zs), max(zs)))
+    best2 = float("inf")
+    pair = (None, None)
+    n = len(comp_tris)
+    for i in range(n):
+        for j in range(i + 1, n):
+            bi, bj = bbs[i], bbs[j]
+            gx = max(0.0, bi[0]-bj[1], bj[0]-bi[1])
+            gy = max(0.0, bi[2]-bj[3], bj[2]-bi[3])
+            gz = max(0.0, bi[4]-bj[5], bj[4]-bi[5])
+            if gx*gx + gy*gy + gz*gz > best2:
+                continue
+            A, B = comp_tris[i], comp_tris[j]
+            # centroid + bounding-radius per tri, so only near-contact tri pairs pay full price
+            def _meta(tris_):
+                out = []
+                for t in tris_:
+                    cx = (t[0][0]+t[1][0]+t[2][0])/3.0
+                    cy = (t[0][1]+t[1][1]+t[2][1])/3.0
+                    cz = (t[0][2]+t[1][2]+t[2][2])/3.0
+                    r2 = max((v[0]-cx)**2 + (v[1]-cy)**2 + (v[2]-cz)**2 for v in t)
+                    out.append((cx, cy, cz, math.sqrt(r2)))
+                return out
+            MA, MB = _meta(A), _meta(B)
+            for ia, ta in enumerate(A):
+                ca = MA[ia]
+                for ib, tb in enumerate(B):
+                    cb = MB[ib]
+                    dc = math.sqrt((ca[0]-cb[0])**2 + (ca[1]-cb[1])**2 + (ca[2]-cb[2])**2)
+                    if dc - ca[3] - cb[3] > math.sqrt(best2):
+                        continue
+                    for p in ta:                          # vertex -> face, both directions
+                        d = _pt_tri_d2(p, tb[0], tb[1], tb[2])
+                        if d < best2: best2 = d; pair = (i, j)
+                    for p in tb:
+                        d = _pt_tri_d2(p, ta[0], ta[1], ta[2])
+                        if d < best2: best2 = d; pair = (i, j)
+                    ea = ((ta[0], ta[1]), (ta[1], ta[2]), (ta[2], ta[0]))
+                    eb = ((tb[0], tb[1]), (tb[1], tb[2]), (tb[2], tb[0]))
+                    for p1, p2 in ea:                     # edge -> edge (the skew-tube case)
+                        for q1, q2 in eb:
+                            d = _seg_seg_d2(p1, p2, q1, q2)
+                            if d < best2: best2 = d; pair = (i, j)
+    return math.sqrt(best2), pair
+
+
+def run_file(path, cls, bed, allow, clear_min):
     """Run all checks for one file. Returns True if every check passed."""
     print("== %s [%s] ==" % (path, cls))
     fails = [0]
@@ -122,7 +287,7 @@ def run_file(path, cls, bed, allow):
         ceny = (v0[1] + v1[1] + v2[1]) / 3.0
         cenz = (v0[2] + v1[2] + v2[2]) / 3.0
         faces.append((cz / m, cenz, math.hypot(cenx, ceny)))
-        if cls == "closed":
+        if cls in ("closed", "fabric"):
             tris3d.append((v0, v1, v2, cenx, ceny, cenz, cz / m))
 
     # -- 3 DEGENERATE -------------------------------------------------------
@@ -255,6 +420,70 @@ def run_file(path, cls, bed, allow):
                    "(sealed cavity)" % (len(up), len(fl), allow,
                                         min(up), max(up), note))
 
+    # -- FABRIC: per-component watertight, overhang steepness, bed-all, clearance ----
+    if cls == "fabric":
+        comp = _components(tris3d) if tris3d else []
+        ncomp = (max(comp) + 1) if comp else 0
+        # gather per-component triangles + edges + min-z
+        comp_tris = [[] for _ in range(ncomp)]
+        comp_edges = [Counter() for _ in range(ncomp)]
+        comp_minz = [float("inf")] * ncomp
+        for idx, (v0, v1, v2, _cx, _cy, _cz, _nz) in enumerate(tris3d):
+            k = comp[idx]
+            comp_tris[k].append((v0, v1, v2))
+            vs = (tuple(round(c, 3) for c in v0),
+                  tuple(round(c, 3) for c in v1),
+                  tuple(round(c, 3) for c in v2))
+            for i in range(3):
+                a, b = vs[i], vs[(i + 1) % 3]
+                comp_edges[k][(a, b) if a <= b else (b, a)] += 1
+            for v in (v0, v1, v2):
+                if v[2] < comp_minz[k]:
+                    comp_minz[k] = v[2]
+
+        report("COMPONENTS", ncomp > 0, "%d disjoint components (rings)" % ncomp)
+
+        unpaired = sum(1 for ce in comp_edges for c in ce.values() if c != 2)
+        bad_comp = sum(1 for ce in comp_edges if any(c != 2 for c in ce.values()))
+        report("COMP-WATERTIGHT", unpaired == 0,
+               "%d non-paired edges across %d components (%d components not watertight)"
+               % (unpaired, ncomp, bad_comp))
+
+        # OVERHANG: direct downward-face steepness (no wallR span heuristic -- it breaks on lattices)
+        worst_ang = 90.0
+        n_over = 0
+        for _nz, z, _r in faces:
+            if z <= BED_Z or _nz >= DOWN_NZ:
+                continue
+            n_over += 1
+            ang = math.degrees(math.acos(min(1.0, abs(_nz))))
+            if ang < worst_ang:
+                worst_ang = ang
+        # also report the steepness of the shallowest downward face regardless of the -0.707 gate
+        shallow = 90.0
+        for _nz, z, _r in faces:
+            if z <= BED_Z or _nz >= 0:
+                continue
+            ang = math.degrees(math.acos(min(1.0, abs(_nz))))
+            if ang < shallow:
+                shallow = ang
+        report("OVERHANG", n_over == 0,
+               "%d downward faces shallower than 45deg above z=%.1f; shallowest downward face "
+               "overall = %.1f deg from horizontal" % (n_over, BED_Z, shallow))
+
+        on_bed = sum(1 for mz in comp_minz if mz <= BED_Z)
+        report("BED-ALL", on_bed == ncomp,
+               "%d of %d components touch the bed (min-z <= %.1f)" % (on_bed, ncomp, BED_Z))
+
+        if ncomp >= 2:
+            clr, pr = _min_clearance(comp_tris)
+            report("CLEARANCE", clr >= clear_min,
+                   "min pairwise surface distance %.3f mm (limit %.2f)%s"
+                   % (clr, clear_min,
+                      "  worst pair components %s<->%s" % pr if pr[0] is not None else ""))
+        else:
+            report("CLEARANCE", False, "only %d component -- a fabric needs >=2 rings" % ncomp)
+
     # -- 7 BED ----------------------------------------------------------------
     if minx == float("inf"):
         report("BED", False, "no triangles, no bbox")
@@ -271,20 +500,25 @@ def main():
         description="STL quality gate: LAW, HEADER, DEGENERATE, "
                     "WATERTIGHT/LEAN, PRINTABLE, BED. Exit 1 on any FAIL.")
     ap.add_argument("stl", nargs="+", help="binary STL file(s) to check")
-    ap.add_argument("--class", dest="cls", choices=("closed", "open", "vase-solid"),
+    ap.add_argument("--class", dest="cls",
+                    choices=("closed", "open", "vase-solid", "fabric"),
                     default="closed",
                     help="closed = formwork solid (watertight + printable, tries flipped); "
                          "open = vase surface (lean); vase-solid = slicer-vase input solid "
-                         "(watertight + side-lean, caps excluded). Default: closed")
+                         "(watertight + side-lean, caps excluded); fabric = print-in-place lattice "
+                         "of disjoint interlocked rings (per-component watertight, overhang, "
+                         "bed-all, clearance). Default: closed")
     ap.add_argument("--bed", type=float, default=340.0,
                     help="max bbox X and Y in mm (default 340)")
     ap.add_argument("--allow-overhang", type=int, default=0,
                     help="spanning overhang faces tolerated (default 0)")
+    ap.add_argument("--clear-min", type=float, default=0.45,
+                    help="fabric: min pairwise surface clearance in mm (default 0.45)")
     args = ap.parse_args()
 
     failed = 0
     for path in args.stl:
-        if not run_file(path, args.cls, args.bed, args.allow_overhang):
+        if not run_file(path, args.cls, args.bed, args.allow_overhang, args.clear_min):
             failed += 1
     n = len(args.stl)
     if failed:
