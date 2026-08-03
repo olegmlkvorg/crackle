@@ -132,6 +132,155 @@ TUBE_L_MIN = 2.0                 # upper tube length in marble diameters. The le
                                  # more buys NOTHING, and the trace says the radial component is
                                  # dead 9mm in, so this is the shortest thing that is a guide
                                  # rather than a hole -- not an aiming device.
+BAY_LEAN   = 50.0                # deg from vertical, the cone under the park bays
+ROLL_GRADE = 21.0                # deg. MEASURED on this kit's gutter: the grade at which a marble
+                                 # RELIABLY MOVES. Reused here as the floor for the bay rim's fall,
+                                 # because the job is identical -- get a resting marble to roll.
+HUB_BLOCK  = 0.5                 # mm the hub must be too small for the held marble, the same
+                                 # margin the sieve bore itself is held to
+
+
+# ------------------------------------------------- the throat, and why it is shaped like a star
+# THE LAW THAT KILLS THE OBVIOUS FIXES. A vase part is ONE closed loop per layer with z monotone
+# along the wall, so the vessel has exactly ONE bottom opening and the interior surface has
+# exactly ONE low point: that opening. A moat needs two loops at one height. A crown needs the
+# floor to fall away outside it, which is the same thing. An off-centre bowl still drains to its
+# drain. Every marble in the bowl therefore ends up AT THE DRAIN, and a marble too fat to pass it
+# rests on its rim, centred, plugging it -- which is exactly what was measured.
+# So the drain's SHAPE is the only free variable, and the fix is a drain the reject can sit in
+# WITHOUT covering the way down: a central sieve bore with N radial PARK BAYS off it, each one
+# bore-wide (so it still sorts) and each with its rim falling outward (so the reject rolls out of
+# the middle and stays out). Bays are capsules of radius tr about spines from the axis, so every
+# passage in the throat is exactly the sieve width -- one dimension, one sort threshold.
+
+def bay_half_w(s, reach, tr, w_tip):
+    """Half width of the slot at station s along a bay. It OPENS from the sieve bore at the axis
+    to w_tip at the park station, then holds w_tip out to the end of the slot. The taper is what
+    makes the park a pocket instead of a place the marble merely happens to stop: a O16 sits
+    sqrt(hold_r^2 - w^2) above the rim, so a wider slot seats it deeper. Measured, the untapered
+    park was a 0.05mm dimple, shallow enough that the mesh's own sampling ripple produced others
+    just like it."""
+    return tr + (w_tip - tr) * min(abs(s), reach) / reach if reach else tr
+
+
+def bay_outline_r(theta, reach, tr, bays, w_tip=None, reach_out=None):
+    """Polar radius of the throat outline at angle theta: the boundary of the union of `bays`
+    tapered capsules whose spines run from the axis out to `reach`. Swept, not solved in closed
+    form, so the gate can re-derive the same curve a different way. Swept rather than bisected
+    because the taper makes the ray test non-monotone inside the end cap (w gains on d there), and
+    a bisection would happily return the wrong crossing."""
+    w_tip = tr if w_tip is None else w_tip
+    reach_out = reach if reach_out is None else reach_out
+    ux, uy = math.cos(theta), math.sin(theta)
+
+    def outside(t):
+        for k in range(max(1, bays)):
+            a = 2 * math.pi * k / max(1, bays)
+            ax, ay = math.cos(a), math.sin(a)
+            s = min(max(t * (ux * ax + uy * ay), 0.0), reach_out)
+            if math.hypot(t * ux - s * ax, t * uy - s * ay) <= bay_half_w(s, reach, tr, w_tip):
+                return False
+        return True
+
+    hi = reach_out + w_tip + 1.0
+    last, t, step = 0.0, 0.0, 0.05
+    while t <= hi:
+        if not outside(t):
+            last = t
+        t += step
+    lo, hi = last, last + step
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        if outside(mid):
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+def outline_pts(reach, tr, bays, w_tip=None, reach_out=None, n=720):
+    return [(r * math.cos(t), r * math.sin(t)) for t, r in
+            ((2 * math.pi * i / n,
+              bay_outline_r(2 * math.pi * i / n, reach, tr, bays, w_tip, reach_out))
+             for i in range(n))]
+
+
+def throat_clear(x, y, pts):
+    """Largest disc that fits in the throat outline centred on (x, y): the distance from the point
+    to the outline. This is the number that decides BOTH sorts -- a sphere passes a planar opening
+    only where a disc of its own radius fits."""
+    return min(math.hypot(x - px, y - py) for px, py in pts)
+
+
+def hub_clear(reach, tr, bays, w_tip=None, reach_out=None):
+    """Clearance at the hub, where the bays meet. tr/sin(pi/N) in closed form; measured off the
+    sampled outline here so the two routes can be compared."""
+    return throat_clear(0.0, 0.0, outline_pts(reach, tr, bays, w_tip, reach_out))
+
+
+def bay_grade(reach, tr, bays, hold_r, w_tip=None, step=0.25):
+    """Rim fall per mm of radius the bays need, DERIVED not chosen.
+    A ball resting in the throat sits sqrt(hold_r^2 - clear^2) above the rim, and `clear` is
+    LARGEST at the hub (that is where the bays meet), so leaving the hub RAISES the ball and the
+    hub is a trap unless the rim falls faster. Requirement: that rise, plus the measured grade at
+    which a marble reliably rolls."""
+    pts = outline_pts(reach, tr, bays, w_tip)
+    prev, rise = None, 0.0
+    s = 0.0
+    while s <= reach + 1e-9:
+        c = min(throat_clear(s, 0.0, pts), hold_r - 1e-6)
+        h = math.sqrt(hold_r ** 2 - c ** 2)
+        if prev is not None:
+            rise = max(rise, (h - prev) / step)
+        prev = h
+        s += step
+    return rise + math.tan(math.radians(ROLL_GRADE)), rise
+
+
+def max_bays(tr, hold_r):
+    """Most bays whose hub still blocks the held marble. Bays meeting at the axis widen it:
+    hub = tr/sin(pi/N), so this is arithmetic, not taste."""
+    n = 2
+    while tr / math.sin(math.pi / (n + 1)) <= hold_r - HUB_BLOCK:
+        n += 1
+    return n
+
+
+def bay_station(theta, reach, tr, bays, w_tip=None, reach_out=None):
+    """Where a point on the throat outline sits along the ONE direction the rim falls in, which is
+    what its height is a function of. Two earlier versions are in the measurements:
+
+    rim height from the outline RADIUS -- WRONG. At N=3 the outline near the hub is nearly
+    circular, so the rim under a marble at the hub and under one 3.5mm out came out the same
+    height and the hub stayed a 1.16mm WELL (rest 218.17 at r=0 against 219.33 at r=3.5, measured
+    off the emitted mesh).
+
+    rim falling SYMMETRICALLY to both tips -- also wrong, and the reason is worth keeping. A ball
+    rests on the highest rim point within its own radius, so above a single high point its resting
+    height is a circular arc, and an arc is FLAT at its top. The symmetric slot's apex measured a
+    2.6 deg seat slope over the bore (rest 210.056 at r=0 against 210.033 at r=0.5) where the
+    design asked for 21. There is no shape fix: any symmetric throat has a stationary point on the
+    axis, which is exactly where the marble must not be able to stop.
+
+    ONE-SIDED, so the rim falls in a single direction and the point holding the ball is always
+    ~2mm BEHIND it -- measured, that gives the full grade everywhere including directly over the
+    bore, with no stationary point at all. It is the better shape and it is NOT what this builds,
+    for a meshing reason worth recording: a one-way rim makes the horizontal section a wedge whose
+    edges run nearly along a radius (the wedge opens at 26 deg while the ray to it leaves at 30),
+    and a ring sampled at equal ANGLES cannot follow a boundary that runs radially -- adjacent
+    samples came out 20mm apart and the emitted facets read 88.7 deg. It needs a mesh sampled by
+    arc length, which this generator does not have.
+
+    So: SYMMETRIC, a park at each end of one slot. The apex over the bore is then a stationary
+    point -- unavoidable, since a ball resting on a high point sits directly above it -- but it is
+    a MAXIMUM, not a well: every direction off it falls. Nothing can settle there, and the sim
+    pours are what have to show that nothing does."""
+    r = bay_outline_r(theta, reach, tr, bays, w_tip, reach_out)
+    best = 0.0
+    for k in range(max(1, bays)):
+        a = 2 * math.pi * k / max(1, bays)
+        best = max(best, r * math.cos(theta - a))
+    return min(max(best, 0.0), reach if reach_out is None else reach_out)
 
 
 # ------------------------------------------------------------------------------- the law
@@ -205,7 +354,8 @@ def crest_zone(zs, rs, tol=0.01):
 
 # ------------------------------------------------------------------------------ the part
 
-def build_profile(hold, drop, mouth, chute=None, extension=True, tube_len=None):
+def build_profile(hold, drop, mouth, chute=None, extension=True, tube_len=None, bays=2,
+                  parks=1, points=144):
     """The head's (z, r) surface path, bottom-up in PRINT orientation (z=0 on the bed), plus every
     number the report and the gates need. Nothing here is picked: the bore comes from the marbles
     and the two shrink models, the lower tube's length comes from the chute's emitted mesh."""
@@ -222,7 +372,53 @@ def build_profile(hold, drop, mouth, chute=None, extension=True, tube_len=None):
 
     tr = tube_d / 2
     rb = mouth / 2
-    h_bowl = (rb - tr) / math.tan(math.radians(BOWL_LEAN))
+    # ---- the park bays: every number below is derived from the two marbles, not chosen ----
+    hold_r = hold / 2
+    if bays >= 1:
+        # REACH: where the parked reject's centre sits. The nearest one has to clear a drop marble
+        # coming down the bore, which can itself be BORE_CLEAR off the axis, with both parts
+        # printed off nominal (SORT_DRIFT each); every further one queues a marble diameter uphill
+        # of it, so the reach is what buys the capacity.
+        clear_one = hold_r + drop / 2 + BORE_CLEAR + 2 * mc.SORT_DRIFT
+        reach = clear_one
+        # the park end is as wide as the sieve rule allows: one HUB_BLOCK of radius short of
+        # passing the held marble, so it blocks by exactly the margin the bore itself blocks by
+        w_tip = hold_r - HUB_BLOCK
+        grade, hub_rise = bay_grade(reach, tr, bays, hold_r, w_tip)
+        dip = grade * reach
+        # The slot does not stop at the park. MEASURED with it stopping there: a drop marble
+        # arriving down the same arm came to rest AGAINST the parked reject, at r=23.2 on the bowl
+        # floor just outside the slot, every seed. A trough with something parked in it is a dam.
+        # So the slot runs on past the park by the two marbles' radii -- far enough that the spot
+        # a drop marble gets held at is OVER THE HOLE, where it falls through instead of stopping
+        # -- and its rim RISES again beyond the park at the same rolling grade, so the park stays
+        # the low point and rejects still collect there.
+        out_grade = math.tan(math.radians(ROLL_GRADE))
+        reach_out = reach + hold_r + drop / 2
+        # how far the reject's belly sinks below the rim: it rests on an opening tr wide
+        seat_drop = hold_r - math.sqrt(max(0.0, hold_r ** 2 - w_tip ** 2))
+        prism_h = dip + seat_drop          # the rim must stay a vertical wall under the deepest bay
+        h_conv = reach_out / math.tan(math.radians(BAY_LEAN))
+        hub = hub_clear(reach, tr, bays, w_tip, reach_out)
+        star = [bay_outline_r(2 * math.pi * i / points, reach, tr, bays, w_tip, reach_out)
+                for i in range(points)]
+        stat = [bay_station(2 * math.pi * i / points, reach, tr, bays, w_tip, reach_out)
+                for i in range(points)]
+    else:
+        clear_one = 0.0
+        reach = dip = prism_h = h_conv = grade = hub_rise = seat_drop = 0.0
+        reach_out = out_grade = 0.0
+        hub = tr
+        w_tip = tr
+        star = [tr] * points
+        stat = [0.0] * points
+    # The bowl flares RADIALLY, which is why the slot is short. Measured on a 30mm slot: out there
+    # the radial direction is nearly along the slot, so the wall only opens 0.245mm sideways per
+    # mm of height, the O16 rode 8.26mm above the rim instead of 5.48 and the seat went flat at
+    # x=12 -- the far half of a long slot is not a park. A slot no longer than the clearance it
+    # has to buy does not run into it.
+    grow = math.tan(math.radians(BOWL_LEAN))
+    h_bowl = (rb - tr) / grow
     h_in = (mc.SPIGOT_BASE_R - tr) / math.tan(math.radians(EXIT_LEAN))
     h_flare = (mc.SPIGOT_TIP_R - tr) / math.tan(math.radians(FLARE_LEAN))
     tube_l = TUBE_L_MIN * drop if tube_len is None else tube_len
@@ -271,15 +467,58 @@ def build_profile(hold, drop, mouth, chute=None, extension=True, tube_len=None):
     z = seat_local + mc.COUPLE_L
     prof += ramp(z, mc.SPIGOT_BASE_R, z + h_in, tr);      z += h_in
     prof += ramp(z, tr, z + tube_l, tr, 2.0);             z += tube_l
-    prof += ramp(z, tr, z + h_bowl, rb);                  z += h_bowl
 
-    return dict(prof=prof, tube_d=tube_d, bores=bores, tr=tr, tube_l=tube_l, ext_l=ext_l,
-                h_flare=h_flare, h_in=h_in, h_bowl=h_bowl, total=z, seat_local=seat_local,
-                chamber=h_in + mc.COUPLE_L + h_flare, fit=fit)
+    # ---- throat + bowl: the only part of the wall that is not a surface of revolution ----
+    z_tube_top = z
+    z_conv_top = z_tube_top + h_conv        # bays fully open, prism starts
+    z0 = z_conv_top + prism_h               # rim height at the hub
+    z_top = z0 + h_bowl
+
+    # Below the throat the slot closes by getting SHORTER, never narrower. Blending radially
+    # from the bore to the slot outline instead was measured to pinch it: at half depth the walls
+    # came out 9.68mm apart, and a O10 marble rode them and stopped there -- 1 of 9 single pours
+    # and a four-marble pile-up in the multi pour, all of them stuck in the cone rather than in
+    # the bowl. Anything a marble passes through has to stay at least bore-wide the whole way.
+    NU = 24
+    conv = []
+    for i in range(NU + 1):
+        u = i / NU
+        conv.append([bay_outline_r(2 * math.pi * j / points, reach * u, tr, bays,
+                                   tr + (w_tip - tr) * u, reach_out * u) for j in range(points)])
+
+    def wall_r(k, zz):
+        rs = star[k]
+        # rim: falls from the apex to the park, then climbs again past it
+        sk = stat[k]
+        zr = z0 - (grade * sk if sk <= reach else grade * reach - out_grade * (sk - reach))
+        if zz <= z_conv_top:
+            u = 1.0 if h_conv <= 1e-9 else min(1.0, max(0.0, (zz - z_tube_top) / h_conv))
+            g = u * NU
+            i0 = min(NU - 1, int(g))
+            return conv[i0][k] + (conv[i0 + 1][k] - conv[i0][k]) * (g - i0)
+        if zz <= zr:
+            return rs
+        return rs + (rb - rs) * (zz - zr) / (z_top - zr)
+
+    zs = []
+    zz, fine = z_tube_top, z0 + 1.0
+    while zz < z_top - 1e-9:
+        zz = min(z_top, zz + (0.25 if zz < fine else 0.5))
+        zs.append(zz)
+    rings = [(zp, [rp] * points) for zp, rp in prof]
+    rings += [(zz, [wall_r(k, zz) for k in range(points)]) for zz in zs]
+
+    return dict(prof=prof, rings=rings, tube_d=tube_d, bores=bores, tr=tr, tube_l=tube_l,
+                ext_l=ext_l, h_flare=h_flare, h_in=h_in, h_bowl=h_bowl, total=z_top,
+                seat_local=seat_local, chamber=h_in + mc.COUPLE_L + h_flare, fit=fit,
+                bays=bays, parks=parks, clear_one=clear_one, reach=reach,
+                reach_out=reach_out, dip=dip, grade=grade, hub_rise=hub_rise, hub=hub,
+                seat_drop=seat_drop, w_tip=w_tip, prism_h=prism_h, h_conv=h_conv, grow=grow,
+                z_tube_top=z_tube_top, z_conv_top=z_conv_top, z0=z0, z_top=z_top, points=points)
 
 
-def emit(path, prof, points):
-    mc.write_stl(path, mc.grid_tris(mc.rev_rings(prof, points), points))
+def emit(path, rings, points):
+    mc.write_stl(path, mc.grid_tris(rings, points))
     return mc.verify_stl(path)
 
 
@@ -358,6 +597,127 @@ def straight_runs(path, tol=0.02):
     return lo, runs
 
 
+# ------------------------------------------- where a marble can actually COME TO REST, measured
+# The defect this part exists to fix was never a dimension, it was a RESTING PLACE, so the gate
+# has to measure resting places -- off the emitted file, by a route the generator never used.
+
+class RestField:
+    """Lowest a sphere of radius R can sit on the emitted mesh, as a function of where you hold it.
+
+    rest(x, y) = max over mesh points p within R of the vertical line at (x, y) of
+                 p.z + sqrt(R^2 - dxy^2)
+    i.e. drop the sphere down that line until something stops it. A marble PARKS at a local
+    minimum of this surface, so the whole question "where does the reject end up, and is that on
+    top of the hole" is answered by reading it.
+
+    Measured off the file's VERTICES, not its triangles: a sphere could in principle dip a little
+    between two of them. On this part the rings are 0.25-0.5 mm apart and the points 0.4-2 mm, so
+    that error is bounded by ~(gap/2)^2/(2R) < 0.06 mm; `sag_bound` reports it rather than
+    assuming it away."""
+
+    def __init__(self, path, R, z_lo=-1e30):
+        self.R = R
+        with open(path, "rb") as f:
+            f.read(80)
+            (n,) = struct.unpack("<I", f.read(4))
+            seen = set()
+            for _ in range(n):
+                f.read(12)
+                for _ in range(3):
+                    v = struct.unpack("<3f", f.read(12))
+                    if v[2] >= z_lo:
+                        seen.add((round(v[0], 2), round(v[1], 2), round(v[2], 2)))
+                f.read(2)
+        self.cell = R
+        self.bins = collections.defaultdict(list)
+        for x, y, z in seen:
+            self.bins[(int(math.floor(x / R)), int(math.floor(y / R)))].append((x, y, z))
+        self.n = len(seen)
+
+    def rest(self, x, y):
+        R2 = self.R ** 2
+        best = None
+        cx, cy = int(math.floor(x / self.cell)), int(math.floor(y / self.cell))
+        for i in (-1, 0, 1):
+            for j in (-1, 0, 1):
+                for (px, py, pz) in self.bins.get((cx + i, cy + j), ()):
+                    d2 = (px - x) ** 2 + (py - y) ** 2
+                    if d2 < R2:
+                        h = pz + math.sqrt(R2 - d2)
+                        if best is None or h > best:
+                            best = h
+        return best        # None = nothing in the way: the sphere falls straight through here
+
+    def scan_ray(self, theta, s0, s1, step=0.25):
+        out = []
+        s = s0
+        while s <= s1 + 1e-9:
+            out.append((s, self.rest(s * math.cos(theta), s * math.sin(theta))))
+            s += step
+        return out
+
+    def field_min(self, r_max, dr=0.5, dth=5.0):
+        """Lowest resting place anywhere in the head, and where it is. This is where the reject
+        ends up."""
+        best = (1e30, 0.0, 0.0)
+        th = 0.0
+        while th < 360.0:
+            s = 0.0
+            while s <= r_max + 1e-9:
+                h = self.rest(s * math.cos(math.radians(th)), s * math.sin(math.radians(th)))
+                if h is not None and h < best[0]:
+                    best = (h, s, th)
+                s += dr
+            th += dth
+        return best
+
+
+def layer_offset(path, layer=0.56):
+    """The REAL vase-printability number: how far each layer's loop sits from the loop below it,
+    measured as curve-to-curve distance off the emitted file, then turned back into a wall lean.
+
+    marble_common.verify_stl measures the lean of each FACET, and a facet joins two rings AT THE
+    SAME ANGLE. That is the same thing only while the outline keeps its shape. This throat is a
+    capsule whose radius grows with height, and a growing capsule's shoulder -- where the end cap
+    meets the flank -- sweeps sideways fast, so same-angle facets measured 88.8 deg on a surface
+    that is actually offset a uniform 0.67mm per layer. Slicing does not use facets: it cuts
+    horizontal loops and lays one bead along each, so what decides whether the wall stands up is
+    how far each loop moved from the one under it. At the kit's 0.56 layer, 55 deg is 0.80mm.
+
+    Returns (max offset mm, the z it happens at, the equivalent lean in deg)."""
+    rings = collections.defaultdict(set)
+    with open(path, "rb") as f:
+        f.read(80)
+        (n,) = struct.unpack("<I", f.read(4))
+        for _ in range(n):
+            f.read(12)
+            for _ in range(3):
+                x, y, z = struct.unpack("<3f", f.read(12))
+                rings[round(z, 3)].add((round(x, 4), round(y, 4)))
+            f.read(2)
+    zs = sorted(rings)
+    worst, at = 0.0, 0.0
+    for za, zb in zip(zs, zs[1:]):
+        A, B = list(rings[za]), list(rings[zb])
+        if len(A) < 3 or len(B) < 3 or zb - za < 1e-9:
+            continue
+        for bx, by in B:
+            d = min((bx - ax) ** 2 + (by - ay) ** 2 for ax, ay in A) ** 0.5
+            d *= layer / (zb - za)               # scale the ring step up to one real layer
+            if d > worst:
+                worst, at = d, zb
+    return worst, at, math.degrees(math.atan2(worst, layer))
+
+
+def prism_min_radius(path, z_lo, z_hi):
+    """Narrowest radius of the emitted wall between two heights = the HUB clearance of the throat,
+    because the hub is where the bays meet and the outline comes closest to the axis. Re-read off
+    the file, and it is the number that decides whether the held marble drops through the middle."""
+    zs, rs = ring_profile(path)
+    band = [r for z, r in zip(zs, rs) if z_lo <= z <= z_hi]
+    return min(band) if band else float("nan")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -371,13 +731,23 @@ def main():
                     help="rebuild v1: flare straight from the tube out to the coupling. Makes the "
                          "sim chain gate fail, which is the point of having it.")
     ap.add_argument("--tube-len", type=float, default=None, help="override the upper tube, mm")
+    ap.add_argument("--parks", type=int, default=1,
+                    help="rejected marbles the park has to hold before one is back over the bore. "
+                         "Each one costs a marble diameter of reach.")
+    ap.add_argument("--bays", type=int, default=2,
+                    help="park bays cut off the sieve bore, where a rejected marble goes so it is "
+                         "not sitting on the hole. 0 rebuilds the plugging round throat; more than "
+                         "the derived maximum widens the hub until the reject drops through it, "
+                         "which the transit gate below catches.")
     ap.add_argument("--points", type=int, default=144)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 
-    b = build_profile(a.hold, a.drop, a.mouth, a.chute, a.extension, a.tube_len)
-    out = a.out or f"sort_head_{a.hold:g}_{a.drop:g}{'' if a.extension else '_noext'}.stl"
-    v = emit(out, b["prof"], a.points)
+    b = build_profile(a.hold, a.drop, a.mouth, a.chute, a.extension, a.tube_len, a.bays,
+                      a.parks, a.points)
+    out = a.out or (f"sort_head_{a.hold:g}_{a.drop:g}{'' if a.extension else '_noext'}"
+                    f"{'' if a.bays == 2 else f'_b{a.bays}'}.stl")
+    v = emit(out, b["rings"], a.points)
     seat_out = out.replace(".stl", "_seat0.stl")
     n_shift = shift_z(out, seat_out, -b["seat_local"])
     n_pure, exy, ez, tip_z = shift_is_pure(out, seat_out, -b["seat_local"])
@@ -398,6 +768,44 @@ def main():
         print(f"  NO LOWER TUBE (v1). Below the upper tube the wall flares straight out to the "
               f"coupling and the marble is on its own from there.")
 
+    # ---- where each marble can come to rest, measured off the emitted file ----
+    hold_r, drop_r = a.hold / 2, a.drop / 2
+    hub_meas = prism_min_radius(out, b["z_conv_top"] + 0.3, b["z0"] - 0.3) if a.bays else meas_r
+    fld = RestField(out, hold_r, z_lo=b["z_tube_top"] - 2 * a.hold)
+    park_z, park_s, park_th = fld.field_min(b["reach"] + b["tr"] + 4.0)
+    # The reject's resting height walked from directly over the bore out to a park, BOTH ways
+    # along the slot. What has to be true is not a slope number, it is that there is nowhere to
+    # stop: no step may RISE before the park, or the step before it is a place the marble can
+    # settle. The apex over the bore is a maximum, so it is a balance point and not a well; the
+    # sim pours are what show nothing balances on it.
+    # The blocking zone is everything closer to the axis than clear_one: a marble stopping there
+    # is over the hole. Past it, a stopping place IS the park, so the scan is judged only inside
+    # the zone that matters. (Past clear_one the profile does ripple by ~0.05mm, which is the
+    # 0.25mm ring staircase the tilted rim is meshed with -- it just means the park is a shallow
+    # basin from r=13.5 to r=15 rather than a single point, and all of it is clear.)
+    zone = b["clear_one"]
+    rays = [fld.scan_ray(math.radians(park_th) + k * math.pi, 0.0, max(park_s, zone))
+            for k in (0, 1)] if a.bays else [[]]
+    steps = [(r[i + 1][1] - r[i][1]) / (r[i + 1][0] - r[i][0]) for r in rays
+             for i in range(len(r) - 1)
+             if r[i][1] is not None and r[i + 1][1] is not None and r[i + 1][0] <= zone]
+    rise_max = max(steps) if steps else 1e9              # >0 inside the zone = a place to stop
+    fall_mean = ((rays[0][0][1] - park_z) / park_s) if a.bays and park_s else 0.0
+    arms_match = (a.bays < 2 or abs(rays[0][-1][1] - rays[1][-1][1]) < 0.05)
+    hub_rest = fld.rest(0.0, 0.0)
+    sag = (0.5 / 2) ** 2 / (2 * hold_r)          # worst dip a sphere could take between two rings
+    if a.bays:
+        print(f"  PARK BAYS {a.bays} x reach {b['reach']:.2f}mm, rim falling {b['dip']:.2f}mm "
+              f"(grade {math.degrees(math.atan(b['grade'])):.0f} deg = the {ROLL_GRADE:g} deg the "
+              f"kit's gutter rolls at, plus {math.degrees(math.atan(b['hub_rise'])):.0f} deg to "
+              f"climb out of the hub). DERIVED: reach = O{a.hold:g}/2 + O{a.drop:g}/2 + "
+              f"{BORE_CLEAR:g} bore clear + 2x{mc.SORT_DRIFT:g} drift. MEASURED off the file, the "
+              f"O{a.hold:g} rests at r={park_s:.2f} z={park_z:.1f}, not r=0: it is beside the hole, "
+              f"not on it.")
+    else:
+        print(f"  NO PARK BAYS: a plain round throat. The O{a.hold:g} rests at r={park_s:.2f}, "
+              f"which is the whole defect.")
+
     tube_run = max(runs, key=lambda r: r[0])
     tube_meas = tube_run[1] - tube_run[0]
     low_run = min(runs, key=lambda r: r[0])
@@ -408,9 +816,14 @@ def main():
     checks = [
         ("bore measured", abs(2 * meas_r - b["tube_d"]) < 0.05,
          f"emitted narrowest O{2*meas_r:.2f} vs modelled O{b['tube_d']:.2f}"),
-        ("upper tube measured", abs(tube_meas - b["tube_l"]) < 0.6,
+        # the park is cut out of ONE side, so the other side of the bore stays a straight wall all
+        # the way up to the rim: the emitted run is the tube plus the whole throat
+        ("upper tube measured",
+         abs(tube_meas - (b["tube_l"] + b["h_conv"] + b["prism_h"])) < 0.6,
          f"emitted straight bore z {tube_run[0]:.1f}..{tube_run[1]:.1f} = {tube_meas:.1f}mm vs "
-         f"{b['tube_l']:.1f}mm modelled ({tube_meas/a.drop:.1f} marble diameters)"),
+         f"{b['tube_l']:.1f} tube + {b['h_conv']:.1f} bay cone + {b['prism_h']:.1f} rim wall = "
+         f"{b['tube_l'] + b['h_conv'] + b['prism_h']:.1f}mm modelled "
+         f"({tube_meas/a.drop:.1f} marble diameters)"),
         ("lower tube measured", abs(ext_meas - b["ext_l"]) < 0.6,
          f"emitted {ext_meas:.1f}mm vs {b['ext_l']:.1f}mm modelled"
          + ("" if a.extension else "  (none, by request)")),
@@ -420,6 +833,28 @@ def main():
         ("blocks the big one", a.hold - max(b["bores"].values()) >= 0.5,
          f"O{a.hold:g} is {a.hold - max(b['bores'].values()):.2f}mm too fat on the loosest "
          f"shrink model"),
+        # --- the three that answer "where does the REJECT go", all read off the emitted file ---
+        ("reject parks clear of the bore", park_s >= hold_r + drop_r + BORE_CLEAR,
+         f"lowest resting place for a O{a.hold:g} anywhere in the head is r={park_s:.2f} "
+         f"z={park_z:.1f} (bay at {park_th:.0f} deg); a drop marble coming down the bore needs "
+         f"{hold_r + drop_r + BORE_CLEAR:.2f}mm of it. Sphere-vs-vertex sampling, so this is "
+         f"+-{sag:.3f}mm"),
+        ("nowhere to stop over the bore",
+         a.bays >= 1 and rise_max <= 0.02 and arms_match,
+         (f"walking a O{a.hold:g} out of the bore, both ways along the slot, its resting height "
+          f"NEVER rises anywhere inside the {zone:.2f}mm that would block the bore: worst step "
+          f"{rise_max:+.4f}mm/mm (a positive one is a "
+          f"place it can settle), mean fall {math.degrees(math.atan(fall_mean)):.1f} deg from "
+          f"{hub_rest:.2f} over the axis to {park_z:.2f} at r={park_s:.2f}, and the two arms "
+          f"agree to {abs(rays[0][-1][1] - rays[1][-1][1]) if a.bays >= 2 else 0.0:.3f}mm"
+          if a.bays else "round throat by request: the bore IS the only seat")),
+        ("hub blocks the reject", hub_meas <= hold_r - HUB_BLOCK,
+         f"throat hub measures O{2*hub_meas:.2f} off the file, and O{a.hold:g} needs O{a.hold:g} "
+         f"to pass: {a.hold - 2*hub_meas:.2f}mm of block (need {2*HUB_BLOCK:g}). Bays meeting at "
+         f"the axis widen the hub as tr/sin(pi/N), so at most {max_bays(b['tr'], hold_r)} of them "
+         f"fit before the reject drops straight through the middle"),
+        ("hub still passes the drop marble", hub_meas >= drop_r + BORE_CLEAR - 1e-6,
+         f"hub O{2*hub_meas:.2f} vs O{a.drop:g} + 2x{BORE_CLEAR:g} needed"),
         ("vase printable", v["max_lean"] <= 55.0,
          f"max wall lean {v['max_lean']:.1f} deg (flare {FLARE_LEAN:g}, bowl {BOWL_LEAN:g}, "
          f"exit cone {EXIT_LEAN:g})"),

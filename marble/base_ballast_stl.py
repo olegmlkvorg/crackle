@@ -36,8 +36,14 @@ import argparse, math, os, struct
 
 import marble_common as mc
 
-CHUTE_G     = 46.9      # g per chute segment. MEASURED: 315.2 cm2 emitted surface x 1.2 wall x 1.24
-CHUTE_H     = 235.3     # mm per chute segment, measured off the emitted mesh
+CHUTE_G     = 37.0      # g per chute segment. MEASURED 2026-08-03: 314.3 cm2 emitted surface x
+                        # 0.95 wall x 1.24. It read 46.9 until now, because it was computed with
+                        # the OLD LINE_W of 1.2 and never revisited when that constant was
+                        # corrected to the measured 0.95. A stale figure labelled MEASURED is the
+                        # thing this project treats as worst, so: derived from the mesh today.
+                        # The error was conservative (an over-heavy tower asks for a wider base),
+                        # which is why nothing failed and nobody noticed.
+CHUTE_H     = 235.1     # mm per chute segment, measured off the emitted mesh 2026-08-03
 SAND_RHO    = 1.6e-3    # g/mm3, dry sand loose poured. ASSUMED, handbook 1.4-1.7. Weigh it once.
 PLA_RHO     = 1.24e-3   # g/mm3
 G           = 9.81
