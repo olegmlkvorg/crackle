@@ -69,6 +69,14 @@ WHAT THIS PROBE CANNOT MEASURE. Read this before believing a number.
   - A NON-ROUND BORE. It reports the largest inscribed circle, which is the largest round rod that
     fits, and flags NON-ROUND with the measured out-of-roundness. "Diameter" is not a single number
     for a square or slotted bore and this tool does not pretend otherwise.
+  - A DEPTH AGAINST A DESIGN THAT MEASURES FROM A DIFFERENT PLANE. This probe's mouth is where
+    enclosure is LOST, which on a mouth face cut oblique to the bore axis is the SHALLOWEST point
+    of the rim. A design quoting depth at the axis crossing of that face reads deeper, by the rim
+    spread 2 r tan(face angle). SETTLED 2026-08-03 on bamboo/tetra.stl: flat top face at z=23.3738
+    with the bore at 30 deg, rim spread 2*3.5*tan30 = 4.041 mm, so measured 20.037 + 4.041 = 24.078
+    against a design 24.10 -- agreement to 0.02 mm. Ruled MET: the shortfall was the measuring
+    convention, not missing material, and the generator's own normal-section bore gate independently
+    passes that socket at radius 3.500. Check the mouth face angle before re-litigating a shortfall.
   - A SURFACE (vase-path) MESH. It needs a closed solid: even-odd parity calls the inside of a
     single-wall loop material, so there is no enclosed void to find. Non-watertight input is
     detected and refused with that diagnosis. If you must reason about a vase path, the printed wall
