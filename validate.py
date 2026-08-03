@@ -1102,8 +1102,20 @@ def check(path):
     # ONLY Z MOVES THAT ARE FOLLOWED BY EXTRUSION ARE LAYERS. The end-of-print park lift is a Z
     # move too, and on a short part it fell inside the scan window and was reported as a 30.7mm
     # "floating line" -- a false positive that would refuse every 4-layer part.
+    # THE PRIME IS NOT THE FIRST LAYER, AND R1 WAS READING IT AS ONE. The prime sequence descends
+    # to Z and lays its line before the body starts, so the first "Z then extrude" pair in the file
+    # belongs to the PRIME, not to layer 1. Every generator built on spiraltower's prime shape hit
+    # this: 44 files across 12 generators sampled the prime's descent, so their R1 tick was evidence
+    # about the purge line and not about the part. Proven on volume_marker — inject Z0.510 as the
+    # BODY's layer 1 and R1 stayed green; move the PRIME's Z and R1 fired. The rule was measuring
+    # the one line in the file it is not about.
+    # The prime is identified the way this file already identifies it for R4 (see _isprime, and the
+    # rule preamble above: "identified by its own comment"). One definition, reused — two definitions
+    # of "the prime" that can disagree is the bug class this repo keeps paying for.
     _zs, _pend = [], None
     for _l in open(path):
+        if 'PRIME' in _l.upper():
+            continue
         _c = _l.split(';')[0].strip()
         _m = re.match(r'G1 (?:F\d+ )?Z(\d+\.\d+)$', _c)
         if _m:
