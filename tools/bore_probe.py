@@ -329,20 +329,22 @@ def _dmin(px, py, segs, meta, cutoff=None):
 
 
 def _inscribe_hard(comp, segs, cell):
-    """Largest circle inside one void. The ONE piece of route A that is not transit.py's.
+    """Largest circle inside one void. Kept as an independent implementation of what
+    transit._inscribe now also does, so cases 28/29 can cross-check the two.
 
-    transit._inscribe steps only +-x and +-y. Where two ORTHOGONAL walls bind -- any square or
-    slotted bore, any bore with a flat -- every axis-aligned move leaves the minimum distance
-    unchanged, the search calls itself converged, and the radius comes out SHORT. Measured on a
-    7.00 mm square bore, 2026-08-03: it returns centre (-0.250, -0.250) r=3.250 while the true
-    inscribed radius at the origin is 3.500, an 0.5 mm error on diameter. The bias is conservative
-    (it under-reports room) so it cannot pass a bad part, but it is wrong in a knowable way, and
-    "wrong but safe" is still the thing this file exists to remove.
+    HISTORY, so the next reader knows why this exists: until 2026-08-03 transit._inscribe stepped
+    only +-x and +-y, and stalled where two orthogonal walls bind AND sit square to the search
+    axes -- measured then: an axis-aligned 7.00 mm square returned centre (-0.250, -0.250)
+    r=3.250 against a true 3.500, a 0.5 mm error on diameter, while the same square rotated 1 deg
+    erred only 50 nm and a 12x7 slot 49 nm (one binding axis never stalls). The trigger was the
+    ALIGNMENT, not the flat -- but axis-aligned is exactly how parts get modelled, so it was worth
+    0.5 mm in practice. transit._inscribe has since been fixed with this same 16-direction table
+    plus an acceptance epsilon, and selftest case 28 now FAILS if that stall ever returns.
 
-    Fix: 16 directions instead of 4, so the improving cone is missed only when two binding walls
-    sit within 22.5 deg of opposite, which is the middle of a slot where the error is negligible.
-    Every step stays capped at the current radius, exactly as transit does, so the search still
-    cannot hop a thin wall into a neighbouring void and report its room."""
+    16 directions: the improving cone is missed only when two binding walls sit within 22.5 deg
+    of opposite, the middle of a slot where the error is negligible (worst measured: 0.6 nm on a
+    20x5 slot). Every step stays capped at the current radius, exactly as transit does, so the
+    search cannot hop a thin wall into a neighbouring void and report its room."""
     xs = [c[0] for c in comp]
     ys = [c[1] for c in comp]
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
@@ -1419,20 +1421,25 @@ def selftest(tmp=None, keep=False):
        "(corner-to-flat of a 7.00 square = %.3f)"
        % (r8["dia"], r8["nonround"], 3.5 * math.sqrt(2) - 3.5)))
 
-    # the square bore is also the fixture that caught transit._inscribe stalling. Both halves are
-    # asserted, so nobody "simplifies" the refinement away and silently loses 0.5 mm of diameter.
+    # The square bore is the fixture that caught transit._inscribe stalling: stepping only +-x and
+    # +-y, every move from (-0.250, -0.250) left the nearer of two orthogonal walls untouched, so it
+    # called itself converged at r=3.250 against a true 3.500 -- 0.5 mm of diameter, quietly. It was
+    # given 16 directions on 2026-08-03 and now lands the true answer. Both searches are asserted
+    # against the same square, so a regression in EITHER is a red case here rather than a bore that
+    # under-reports its room and passes a part that cannot be threaded.
     sq_tris = load_tris(p)
     cs, segs = _circles_at(sq_tris, 28.0, CELL)
     hole = _voids(segs, CELL)[0]
-    old = _inscribe(hole, segs, CELL)
-    new = _inscribe_hard(hole, segs, CELL)
-    ck("axis-only search STALLS on a square", lambda: (abs(old[2] - 3.5) > 0.1,
-       "transit._inscribe returns centre (%.3f, %.3f) r=%.3f on a bore whose true inscribed "
-       "radius is 3.500: +-x and +-y moves all leave the minimum unchanged where two orthogonal "
-       "walls bind" % old))
-    ck("16-direction search recovers it", lambda: (abs(new[2] - 3.5) < 0.005
-       and math.hypot(new[0], new[1]) < 0.005,
-       "_inscribe_hard returns centre (%.4f, %.4f) r=%.4f, the true answer" % new))
+    tr = _inscribe(hole, segs, CELL)
+    hard = _inscribe_hard(hole, segs, CELL)
+    ck("transit._inscribe holds the square", lambda: (abs(tr[2] - 3.5) < 0.005
+       and math.hypot(tr[0], tr[1]) < 0.005,
+       "transit._inscribe returns centre (%.4f, %.4f) r=%.4f against a true inscribed radius of "
+       "3.500. The axis-only stall it replaced returned 3.250, so a radius back near there means "
+       "the stall is back" % tr))
+    ck("16-direction search recovers it", lambda: (abs(hard[2] - 3.5) < 0.005
+       and math.hypot(hard[0], hard[1]) < 0.005,
+       "_inscribe_hard returns centre (%.4f, %.4f) r=%.4f, the true answer" % hard))
     worstd = max(abs(_dmin(x * 0.7, y * 0.7, segs, _seg_meta(segs)) - _d_all(x * 0.7, y * 0.7, segs))
                  for x in range(-6, 7) for y in range(-6, 7))
     ck("bbox-pruned distance == _d_all", lambda: (worstd < 1e-12,

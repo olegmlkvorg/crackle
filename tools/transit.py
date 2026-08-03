@@ -135,12 +135,21 @@ def _d_seg(px, py, s):
     return math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
 
 
-def _d_all(px, py, segs):
+def _d_all(px, py, segs, cutoff=None):
+    """Distance from (px, py) to the nearest segment.
+
+    With a `cutoff`, the scan stops as soon as it can prove the answer is at or below it. The caller
+    then knows one thing for certain: a value ABOVE the cutoff never exited early, so it IS the true
+    distance. _inscribe only ever asks "is this point further out than the one I have", so that is
+    the whole question, and answering it lets most probes quit after a segment or two. Called with
+    no cutoff it scans every segment, exactly as before."""
     best = float("inf")
     for s in segs:
         d = _d_seg(px, py, s)
         if d < best:
             best = d
+            if cutoff is not None and best <= cutoff:
+                return best
     return best
 
 
@@ -219,27 +228,81 @@ def _voids(segs, cell):
     return holes
 
 
+# 16 directions, 22.5 deg apart. Four (+-x, +-y) is what stalled; see _inscribe. Same table
+# bore_probe._inscribe_hard has searched with since 2026-08-03.
+DIRS16 = [(math.cos(2 * math.pi * i / 16), math.sin(2 * math.pi * i / 16)) for i in range(16)]
+
+# A move must GAIN something real to count as one. Accepting a 1e-16 gain keeps `moved` true
+# forever, the step never halves, and the search walks a ridge until it is killed -- what this same
+# 16-direction loop did for 12 minutes on a near-degenerate section in bore_probe (2026-08-03).
+# 1e-9 mm sits three orders below the 1e-6 mm step the loop stops at, so it cannot cost accuracy.
+INSCRIBE_GAIN = 1e-9
+
+
 def _inscribe(comp, segs, cell):
     """Largest circle inside one void: best of a subsampled coarse scan, then a shrinking pattern
-    search. Every step is capped at the current radius, so the search cannot hop a thin wall into a
-    neighbouring void and report its room instead."""
+    search over 16 directions. Every step is capped at the current radius, so the search cannot hop
+    a thin wall into a neighbouring void and report its room instead.
+
+    Sixteen directions, not four. With two walls binding at once the directions that improve on both
+    form a wedge, and stepping only +-x and +-y puts every step exactly ON that wedge's edge when the
+    two walls are orthogonal AND square to the search axes: each move gains on one wall and loses on
+    the other, the minimum never improves, and the search calls itself converged. Inside an
+    axis-aligned 7.00 mm square bore it stops at (-0.250, -0.250) r=3.250 against a true 3.500 --
+    0.5 mm lost on diameter (bore_probe selftest case 28, which now fails if that comes back). A
+    45 deg step is strictly inside the wedge and gains on both walls at once.
+
+    Measured 2026-08-03, so the size of the thing is on the record rather than assumed: it is the
+    ALIGNMENT that stalls, not the flat. The same square rotated 1 deg came out 0.00005 mm short,
+    and a 12x7 slot 0.00005 mm, because only one pair of walls binds there. Axis-aligned is how
+    parts are modelled, which is why a narrow trigger was still worth 0.5 mm. Sixteen directions
+    leave a stall possible only where the wedge is under 22.5 deg wide, i.e. two walls within
+    22.5 deg of opposite -- the middle of a slot, where the radius is right anyway.
+
+    Round bores are unaffected: across 120 voids of transit's own round fixtures this returns the
+    64-gon's true apothem to within 0.6 nm, against 71.6 nm for the four-direction search."""
     stride = max(1, len(comp) // 120)
     px, py, d = comp[0][0], comp[0][1], -1.0
     for k in range(0, len(comp), stride):
         cx, cy = comp[k]
-        dd = _d_all(cx, cy, segs)
-        if dd > d:
-            px, py, d = cx, cy, dd
+        if _d_all(cx, cy, segs, cutoff=d) <= d:
+            continue
+        px, py, d = cx, cy, _d_all(cx, cy, segs)
+    # The centre of a circle inscribed in this void lies inside the void, so inside the bbox of the
+    # void's own cells. comp holds cell CENTRES, so the void itself reaches at most half a cell past
+    # them and this +-cell margin is looser than that bound: it cannot exclude a real answer. What
+    # it stops is a gaining direction marching a one-cell void's centre away from the section for
+    # good, which is how the 16-direction loop first ran away in bore_probe.
+    xs = [c[0] for c in comp]
+    ys = [c[1] for c in comp]
+    x0, x1 = min(xs) - cell, max(xs) + cell
+    y0, y1 = min(ys) - cell, max(ys) + cell
+    # Where the search STOPS is part of what it measures. At the old 1e-4 mm floor the returned
+    # radius sat up to 1e-4 short of the true one and where it landed inside that window depended on
+    # the path: on the 64-gon fixtures the 4-direction search scattered 3..65 nm under the apothem
+    # and the 16-direction one 50..74 nm, so a floor change would have looked like a regression that
+    # was only ever the floor. 1e-6 mm puts both a thousand times under the 1e-3 mm last printed
+    # digit, and the two searches then agree on round bores to every digit a verdict shows.
     step = cell
-    while step > 1e-4:
+    rounds = 0
+    while step > 1e-6:
+        rounds += 1
+        if rounds > 2000:
+            raise ValueError("_inscribe did not converge in 2000 rounds at a void of bbox "
+                             "%.3f x %.3f. The circle it has is real but may not be the largest, "
+                             "and a bore that quietly under-reports is how a part that cannot be "
+                             "threaded passes." % (x1 - x0 - 2 * cell, y1 - y0 - 2 * cell))
         step = min(step, max(d, 1e-6))
         moved = False
-        for ddx, ddy in ((step, 0.0), (-step, 0.0), (0.0, step), (0.0, -step)):
-            nx_, ny_ = px + ddx, py + ddy
-            nd = _d_all(nx_, ny_, segs)
-            if nd > d:
-                px, py, d = nx_, ny_, nd
-                moved = True
+        for ux, uy in DIRS16:
+            nx_, ny_ = px + ux * step, py + uy * step
+            if not (x0 <= nx_ <= x1 and y0 <= ny_ <= y1):
+                continue
+            nd = _d_all(nx_, ny_, segs, cutoff=d + INSCRIBE_GAIN)
+            if nd <= d + INSCRIBE_GAIN:
+                continue
+            px, py, d = nx_, ny_, nd
+            moved = True
         if not moved:
             step *= 0.5
     return px, py, d
