@@ -13,6 +13,18 @@ WHAT IT MEASURES, off the emitted mesh, using none of the generator's variables:
 ladder of z heights, find the ENCLOSED VOID at each height, and take the largest circle that fits
 inside it. That is a measured channel, centre c(z) and radius r(z), derived from triangles alone.
 
+WHAT THIS DOES NOT ANSWER, learned by misusing it twice in one night. It measures a THROUGH
+CHANNEL ALONG Z: it slices horizontally and asks whether one straight line stays inside the
+enclosed void at every height. So it is the wrong tool for:
+  - a BLIND socket, which has no void above its floor. branch_sleeve reports "no enclosed void at
+    3 of 60 heights" and that is correct and meaningless: its sockets are blind holes entered from
+    the X faces, and the right questions there are depth and entry, not transit.
+  - a bore that runs along X or Y. Reorient the mesh first or the answer is about the wrong axis.
+  - a part measured against the wrong mating diameter. Feeding a stock O52 spigot to a SLIM brace
+    built for O43.7 produced a confident FAIL that was entirely the operator's error.
+Both mistakes were mine, both looked like real defects, and neither was. Check the axis and check
+the pair before believing a verdict from this file.
+
 THE CRITERION. A rigid straight part has a straight axis, so it threads the channel if and only if
 SOME straight line stays inside the channel over the whole height:
 
