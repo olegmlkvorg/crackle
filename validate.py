@@ -1037,6 +1037,19 @@ def check(path):
         _mbw = re.search(r'bead[ =]([\d.]+)', _rules_txt[:4000])
         _bw2 = float(_mbw.group(1)) if _mbw else 2.0
         _fa2 = math.pi * (1.75 / 2) ** 2
+        # WHICH LAYER IS WORST IS READ OFF THE FILE, NEVER ASSUMED. The message used to staple
+        # "layer 1 over-extrudes ON PURPOSE" onto whichever layer came out worst. On the f022
+        # tower coupon that was layer 503 at Z40.26 -- a 1.72x reading 40 mm up a 70 mm tower,
+        # handed to the reader as deliberate first-layer behaviour. That is worse than printing
+        # no reason at all, because it turns a finding into a reassurance. It read TRUE for the
+        # 47 of 76 files in out/ whose worst layer really is layer 1, which is how it survived.
+        # Two routes, both off the artifact: the file's own "; ---- layer N of M  z Z" marker
+        # when it emits one, else this Z's rank in the emitted ladder. No layer number is typed.
+        _z2l = {}
+        for _r3 in _rules_txt.splitlines():
+            _m3 = re.match(r';\s*----\s*layer\s+(\d+)\s+of\s+\d+\s+z\s+([\d.]+)', _r3.strip())
+            if _m3: _z2l[round(float(_m3.group(2)), 2)] = int(_m3.group(1))
+        _rank = {_z3: _i3 + 1 for _i3, _z3 in enumerate(sorted(_pl))}
         _ratios = []
         for _zz, _rows in _pl.items():
             if len(_rows) < 20: continue
@@ -1047,9 +1060,12 @@ def check(path):
             # is 12mm wide, not 2mm. Dilating by the bead made a healthy nucleon read 25x, which
             # is how a false positive gets a guard switched off. Measuring the deposit's own
             # geometry instead.
-            _len2 = 0.0; _prev = None
+            _len2 = 0.0; _gross2 = 0.0; _prev = None; _segs2 = []
             for _rx, _ry, _, _cont in _rows:
-                if _prev and _cont: _len2 += math.hypot(_rx - _prev[0], _ry - _prev[1])
+                if _prev:
+                    _d3 = math.hypot(_rx - _prev[0], _ry - _prev[1])
+                    _gross2 += _d3
+                    if _cont: _len2 += _d3; _segs2.append(_d3)
                 _prev = (_rx, _ry)
             _mm2 = _vol2 / max(_len2, 1e-9)
             _spread = min(max(_mm2 / _h2, _bw2), 40.0)
@@ -1062,20 +1078,88 @@ def check(path):
                 for _dx2 in range(-_k2, _k2 + 1):
                     for _dy2 in range(-_k2, _k2 + 1): _grid2.add((_gx2 + _dx2, _gy2 + _dy2))
             _cov2 = len(_grid2) * _cl2 * _cl2
-            _ratios.append((_zz, _vol2 / max(_cov2 * _h2, 1e-9)))
+            # IS THIS NUMBER A MEASUREMENT? Asked here so it can never again be answered by the
+            # reader assuming it. Three conditions, each read off the grid's own construction --
+            # none is a tuned threshold, and each was found by a file in out/ that violates it:
+            #   (a) SELF-CONSISTENT. The 3x3 stamp is one deposit wide only while cell ==
+            #       spread/3. The 0.3 floor binds whenever spread < 0.9 and breaks that: at the
+            #       f022 coupon's 0.43 spread it forces k=0, so every sample marks exactly ONE
+            #       cell and "coverage" becomes a count of toolpath samples. Measured there: 210
+            #       samples -> 210 distinct cells -> 18.90 mm2, against 30.19 mm2 of real annulus
+            #       summed from the six emitted radii. That is the whole of its 1.59x baseline;
+            #       the annuli say 1.00x.
+            #   (b) NO HOLES. The union of stamps is a footprint only while consecutive stamps
+            #       overlap. stand_tile 320x320 emits 400 samples for 52 m of path -- 130 mm
+            #       apart against a 2.00 mm stamp -- so coverage reads 1276 mm2 for a 320x320
+            #       floor and the ratio reads 81.6x.
+            #   (c) LENGTH INTEGRITY. Volume counts every extruding move; length counts only
+            #       moves preceded by another extruding move. A bare "G1 F750" corner slowdown
+            #       carries no X, so it clears the continuation flag and drops the next segment
+            #       from the denominator while its volume stays in the numerator. On
+            #       stand_tile 120x120 that reports 7.28 mm2/mm where 10376.93 mm3 over the full
+            #       8645 mm of extruding path is 1.20 -- exactly the declared 2.00x0.6 bead.
+            # The gap between healthy and broken is ~6x on (c), so 0.95 is a floor, not a knob.
+            # WHAT WOULD FALSIFY THIS: subdividing a path without touching geometry or material
+            # must not move the ratio. It does -- the f022 coupon walks 1.594 -> 1.277 -> 1.178
+            # -> 1.123 at x2/x4/x8. A number that moves when you resample an unchanged curve is
+            # measuring the sampling. Fixing that means rasterising coverage ALONG each segment
+            # instead of stamping endpoints, which changes every number this guard has ever
+            # printed and so needs calibrating against a printed part. Not done here.
+            # The reason is carried out to the reader, not left in this comment: a bare "not
+            # measured" is the same dead end as a bare "ON PURPOSE" was.
+            _stamp2 = (2 * _k2 + 1) * _cl2
+            _gap2 = max(_segs2) if _segs2 else 0.0
+            _why2 = ""
+            if _cl2 > _spread / 3.0 + 1e-9:
+                _why2 = (f"the grid cell is floored at {_cl2:.2f}mm for a {_spread:.2f}mm deposit, "
+                         f"so it stamps {_stamp2:.2f}mm and every sample lands in its own cell — "
+                         f"that counts samples, not footprint")
+            elif _gap2 > _stamp2:
+                _why2 = (f"samples sit up to {_gap2:.1f}mm apart against a {_stamp2:.2f}mm stamp, "
+                         f"so the footprint it unions has holes and coverage is under-counted")
+            elif _len2 < 0.95 * max(_gross2, 1e-9):
+                _why2 = (f"only {100 * _len2 / max(_gross2, 1e-9):.0f}% of the extruding path "
+                         f"counted toward length, so mm2/mm is over-stated about "
+                         f"{_gross2 / max(_len2, 1e-9):.1f}x")
+            _ratios.append((_zz, _vol2 / max(_cov2 * _h2, 1e-9),
+                            _z2l.get(_zz, _rank.get(_zz)), not _why2, _why2))
         _pressed_ok = bool(re.search(r'^; PRESSED_LAYER1=', _rules_txt, re.M))
         if _ratios:
-            _wz, _wr = max(_ratios, key=lambda t: t[1])
-            if _wr > 1.35 and not _pressed_ok:
-                problems.append(f"R4b fill ratio {_wr:.2f}x at Z{_wz} — this layer deposits "
-                                f"{_wr:.2f}x more than its own height can hold over the area it "
-                                f"covers. The surplus builds height until the nozzle reaches its "
-                                f"own deposit and shears the part off the plate. Overlapping "
-                                f"paths need LESS flow than a bead model predicts, not the same.")
+            # THE EXCUSE BELONGS TO THE LAYER IT DESCRIBES, NOT TO THE WHOLE FILE. PRESSED_LAYER1
+            # declares that layer 1 is laid into a 0.1 gap on purpose. It was also suppressing the
+            # R4b FAILURE at every other layer: 71 of the 76 files here declare it, so the failure
+            # branch was unreachable for 93% of them. Layer 1 is dropped from the failure
+            # candidates and reported separately; every other layer is judged on its own.
+            _l1 = next((_t for _t in _ratios if _t[2] == 1), None)
+            _cand = [_t for _t in _ratios if not (_pressed_ok and _t[2] == 1)] or _ratios
+            _wz, _wr, _wl, _wmeas, _wwhy = max(_cand, key=lambda t: t[1])
+            # "worst layer" stops being true the moment layer 1 is held out of the running, and an
+            # imprecise caption is the whole of this bug. So the caption states its own scope.
+            _excl = _pressed_ok and _l1 is not None and _wl != 1
+            _scope = "worst after the excused layer 1" if _excl else "worst layer"
+            _at = f"Z{_wz}" + (f" = layer {_wl}" if _wl is not None
+                               else " (no layer index in this file)")
+            _tail = ""
+            if _excl:
+                _tail = (f" Layer 1 reads {_l1[1]:.2f}x and is excused: PRESSED_LAYER1 is "
+                         f"declared, so it over-extrudes ON PURPOSE (wide line, welds to plate).")
+            if _wr > 1.35 and _wmeas:
+                problems.append(f"R4b fill ratio {_wr:.2f}x at {_at} — NOT the deliberate first "
+                                f"layer, and nothing in the file declares this layer as "
+                                f"over-extruded by design. It deposits {_wr:.2f}x more than its "
+                                f"own height can hold over the area it covers. The surplus builds "
+                                f"height until the nozzle reaches its own deposit and shears the "
+                                f"part off the plate. Overlapping paths need LESS flow than a "
+                                f"bead model predicts, not the same.{_tail}")
+            elif _wr > 1.35:
+                # Over the limit, but the instrument is out of range. Reported as unmeasured
+                # rather than dressed up either as a finding or as a pass.
+                print(f"  fill ratio {_wr:.2f}x ({_scope}, {_at}) — NOT MEASURED, so NOT "
+                      f"judged: {_wwhy}. Neither a pass nor a finding.{_tail}")
             else:
-                _note = " — layer 1 over-extrudes ON PURPOSE (wide line, welds to plate)" \
-                        if _pressed_ok and _wr > 1.35 else " — 1.00 is exact"
-                print(f"  fill ratio {_wr:.2f}x (worst layer, Z{_wz}){_note}")
+                _note = "" if _wmeas else f", but NOT MEASURED: {_wwhy}"
+                print(f"  fill ratio {_wr:.2f}x ({_scope}, {_at}), under the 1.35 limit"
+                      f"{_note}.{_tail}")
 
     if _nlink:
         print(f"  {_nlink} declared LINK move(s) exempt from R4 (contour connectors, metered thin)")
