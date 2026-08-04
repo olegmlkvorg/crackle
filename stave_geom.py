@@ -1,16 +1,47 @@
 #!/usr/bin/env python3
 """STAVE build-spec arithmetic. Every number here is CALCULATED from the brief's givens or
-MEASURED from an emitted file elsewhere; nothing is assumed silently."""
-import math
+MEASURED from an emitted file elsewhere; nothing is assumed silently.
 
-# ---- GIVENS (from the brief / measured elsewhere) ----
-ROD_D   = 6.35      # mm, GIVEN (1/4")
-ROD_L   = 610.0     # mm, GIVEN (24")
-E       = 15000.0   # MPa, GIVEN as mid-band (brief says E varies ~2x)
-R_BREAK = 318.0     # mm, GIVEN
-I_ROD   = math.pi * ROD_D**4 / 64.0
+CORRECTED 2026-08-04 -- THE ROD DIAMETER WAS A NOMINAL WEARING A MEASUREMENT'S LABEL. This file
+opened with `ROD_D = 6.35  # mm, GIVEN (1/4")` and spent it on I = pi d^4 / 64. Oleg calipered the
+actual sticks on 2026-08-02: they are O5.8-6.2, variable per stick (bamboo/rod_constants.py). d^4
+turns that into a 25% error at 6.0 and a 44% error at 5.8, and it was never one-directional, which
+is why a single "conservative" substitute would have been the same mistake again:
 
-print(f"I_rod = {I_ROD:.2f} mm4   EI = {E*I_ROD/1000:.0f} N.m.mm -> {E*I_ROD:.3e} N.mm2")
+    quantity                          worst stick   6.35 nominal was
+    socket couple F_SOCK, bend moment  FATTEST      CONSERVATIVE (over-states the load)
+    pin bending stress (= E d / 2R)    FATTEST      CONSERVATIVE
+    plate bore clearance needed        FATTEST      CONSERVATIVE
+    pin-hole fraction of I removed     THINNEST     OPTIMISTIC  (under-states the loss)
+    bearing on the rod at a pin        THINNEST     OPTIMISTIC
+
+So there is no single ROD_D any more. Each question is asked at the stick that governs IT.
+
+NOT RE-MEASURED: every FORCE and STRESS figure this file prints has moved, and anything already
+published from the old run (guides, page copy) is stale until it is re-read off this output. The
+BARREL GEOMETRY has NOT moved -- R, bow, chord, arc, burial, the shelf stations and the barrel
+radii are functions of ROD_LEN, H_S and THETA only, and none of those changed. No part was
+re-emitted and no coupon was re-printed for this edit."""
+import math, os, sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "bamboo"))
+import rod_constants as RC          # THE rod truth. Never retyped.
+import solid                        # for STICK_BORE, the stave kit's approved 7.05 plate bore
+
+# ---- GIVENS ----
+# Rod diameters MEASURED with calipers by Oleg, 2026-08-02 (rod_constants). Used per-question:
+ROD_THIN = RC.ROD_MIN   # governs: pin-hole loss, bearing on the rod
+ROD_FAT  = RC.ROD_MAX   # governs: developed moment, socket couple, bore clearance
+ROD_L    = RC.ROD_LEN   # mm, the 24in stock length
+E        = 15000.0      # MPa, GIVEN as mid-band (brief says E varies ~2x) -- NOT measured on our
+                        # bamboo; a 2x band on E swamps the diameter correction below
+R_BREAK  = 318.0        # mm, GIVEN
+I_THIN   = math.pi * ROD_THIN**4 / 64.0
+I_FAT    = math.pi * ROD_FAT**4 / 64.0
+
+print(f"rods MEASURE O{ROD_THIN:g}-{ROD_FAT:g} (calipers 2026-08-02), NOT the 6.35 nominal")
+print(f"I_rod = {I_THIN:.2f} mm4 (thin) .. {I_FAT:.2f} mm4 (fat), a {I_FAT/I_THIN:.2f}x spread")
+print(f"EI = {E*I_FAT/1000:.0f} N.m.mm -> {E*I_FAT:.3e} N.mm2   (fat stick, the load case)")
 
 # ---- SOCKET DEPTH & FREE ARC ----
 # BURIAL, the correction the judge said CINCH and SAIL both skipped. The socket's VERTICAL EXTENT
@@ -27,7 +58,7 @@ def barrel(theta_deg):
     R    = A / (2*th)
     s    = R * (1 - math.cos(th))        # sagitta (radial swell)
     L    = 2 * R * math.sin(th)          # chord
-    M    = E * I_ROD / R / 1000.0        # N.m
+    M    = E * I_FAT / R / 1000.0        # N.m -- the FAT stick develops the most moment
     return R, s, L, M, A, bury
 
 print(f"\nsocket vertical extent {H_S}mm -> burial {H_S/math.cos(math.radians(14)):.2f}mm at 14 deg")
@@ -99,41 +130,57 @@ print(f"  PIN POSITIONS measured along the rod from its bottom end: "
 T_PLATE = 4.8
 for p in (5.5,):
     ph = math.radians(p)
-    need = ROD_D/math.cos(ph) + T_PLATE*math.tan(ph)
+    # asked at the FATTEST stick: the bore has to pass the worst rod in the batch, not the average.
+    need = ROD_FAT/math.cos(ph) + T_PLATE*math.tan(ph)
+    # the bore itself is solid.STICK_BORE, imported. It is the ABSOLUTE 7.05 mm hole Oleg picked off
+    # the printed gauge, NOT "rod + 0.70" -- see the pairing note in solid.py. Retyping 0.70 here
+    # (which this line used to do) is exactly how the adder gets re-applied to a measured rod.
+    # solid.SHRINK is labelled METAL SHAFTS ONLY, and that label is about it being a FIT allowance.
+    # It is borrowed here for the other thing it measures: the model->printed hole delta, verified
+    # at O6 on the pulley (solid.py). No bamboo fit is taken from it. This line used to retype 0.25.
+    printed = solid.STICK_BORE - solid.SHRINK
     print(f"\nplate bore: rod at {p} deg through a {T_PLATE}mm plate needs "
-          f"{need:.2f}mm clear; STICK_FIT bore = {ROD_D+0.70:.2f}mm modelled "
-          f"(~{ROD_D+0.70-0.25:.2f} printed) -> {'OK' if ROD_D+0.70-0.25 > need else 'TOO TIGHT'}")
+          f"{need:.2f}mm clear; stave bore = {solid.STICK_BORE:.2f}mm modelled "
+          f"(~{printed:.2f} printed) -> {'OK' if printed > need else 'TOO TIGHT'}")
 
 # ---- PIN: net second moment with a transverse hole on the neutral axis ----
 def I_net(d_hole, n=20001):
     """I about the bending axis after drilling a hole of dia d_hole THROUGH the rod,
     hole axis perpendicular to the bending plane (i.e. on the neutral axis).
-    Removed strip: |x| <= a within the circle, integrated x^2 dA."""
-    Rr, a = ROD_D/2, d_hole/2
+    Removed strip: |x| <= a within the circle, integrated x^2 dA.
+
+    Asked at the THINNEST stick: the same drill takes a bigger share of a thinner rod, so 5.8 is
+    the stick that governs how much a pin hole costs."""
+    Rr, a = ROD_THIN/2, d_hole/2
     tot = 0.0
     for i in range(n):
         x = -a + 2*a*(i+0.5)/n
         tot += x*x * 2*math.sqrt(max(Rr*Rr - x*x, 0)) * (2*a/n)
-    return I_ROD - tot, tot
+    return I_THIN - tot, tot
 
-print(f"\nPIN HOLE (drilled TANGENTIALLY, hole axis on the neutral axis):")
+print(f"\nPIN HOLE (drilled TANGENTIALLY, hole axis on the neutral axis) at the THIN stick "
+      f"O{ROD_THIN:g}, carrying the moment the FAT stick develops -- worst section, worst load:")
 print(f"{'dia':>5} {'I_net':>8} {'% kept':>8} {'sigma MPa':>10}")
 for dh in (2.0, 2.5, 3.0):
     Inet, rem = I_net(dh)
-    sig = MOM*1000*(ROD_D/2)/Inet
-    print(f"{dh:>5} {Inet:>8.2f} {100*Inet/I_ROD:>7.1f}% {sig:>10.1f}")
-sig0 = MOM*1000*(ROD_D/2)/I_ROD
-print(f"  undrilled sigma = {sig0:.1f} MPa; bamboo bending strength 100-150 MPa (LITERATURE)")
+    sig = MOM*1000*(ROD_THIN/2)/Inet
+    print(f"{dh:>5} {Inet:>8.2f} {100*Inet/I_THIN:>7.1f}% {sig:>10.1f}")
+sig0 = MOM*1000*(ROD_FAT/2)/I_FAT
+print(f"  undrilled sigma = {sig0:.1f} MPa at the FAT stick (= E d / 2R, so the fat one is the "
+      f"worst); bamboo bending strength 100-150 MPa (LITERATURE, not measured on our bamboo)")
 
 # ---- SHELF LOAD ON PINS ----
+# bearing is asked at the THIN stick: the same pin force spreads over less rod.
 for kg in (2, 3, 5):
     P = kg*9.81
     per = P/4
     print(f"  {kg}kg shelf -> {per:.1f} N per pin; 2mm bamboo pin double shear "
-          f"{per/(2*math.pi*1.0**2):.2f} MPa; bearing on rod {per/(2.0*ROD_D):.2f} MPa")
+          f"{per/(2*math.pi*1.0**2):.2f} MPa; bearing on the O{ROD_THIN:g} rod "
+          f"{per/(2.0*ROD_THIN):.2f} MPa")
 
 # ---- OBLIQUE BORE NARROWING ----
+_B = solid.STICK_BORE
 print(f"\nOBLIQUE BORE: a round section swept along a {THETA} deg axis is narrower by "
       f"cos = {math.cos(math.radians(THETA)):.4f} across the tilt.")
-print(f"  a nominal 7.05mm modelled bore becomes {7.05*math.cos(math.radians(THETA)):.3f}mm "
-      f"normal to the rod = {7.05-7.05*math.cos(math.radians(THETA)):.3f}mm tighter")
+print(f"  the {_B:.2f}mm modelled stave bore becomes {_B*math.cos(math.radians(THETA)):.3f}mm "
+      f"normal to the rod = {_B-_B*math.cos(math.radians(THETA)):.3f}mm tighter")

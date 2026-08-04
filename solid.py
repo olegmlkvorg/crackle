@@ -62,7 +62,31 @@ SHRINK = 0.25          # METAL SHAFTS ONLY — a 6mm motor shaft, round or D. Va
 # number that belongs to one material and one diameter must not be spent on another: bamboo rods
 # are not round, not consistent, and are gripped rather than pressed. Sharing one constant between
 # them is the same defect that made the bowl lid unable to close.
+#
+# SCOPE, settled 2026-08-04. bamboo/rod_constants.py declares "the old +0.70 press-fit constant is
+# DEAD in the socket kit" and replaces it with BORE = 7.0 FLAT + graded TPU shims. That death
+# notice is scoped to THE SOCKET KIT (bamboo/: sleeves, joints, shims) and does NOT reach this
+# file. Every STICK_FIT site below is a THREAD-THROUGH bore or a mechanical clamp on a 610 mm
+# stave post, not a blind socket: plate() bores, spacer_shell() ("a bamboo post passes through"),
+# shelf_plate() post holes ("the shelf slides and rests rather than grips"), collet() (fingers
+# close on the stick) and adapter()'s stick end. rod_constants keeps the thread-through case alive
+# by name for the same reason -- its own SLIDE_BORE 7.65. There is no TPU shim in the stave frame
+# to replace the grip with, so nothing here has been superseded. DO NOT re-open this.
+STICK_NOMINAL = 6.35   # the LABEL the fit gauge was run against, NOT a measurement of any stick.
+                       # Oleg calipered the real sticks 2026-08-02: they are O5.8-6.2, variable
+                       # (bamboo/rod_constants.py ROD_MIN/ROD_MAX). 6.35 is the nominal 1/4".
 STICK_FIT = 0.70
+STICK_BORE = STICK_NOMINAL + STICK_FIT   # 7.05 mm modelled. THIS IS THE MEASURED QUANTITY --
+                                         # the hole Oleg put a real rod into and chose. 6.35 and
+                                         # 0.70 are only a DECOMPOSITION of it, and one half of
+                                         # that decomposition is now known to be a nominal.
+#
+# THE PAIRING TRAP, and why stick_bore() below refuses to be helpful about it. What was validated
+# is the ABSOLUTE 7.05 bore, not the +0.70 adder. Read rod_constants, learn the sticks are ~6.0,
+# pass --stick 6.0 here in good faith, and you get 6.0 + 0.70 = 6.70 -- a bore 0.35 TIGHTER than
+# the one that was approved, on the loosest reading of the batch. The adder and the nominal are
+# valid only AS A PAIR. Un-pairing them silently is the same defect that bored ~21 parts too tight.
+#
 # ...AND 0.70 IS STILL TIGHT WHEN HOT. Oleg, 2026-07-27, holding the shell that printed with it:
 # "it barely fitted stick ... on hot. you need to take into account that we print and hich temps
 # around for high adhesiv so wals will bulge and it is expected. so give room for it to bulge and
@@ -85,6 +109,34 @@ STICK_FIT = 0.70
 # by eroding its own outline, and that interacts with a polygon hole in ways I did not predict
 # correctly three times running. It wants path-level construction like pulley.py's
 # rim -> spoke -> bore -> spoke circuit, not another buffer patch.
+
+
+def stick_bore(stick_d, clearance=0.0, _force=None):
+    """The MODELLED bore diameter for a bamboo stick in this file's kit: stick + STICK_FIT.
+
+    Every STICK_FIT site in this file goes through here, so the pairing trap documented above is
+    enforced instead of remembered. It FAILS when a caller passes a diameter from the MEASURED band
+    (rod_constants ROD_MIN 5.8 .. ROD_MAX 6.2) rather than the nominal STICK_NOMINAL the +0.70 adder
+    was calibrated against, because that combination silently bores up to 0.35 mm tight.
+
+    Diameters BELOW the measured band (a 3.175 mm 1/8" rod, the gauge's own sweep) are a different
+    stock, not an un-paired 1/4" rod, and pass. `_force` exists only so the guard can be shown to
+    fire without committing a bad call site (see selftest at the bottom of this file).
+    """
+    d = stick_d if _force is None else _force
+    # the band comes from bamboo/rod_constants.py; retyped here ONLY as a refusal threshold, never
+    # as geometry -- no bore is ever computed from these two numbers.
+    _MEAS_LO, _MEAS_HI = 5.8, 6.2
+    if _MEAS_LO - 1e-9 <= d <= _MEAS_HI + 1e-9:
+        raise SystemExit(
+            f"stick_bore(): refusing a {d:g} mm stick. That is a MEASURED 1/4\" rod diameter "
+            f"(rod_constants: O{_MEAS_LO}-{_MEAS_HI}, calipers 2026-08-02), and STICK_FIT "
+            f"{STICK_FIT} is not an adder onto a measured rod -- it is one half of the PAIR "
+            f"({STICK_NOMINAL} + {STICK_FIT}) that reproduces the {STICK_BORE:g} mm bore Oleg "
+            f"picked off the printed gauge. {d:g} + {STICK_FIT} = {d + STICK_FIT:g} mm is "
+            f"{STICK_BORE - d - STICK_FIT:.2f} mm TIGHTER than that. Pass "
+            f"--stick {STICK_NOMINAL:g} for the stave kit, or a bore explicitly.")
+    return d + STICK_FIT + clearance
 
 
 def circle(r, seg=0.5):
@@ -855,7 +907,7 @@ def adapter(shaft_d, flat_depth, stick_d, wall, split=0.5):
     def region_at(t):
         if t < split:
             return outer.difference(d_profile(shaft_d + SHRINK, flat_depth, 96))
-        return outer.difference(Point(0, 0).buffer((stick_d + STICK_FIT) / 2.0, 96))
+        return outer.difference(Point(0, 0).buffer(stick_bore(stick_d) / 2.0, 96))
 
     return region_at
 
@@ -936,10 +988,12 @@ def plate(bores, wall, thickness=None, clearance=0.0, hollow=0.0, fit=None):
         if void.is_valid and not void.is_empty and void.area > 4 * hollow ** 2:
             body = body.difference(void)
     for (x, y, d) in bores:
-        # `fit` is the BAMBOO allowance (STICK_FIT, measured), not the metal-shaft SHRINK.
-        # The gauge passes fit=0 and sweeps raw diameters, so its reading stays valid.
-        _fit = STICK_FIT if fit is None else fit
-        body = body.difference(Point(x, y).buffer((d + _fit + clearance) / 2.0, 96))
+        # `fit` is the BAMBOO allowance (STICK_FIT), not the metal-shaft SHRINK. An EXPLICIT `fit`
+        # bypasses stick_bore()'s pairing guard on purpose: the gauge passes fit=0 and sweeps raw
+        # diameters, so its reading stays valid, and a caller who states the adder has already
+        # taken the decision the guard exists to intercept.
+        dia = stick_bore(d, clearance) if fit is None else d + fit + clearance
+        body = body.difference(Point(x, y).buffer(dia / 2.0, 96))
     return body
 
 
@@ -975,7 +1029,7 @@ def spacer_shell(bore_d, od, wall, height, floor_h, layer_h, vents=0, vent_w=4.0
     the tube can still be stood up and filled from the top.
     """
     r_out = od / 2.0
-    r_bore = (bore_d + STICK_FIT + clearance) / 2.0   # a bamboo post passes through
+    r_bore = stick_bore(bore_d, clearance) / 2.0      # a bamboo post passes through
     base = Point(0, 0).buffer(r_out, 96).difference(Point(0, 0).buffer(r_bore, 96))
 
     floor_frac = min(0.9, max(0.0, floor_h / max(height, 1e-9)))
@@ -1073,7 +1127,7 @@ def collet(stick_d, od_small, od_large, slots, slot_w, height, wall, clearance=0
     with no clearance: the fingers only need to travel the shrink allowance to bite. Slots run the
     full height so each finger is a cantilever from the top rather than a hoop that must stretch.
     """
-    r_bore = (stick_d + STICK_FIT + clearance) / 2.0   # bamboo, not a metal shaft
+    r_bore = stick_bore(stick_d, clearance) / 2.0      # bamboo, not a metal shaft
     if od_small <= 2 * r_bore + 2 * wall:
         raise SystemExit(
             f"collet: a {od_small:g}mm narrow end cannot hold a {stick_d:g}mm stick with {wall:g}mm "
@@ -1155,6 +1209,13 @@ def post_foot(stick_d, od_base, od_top, height, wall, floor_h, layer_h, points=3
             f"from vertical. Over ~40 the wall prints onto air — raise --height or narrow the base.")
 
     floor_frac = min(0.9, max(0.0, floor_h / max(height, 1e-9)))
+    # OPEN, 2026-08-04, deliberately NOT resolved here. This is the one bamboo bore in the file that
+    # does not go through stick_bore(): shaft_socket() grips by three bumps sized off stick_d
+    # directly, so the pairing guard cannot cover it (the same function legitimately takes a 6.0 mm
+    # METAL shaft). At the 6.35 nominal the bumps sit at r 3.05 against a real stick of r 2.90-3.10,
+    # i.e. somewhere between 0.15 mm/side of RATTLE and a light grip, depending on the stick. Which
+    # it is has never been measured on a printed post foot. UNPROVEN -- do not "fix" it by guessing
+    # a diameter; print one and measure the grip.
     socket = shaft_socket(stick_d, points=points)
 
     def region_at(t):
@@ -1351,7 +1412,7 @@ def shelf_plate(width, depth, thickness, post_d, post_inset, layer_h, style="sol
     # STICK_FIT, NOT SHRINK — these are BAMBOO posts. Missed when the two constants were split
     # apart, in the one function whose docstring says the plate must SLIDE down the posts: at
     # SHRINK it modelled 6.60mm, which prints to roughly the rod's own 6.35 and grips instead.
-    r = (post_d + STICK_FIT + clearance) / 2.0
+    r = stick_bore(post_d, clearance) / 2.0
     for sx in (-1, 1):
         for sy in (-1, 1):
             body = body.difference(translate(circle(r),

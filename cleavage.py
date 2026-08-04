@@ -19,27 +19,45 @@ with the real fit -- a number four structural analyses currently have to assume.
 2026-07-27 the coupons were silently WRONG for that job -- odd-bead walls printed with the middle
 bead missing (see solid.py contours()), a hidden void in exactly the wall being measured.
 
-Bore uses the MEASURED bamboo fit, not the metal shrink figure: STICK_FIT 0.70 on a 6.35 rod.
-That distinction already condemned ~21 parts once (see machine.py / solid.py notes).
+BORE AND DEPTH COME FROM bamboo/rod_constants.py, NEVER FROM A LITERAL HERE. This coupon measures
+the minimum wall FOR THE SOCKET KIT, so it has to be bored and sunk exactly like the kit or the
+number it returns belongs to a socket nobody prints. Until 2026-08-04 it was not: it bored
+`--stick 6.35 + solid.STICK_FIT 0.70` = 7.05 and sank 12 mm.
+
+  · 6.35 is the nominal 1/4in the v1 kit ASSUMED. Oleg calipered the actual sticks on 2026-08-02
+    and they measure O5.8-6.2 (rod_constants). The default rod diameter was a rod that does not
+    exist in the batch.
+  · 12 mm is the exact depth rod_constants condemns: the v1 socket that sat AT the PLA crush
+    figure. The kit's depth is DERIVED (~24.10 mm, crush/4), not picked.
+
+Now: bore = RC.BORE (7.0 FLAT), depth = RC.derive_socket_depth(). NOT RE-MEASURED, and nothing
+downstream needs re-measuring, because no cleavage coupon has ever been printed or pushed -- this
+file has answered nothing since it was written on 2026-07-27, so it had produced no number that
+this change can invalidate.
 """
 import argparse, math, os, sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.join(_HERE, "bamboo"))
 from shapely.geometry import Point
 from shapely.ops import unary_union
 from shapely.affinity import translate
 
 import machine
 import solid as S
+import rod_constants as RC          # THE rod/bore/depth truth. Never retyped.
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stick", type=float, default=6.35, help="bamboo rod diameter")
+    ap.add_argument("--bore", type=float, default=RC.BORE,
+                    help="socket bore, FLAT (rod_constants.BORE)")
     ap.add_argument("--walls", type=int, default=5, help="how many wall thicknesses to try")
     ap.add_argument("--from-beads", type=int, default=2, help="thinnest wall, in beads")
-    ap.add_argument("--height", type=float, default=12.0, help="socket depth")
+    ap.add_argument("--height", type=float, default=RC.derive_socket_depth(),
+                    help="socket depth (DERIVED in rod_constants, not picked)")
     ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--layer-h", type=float, default=0.6)
@@ -55,7 +73,7 @@ def main():
     speed = machine.speed_for_flow(a.flow, a.bead_w, a.layer_h)
     temp = machine.temp_for(a.material)
 
-    bore = a.stick + S.STICK_FIT          # MEASURED bamboo fit, not the metal SHRINK
+    bore = a.bore                         # FLAT, from rod_constants. No fit adder, no rod nominal.
     parts, labels, x = [], [], 0.0
     for i in range(a.walls):
         nb = a.from_beads + i
@@ -72,7 +90,9 @@ def main():
     minx, miny, maxx, maxy = region.bounds
     region = translate(region, bx / 2 - (minx + maxx) / 2, by / 2 - (miny + maxy) / 2)
 
-    print(f"  bore {bore:.2f} mm for a {a.stick:g} mm rod (STICK_FIT {S.STICK_FIT}, measured)")
+    print(f"  bore {bore:.2f} mm FLAT (rod_constants.BORE) x {a.height:.2f} mm deep "
+          f"(DERIVED); push the real sticks in, they MEASURE "
+          f"O{RC.ROD_MIN:g}-{RC.ROD_MAX:g} (calipers, 2026-08-02)")
     for nb, wall, od in labels:
         print(f"    {nb} beads = {wall:.2f} mm wall, OD {od:.2f}")
     print(f"  {a.bead_w:.2f} mm bead at {speed:.1f} mm/s -> {a.bead_w*a.layer_h*speed:.1f} mm3/s "
@@ -87,7 +107,7 @@ def main():
                    0.2, a.printer, f"CLEAVAGE {a.walls} walls",
                    material=a.material, brim=a.brim, centre=False)
     os.makedirs(a.out, exist_ok=True)
-    fn = os.path.join(a.out, f"cleavage_{a.printer}_s{a.stick:g}_w{a.walls}_T{temp:g}.gcode")
+    fn = os.path.join(a.out, f"cleavage_{a.printer}_b{a.bore:g}_w{a.walls}_T{temp:g}.gcode")
     open(fn, "w").write(g)
     print(f"{fn}")
 
