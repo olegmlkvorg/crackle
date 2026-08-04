@@ -15,8 +15,9 @@ Everything is re-derived by a different route than the generator used:
   mm2/mm        (dE * filament area) / distance, summed per layer, sampled at several heights.
   layer time    a real trapezoid motion model with Klipper junction velocities and a two-pass
                 lookahead planner -- NOT distance/feedrate, which ignores acceleration and the
-                machine's slow Z. Axis limits are read off the SparkX (max_z_velocity 20,
-                max_z_accel 100), which is what makes the z-hops the expensive part of a layer.
+                machine's slow Z. Axis limits are selected from the file's own '; PRINTER=' stamp
+                (see KIN) and every one that is a stand-in rather than a reading is named under the
+                number. The slow Z is what makes the z-hops the expensive part of a layer.
   feedrates     every distinct commanded F in the body, with move counts.
 
 Then it CHECKS those measurements against the file's own declarations and prints DISAGREE lines.
@@ -28,15 +29,46 @@ Usage:
 """
 import argparse, math, os, re, shutil, sys, tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import machine
+
 A_FIL = math.pi * (1.75 / 2) ** 2
 
-# SparkX kinematic limits, read off the machine over Moonraker (see towercoupon.SPARKX).
-MAX_V, MAX_A = 500.0, 10000.0
-MAX_ZV, MAX_ZA = 20.0, 100.0
-SCV = 12.0
+# ------------------------------------------------------------------- KINEMATICS, PER MACHINE
+# THE TIME MODEL IS ONLY AS HONEST AS ITS AXIS LIMITS. This file carried ONE set — the SparkX's,
+# read off it over Moonraker — and printed "SparkX limits" under every number it produced,
+# including numbers measured off a K2 file. The caption was true and the number under it was still
+# wrong for the file it sat on. The set is now selected from the file's own '; PRINTER=' stamp, and
+# every value that is a STAND-IN rather than a reading is NAMED IN THE REPORT, not buried here.
+KIN = {
+    "f022": {
+        "max_v": 500.0, "max_a": 10000.0, "scv": 12.0, "max_zv": 20.0, "max_za": 100.0,
+        "src": "read off the machine over Moonraker, 2026-08-04 (see towercoupon.SPARKX)",
+        "assumed": [],
+    },
+    "k2plus": {
+        "max_v": machine.MAX_VELOCITY,   # 800, machine.py
+        "max_a": machine.ACCEL,          # 5000 — what the toolhead REPORTS while printing, NOT the
+                                         # 30000 config ceiling, which it is clamped below
+        "scv": 12.0,                     # STAND-IN: the SparkX's number, never read off the K2
+        "max_zv": 20.0,                  # STAND-IN
+        "max_za": 100.0,                 # STAND-IN
+        "src": "machine.py for velocity and accel; the K2 was off the network on 2026-08-05, so "
+               "nothing here was read off the machine itself",
+        "assumed": ["square_corner_velocity", "max_z_velocity", "max_z_accel"],
+    },
+}
+DEFAULT_KIN = "f022"
 
 
-def junction_v(v_prev, v_next, scv=SCV, accel=MAX_A):
+def kin_for(decl):
+    """(machine name, kinematics) for the machine this file names. Unknown -> the SparkX's, said."""
+    p = decl.get("PRINTER", "")
+    return (p if p in KIN else f"{p or 'unnamed'} (no limits on file — using {DEFAULT_KIN}'s)",
+            KIN.get(p, KIN[DEFAULT_KIN]))
+
+
+def junction_v(v_prev, v_next, scv, accel):
     """Klipper's cornering speed between two unit direction vectors.
 
     junction_deviation = scv^2 * (sqrt(2)-1) / accel;  v_j^2 = jd*a*cos(t/2)/(1-cos(t/2)).
@@ -55,7 +87,7 @@ def junction_v(v_prev, v_next, scv=SCV, accel=MAX_A):
     return math.sqrt(jd * accel * half / (1.0 - half))
 
 
-def plan_time(moves):
+def plan_time(moves, kin):
     """Two-pass lookahead planner. moves = [(dist, vmax, accel, dir_unit)] -> total seconds."""
     n = len(moves)
     if not n:
@@ -63,7 +95,7 @@ def plan_time(moves):
     # junction limits between consecutive moves
     vj = [0.0] * (n + 1)
     for i in range(1, n):
-        vj[i] = min(junction_v(moves[i - 1][3], moves[i][3]),
+        vj[i] = min(junction_v(moves[i - 1][3], moves[i][3], kin["scv"], kin["max_a"]),
                     moves[i - 1][1], moves[i][1])
     # backward pass: cap entry speeds by what can still be braked to the exit
     ventry = [0.0] * (n + 1)
@@ -171,6 +203,7 @@ def cluster_towers(moves, gap=6.0):
 
 def measure(path, verbose=True):
     decl, moves, zlines = parse(path)
+    kin_name, kin = kin_for(decl)
     body = [mv for mv in moves if mv[9]]
 
     # ---- layer ladder, from Z transitions on standalone Z moves (not from comments)
@@ -236,10 +269,10 @@ def measure(path, verbose=True):
             continue
         u = (dx / d, dy / d, dz / d)
         zonly = abs(dx) < 1e-9 and abs(dy) < 1e-9
-        vmax = min(mv[7] / 60.0, MAX_ZV if zonly else MAX_V)
+        vmax = min(mv[7] / 60.0, kin["max_zv"] if zonly else kin["max_v"])
         if not zonly and abs(dz) > 1e-9:
-            vmax = min(vmax, MAX_ZV * d / abs(dz))
-        accel = MAX_ZA if zonly else MAX_A
+            vmax = min(vmax, kin["max_zv"] * d / abs(dz))
+        accel = kin["max_za"] if zonly else kin["max_a"]
         seq.append((d, vmax, accel, u, round(mv[10], 3)))
     # time per layer, planned in order
     times = {}
@@ -249,12 +282,12 @@ def measure(path, verbose=True):
         j = i
         while j < len(seq) and seq[j][4] == zk:
             j += 1
-        times[zk] = times.get(zk, 0.0) + plan_time([s[:4] for s in seq[i:j]])
+        times[zk] = times.get(zk, 0.0) + plan_time([s[:4] for s in seq[i:j]], kin)
         i = j
 
     total_fil = sum(mv[6] for mv in moves if mv[6] > 0)
     body_fil = sum(mv[6] for mv in body if mv[6] > 0)
-    total_time = plan_time([s[:4] for s in seq])
+    total_time = plan_time([s[:4] for s in seq], kin)
 
     # ---- mm2/mm sampled at several heights
     zs = sorted(layers)
@@ -281,6 +314,7 @@ def measure(path, verbose=True):
 
     R = {
         "decl": decl, "ladder": ladder, "steps": steps, "towers": towers,
+        "kin": kin, "kin_name": kin_name,
         "ladderset": {round(v, 3) for v in ladder},
         "layers": layers, "times": times, "samples": samples, "feeds": feeds,
         "total_fil": total_fil, "body_fil": body_fil, "total_time": total_time,
@@ -301,8 +335,14 @@ def report(path, R):
           f"(prime = {R['total_fil']-R['body_fil']:.1f} mm)")
     print(f"  layers (Z ladder)   {len(R['ladder'])}   z {R['ladder'][0]:.3f} -> {R['ladder'][-1]:.3f}")
     print(f"  distinct Z steps    {R['steps']}")
+    _kin, _kn = R["kin"], R["kin_name"]
     print(f"  motion time         {R['total_time']/60:.1f} min "
-          f"(trapezoid + junction, SparkX limits; excludes heat-up)")
+          f"(trapezoid + junction, {_kn} limits; excludes heat-up)")
+    print(f"    limits            v{_kin['max_v']:g} a{_kin['max_a']:g} scv{_kin['scv']:g} "
+          f"zv{_kin['max_zv']:g} za{_kin['max_za']:g} — {_kin['src']}")
+    if _kin["assumed"]:
+        print(f"    NOT MEASURED      {', '.join(_kin['assumed'])} are STAND-INS carried from the "
+              f"SparkX. The z-hop share of this time is not a {_kn} number.")
 
     print(f"\n  TOWERS DISCOVERED BY CLUSTERING (not read from the generator): {len(towers)}")
     bead = 0.42
