@@ -31,10 +31,16 @@ Checks:
     4 WATERTIGHT  (closed) every undirected edge shared by exactly 2 triangles, verts rounded 3dp
     5 LEAN        (open) max wall lean from vertical <= 55 deg, bed faces (z <= 0.5) excluded
     6 PRINTABLE   (closed) 0 REAL spanning overhangs: recomputed unit facet normal nz < -0.707
-                  AND centroid z > 0.5 (not the bed) AND centroid r < wallR(5mm z-band) - 6.0
-                  (spans inward = a floor/roof; a ~1mm raised bead at the wall bridges fine).
-                  watertight != printable: a sealed cavity with a flat roof cannot print.
-    7 BED         bbox X and Y extents <= --bed (default 340)
+                  AND centroid z > 0.5 (not the bed) AND centroid r inside wallR(5mm z-band)
+                  by more than min(6.0 mm, 40% of wallR) -- spans inward = a floor/roof, while a
+                  ~1mm raised bead at the wall bridges fine. Radii are measured from the part's
+                  OWN xy bbox centre, so the verdict does not depend on where the file sits.
+                  Faces whose just-outside point is INSIDE material are excluded (the slicer
+                  union erases them), decided by the vertical winding walk, not by which
+                  connected component they belong to.
+    7 SEALED-VOID (closed) 0 ray columns with material above AND below a void. watertight !=
+                  printable: a sealed cavity is a flawless manifold and cannot print.
+    8 BED         bbox X and Y extents <= --bed (default 340)
 
 Facet normals are recomputed from vertex winding; stored normals are not trusted.
 """
@@ -48,9 +54,33 @@ from collections import Counter
 FABRIC_MIN_FACE = 47.0  # deg floor for fabric downward faces (45 + 2 margin, low-fan TPU)
 DOWN_NZ = -0.707        # unit-normal nz below this = downward-facing
 BED_Z = 0.5             # mm; centroid at/below this sits on the bed
-SPAN_MARGIN = 6.0       # mm inside the band wall radius = a real span, not a wall bead
 BAND_H = 5.0            # mm z-band height for the wall-radius profile
 LEAN_MAX_DEG = 55.0     # vase-printable ceiling for wall lean from vertical
+
+# How far inside the band's wall radius a downward face has to sit before it counts as a real
+# inward span rather than a raised bead at the wall. Two numbers because the physics has two
+# scales: a bead is absolute (nozzle-sized) and a span is proportional (a fraction of the part).
+SPAN_MARGIN_MAX = 6.0    # mm; past this much inward, no bead explains the face
+SPAN_MARGIN_FRAC = 0.4   # ... but never more than 40% of the wall radius, so the test cannot
+                         # become unsatisfiable on a small part. A flat 6.0 mm did exactly that:
+                         # trashcan_sealed_base.stl scaled to 9 mm across passed ALL SIX checks
+                         # green, because r < wall_r(4.5) - 6.0 is r < -1.5 (2026-08-03).
+
+SEAL_DX_MAX = 1.0        # mm ray-cast column pitch for the sealed-void walk: resolves the >=2
+                         # bead walls this project builds with, on a part big enough for them
+SEAL_MIN_COLS = 40       # ... but at least this many columns across the part, so the pitch is
+                         # never coarse RELATIVE to what it measures. A flat pitch has the same
+                         # failure mode a flat margin had: it goes vacuous as the part shrinks.
+BIN_PITCH = 4.0          # mm xy bucket pitch, so a vertical ray only tests nearby facets
+FUSE_GAP = 0.25          # mm. Two surfaces closer than this print as ONE: the measured
+                         # vase-mode figure for this project's printer is that a modelled hole
+                         # comes out 0.25 mm under nominal, i.e. extrudate spreads that far past
+                         # where the model puts it. PROVENANCE: that hole-shrink measurement,
+                         # applied to a vertical gap -- same spreading, different direction, so
+                         # it is borrowed rather than measured in z. It exists because the walk
+                         # otherwise calls a 0.036 mm sliver between two near-tangent rim
+                         # surfaces a sealed cavity (gift/trashcan.stl, 2026-08-03), and a 0.4 mm
+                         # nozzle cannot make a 0.036 mm void.
 
 
 def _components(tris3d):
@@ -81,6 +111,154 @@ def _components(tris3d):
     ids = [find(k) for k in keys]
     remap = {}
     return [remap.setdefault(c, len(remap)) for c in ids]
+
+
+def _xy_bins(tris3d, pitch=BIN_PITCH):
+    """Bucket triangle indices by the xy cells their footprint covers, so a vertical ray only
+    tests facets near its own column."""
+    bins = {}
+    for idx, t in enumerate(tris3d):
+        v0, v1, v2 = t[0], t[1], t[2]
+        ix0 = int(math.floor(min(v0[0], v1[0], v2[0]) / pitch))
+        ix1 = int(math.floor(max(v0[0], v1[0], v2[0]) / pitch))
+        iy0 = int(math.floor(min(v0[1], v1[1], v2[1]) / pitch))
+        iy1 = int(math.floor(max(v0[1], v1[1], v2[1]) / pitch))
+        for ix in range(ix0, ix1 + 1):
+            for iy in range(iy0, iy1 + 1):
+                bins.setdefault((ix, iy), []).append(idx)
+    return bins
+
+
+def _solid_runs(x, y, tris3d, bins, pitch=BIN_PITCH, graze=1e-3):
+    """Fire a vertical ray up the column at (x, y) and walk its crossings carrying a WINDING
+    DEPTH: a downward-facing facet is the ray ENTERING material, an upward-facing one is it
+    LEAVING. Material is wherever the depth is positive, so the runs are the UNION of whatever
+    solids the column passes through -- interpenetration and cavities both come out right.
+
+    Depth counting rather than bare parity pairing: a column that grazes a wall clips it twice
+    at almost the same z, and every later pair is then inverted (the nfc puck read 54 phantom
+    sealed voids that way). Zero-length grazes drop out at `graze`.
+
+    Returns (runs, ok). ok is False when the walk did not close -- a ray through a vertex, or an
+    open mesh. An undecidable column is never a passing one; callers must not read runs then."""
+    hits = []
+    key = (int(math.floor(x / pitch)), int(math.floor(y / pitch)))
+    for idx in bins.get(key, ()):
+        t = tris3d[idx]
+        a, b, c = t[0], t[1], t[2]
+        d1 = (x - b[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (y - b[1])
+        d2 = (x - c[0]) * (b[1] - c[1]) - (b[0] - c[0]) * (y - c[1])
+        d3 = (x - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (y - a[1])
+        if not ((d1 >= 0 and d2 >= 0 and d3 >= 0) or (d1 <= 0 and d2 <= 0 and d3 <= 0)):
+            continue
+        ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+        nx = uy * vz - uz * vy
+        ny = uz * vx - ux * vz
+        nz = ux * vy - uy * vx
+        if abs(nz) < 1e-12:
+            continue                      # vertical facet: a vertical ray cannot cross it
+        hits.append((a[2] - (nx * (x - a[0]) + ny * (y - a[1])) / nz, -1 if nz < 0 else 1))
+    if len(hits) < 2:
+        return [], len(hits) == 0         # empty column is fine; a single crossing is not
+    hits.sort()
+    runs = []
+    depth = 0
+    start = None
+    for z_, s in hits:
+        was = depth
+        depth += 1 if s < 0 else -1
+        if was <= 0 and depth > 0:
+            start = z_
+        elif was > 0 and depth <= 0 and start is not None:
+            if z_ - start > graze:
+                runs.append((start, z_))
+            start = None
+    merged = []                           # gaps under FUSE_GAP print as solid, so read them so
+    for a, b in runs:                     # (see the constant: two near-tangent rim surfaces)
+        if merged and a - merged[-1][1] < FUSE_GAP:
+            merged[-1] = (merged[-1][0], b)
+        else:
+            merged.append((a, b))
+    return merged, (depth == 0 and start is None)
+
+
+def _sealed_voids(tris3d, bins, minx, maxx, miny, maxy):
+    """Voids with NO PATH TO THE OUTSIDE -- the failure this project has shipped unprintable
+    twice. Edge parity cannot see one: a solid with a sealed cavity is a flawless manifold.
+
+    Reachability, not "is there material above and below". That column test is the one
+    nfc_puck_stl.py uses and it is right for a puck, where any void is a chamber, but it does not
+    generalise: a HORIZONTAL through-hole also has material above and below every column that
+    crosses it, and it is wide open to the air. Measured on the 97 published parts it failed 26
+    sound ones -- every bamboo socket bore, the marble ballast bases (2026-08-03).
+
+    So: take each column's AIR intervals (the complement of its solid runs, running off to
+    +/-inf at the ends), join an interval to the four neighbouring columns' intervals wherever
+    their z ranges overlap, and flood from every interval that is unbounded or sits in a column
+    outside the part. What the flood never reaches is enclosed.
+
+    A wall thinner than the grid pitch is below this gate's resolution -- the pitch is reported
+    with the verdict so that limit is visible rather than assumed away.
+
+    Returns (sealed_cells, sealed_columns, odd, cols, tallest_mm, pitch_mm)."""
+    seed = 0.0137                          # nudge the grid off every axis of symmetry
+    dx = min(SEAL_DX_MAX, max(maxx - minx, maxy - miny) / SEAL_MIN_COLS)
+    nx = int(math.ceil((maxx - minx) / dx))
+    ny = int(math.ceil((maxy - miny) / dx))
+    air = {}
+    odd = cols = 0
+    for ix in range(-1, nx + 2):           # one spare column of open air on each side
+        x = minx + (ix + 0.5) * dx + seed
+        for iy in range(-1, ny + 2):
+            y = miny + (iy + 0.5) * dx + seed
+            runs, ok = _solid_runs(x, y, tris3d, bins)
+            if not ok:
+                odd += 1                   # undecidable: contributes no air, so a neighbouring
+                continue                   # void cannot escape THROUGH it. Reported, not hidden.
+            if runs:
+                cols += 1
+            ivs = []
+            lo = float("-inf")
+            for a, b in runs:
+                ivs.append((lo, a))
+                lo = b
+            ivs.append((lo, float("inf")))
+            air[(ix, iy)] = ivs
+
+    seen = set()
+    stack = []
+    for (ix, iy), ivs in air.items():
+        edge = ix in (-1, nx + 1) or iy in (-1, ny + 1)
+        for k, (a, b) in enumerate(ivs):
+            if edge or a == float("-inf") or b == float("inf"):
+                seen.add((ix, iy, k))
+                stack.append((ix, iy, k))
+    while stack:
+        ix, iy, k = stack.pop()
+        a, b = air[(ix, iy)][k]
+        for jx, jy in ((ix - 1, iy), (ix + 1, iy), (ix, iy - 1), (ix, iy + 1)):
+            nb = air.get((jx, jy))
+            if nb is None:
+                continue
+            for kk, (c, d) in enumerate(nb):
+                if (jx, jy, kk) in seen or not (c < b and a < d):
+                    continue
+                seen.add((jx, jy, kk))
+                stack.append((jx, jy, kk))
+
+    sealed = 0
+    sealed_cols = set()
+    tallest = 0.0
+    for (ix, iy), ivs in air.items():
+        for k, (a, b) in enumerate(ivs):
+            if a == float("-inf") or b == float("inf") or (ix, iy, k) in seen:
+                continue
+            sealed += 1
+            sealed_cols.add((ix, iy))
+            if b - a > tallest:
+                tallest = b - a
+    return sealed, len(sealed_cols), odd, cols, tallest, dx
 
 
 def _pt_tri_d2(p, a, b, c):
@@ -336,7 +514,8 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None)
 
     # -- single parse pass --------------------------------------------------
     degen = 0
-    faces = []   # (nz, centroid_z, centroid_r) per non-degenerate triangle
+    faces = []   # (nz, centroid_z, centroid_x, centroid_y) here; centroid_r replaces x,y below,
+                 # once the bbox is known -- radius is measured from the PART, not the origin
     tris3d = []  # (v0, v1, v2, cenx, ceny, cenz, nz) -- closed only, for the burial test
     edges = Counter() if cls in ("closed", "vase-solid") else None
     minx = miny = minz = float("inf")
@@ -371,9 +550,19 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None)
         cenx = (v0[0] + v1[0] + v2[0]) / 3.0
         ceny = (v0[1] + v1[1] + v2[1]) / 3.0
         cenz = (v0[2] + v1[2] + v2[2]) / 3.0
-        faces.append((cz / m, cenz, math.hypot(cenx, ceny)))
+        faces.append((cz / m, cenz, cenx, ceny))
         if cls in ("closed", "fabric"):
             tris3d.append((v0, v1, v2, cenx, ceny, cenz, cz / m))
+
+    # Radii from the part's OWN xy bbox centre. Measured from the world origin, the same solid
+    # moved to (+120, +120) turned 504 spanning faces into 5458 -- a verdict that depended on
+    # where the file happened to sit (2026-08-03). The bbox centre and not the area centroid:
+    # it is the axis for the bodies of revolution this heuristic reads, it sits inside the
+    # footprint by construction, and it does not drift when a mesh is retessellated.
+    if faces:
+        ctr_x = (minx + maxx) / 2.0
+        ctr_y = (miny + maxy) / 2.0
+        faces = [(nz, z, math.hypot(fx - ctr_x, fy - ctr_y)) for (nz, z, fx, fy) in faces]
 
     # -- 3 DEGENERATE -------------------------------------------------------
     report("DEGENERATE", degen == 0, "%d zero-area triangles" % degen)
@@ -409,83 +598,40 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None)
                 band = int(z // BAND_H)
                 if r > wall_r.get(band, 0.0):
                     wall_r[band] = r
-            return [i for i, (nz, z, r) in enumerate(fs)
-                    if nz < DOWN_NZ and z > BED_Z
-                    and r < wall_r[int(z // BAND_H)] - SPAN_MARGIN]
+            out = []
+            for i, (nz, z, r) in enumerate(fs):
+                if nz >= DOWN_NZ or z <= BED_Z:
+                    continue
+                wr = wall_r[int(z // BAND_H)]
+                if r < wr - min(SPAN_MARGIN_MAX, SPAN_MARGIN_FRAC * wr):
+                    out.append(i)
+            return out
 
-        def components():
-            """Connected components of the soup (shared rounded verts join tris). Each sub-solid
-            of an interpenetrating soup is its own component; interpenetration shares no verts."""
-            parent = {}
-
-            def find(a):
-                while parent[a] != a:
-                    parent[a] = parent[parent[a]]
-                    a = parent[a]
-                return a
-
-            def union(a, b):
-                ra, rb = find(a), find(b)
-                if ra != rb:
-                    parent[ra] = rb
-
-            keys = []
-            for (v0, v1, v2, _cx, _cy, _cz, _nz) in tris3d:
-                ks = [tuple(round(c, 3) for c in v) for v in (v0, v1, v2)]
-                for k in ks:
-                    if k not in parent:
-                        parent[k] = k
-                union(ks[0], ks[1]); union(ks[1], ks[2])
-                keys.append(ks[0])
-            return [find(k) for k in keys]            # component id per triangle
-
-        comp = components() if tris3d else []
+        bins = _xy_bins(tris3d) if tris3d else {}
 
         def buried(idx):
-            """Interpenetrating-soup semantics: a face is erased by the slicer union only if its
-            just-outside point sits inside a DIFFERENT sub-solid's material (signed vertical-ray
-            winding over OTHER components only; >=1 -> buried). Its own component is excluded, so
-            a sealed enclosure cannot bury its own roof: that roof spans a hollow-intended void
-            (a top skin over 0% infill = the failure) and stays an offender."""
+            """A face is erased by the slicer union only if the point just outside it sits INSIDE
+            material -- decided by the vertical winding walk over the WHOLE soup, which reads the
+            union, so a solid's own body counts as material.
+
+            The walk replaced a component-identity test that asked whether the point sat inside a
+            DIFFERENT connected component. A solid with a sealed cavity is TWO components (outer
+            shell and inverted cavity surface share no vertices), so the cavity's lid was 'buried'
+            by the shell above the void it hangs in, and nfc_puck_stl.py --sealed -- a mesh whose
+            own generator fails it on 3712 enclosed columns -- passed all six checks green.
+
+            An undecidable column counts as NOT buried: uncertainty must not flatter the part."""
             _v0, _v1, _v2, px, py, pz, fnz = tris3d[idx]
             pz += (0.2 if fnz > 0 else -0.2)          # step just OUTSIDE the face along its normal z
-            mycomp = comp[idx]
-            w = 0
-            for j, (u0, u1, u2, _cx, _cy, _cz, unz) in enumerate(tris3d):
-                if j == idx or comp[j] == mycomp or abs(unz) < 1e-9:
-                    continue
-                # cheap bbox reject in xy
-                if px < min(u0[0], u1[0], u2[0]) or px > max(u0[0], u1[0], u2[0]):
-                    continue
-                if py < min(u0[1], u1[1], u2[1]) or py > max(u0[1], u1[1], u2[1]):
-                    continue
-                # 2D point-in-triangle (xy projection), then plane z above p?
-                d1 = (px - u1[0]) * (u0[1] - u1[1]) - (u0[0] - u1[0]) * (py - u1[1])
-                d2 = (px - u2[0]) * (u1[1] - u2[1]) - (u1[0] - u2[0]) * (py - u2[1])
-                d3 = (px - u0[0]) * (u2[1] - u0[1]) - (u2[0] - u0[0]) * (py - u0[1])
-                if not ((d1 >= 0 and d2 >= 0 and d3 >= 0) or (d1 <= 0 and d2 <= 0 and d3 <= 0)):
-                    continue
-                # plane z at (px, py)
-                ax, ay, az = u0
-                e1 = (u1[0] - ax, u1[1] - ay, u1[2] - az)
-                e2 = (u2[0] - ax, u2[1] - ay, u2[2] - az)
-                nx = e1[1] * e2[2] - e1[2] * e2[1]
-                ny = e1[2] * e2[0] - e1[0] * e2[2]
-                nzc = e1[0] * e2[1] - e1[1] * e2[0]
-                if abs(nzc) < 1e-12:
-                    continue
-                zc = az - (nx * (px - ax) + ny * (py - ay)) / nzc
-                if zc > pz:
-                    w += 1 if unz > 0 else -1
-            return w >= 1
+            runs, ok = _solid_runs(px, py, tris3d, bins)
+            return ok and any(a < pz < b for a, b in runs)
 
         up_idx = spanning_idx(faces)
         flipped = [(-nz, maxz - z, r) for nz, z, r in faces]
         fl_idx = spanning_idx(flipped)
-        # burial is orientation-independent; test each candidate once (skip if absurdly many)
+        # burial is orientation-independent; test each candidate once
         cand = set(up_idx) | set(fl_idx)
-        buried_set = (set(i for i in cand if buried(i))
-                      if len(cand) <= 3000 else set())
+        buried_set = set(i for i in cand if buried(i))
         up = [faces[i][1] for i in up_idx if i not in buried_set]
         fl = [i for i in fl_idx if i not in buried_set]
         nb = len(buried_set)
@@ -501,9 +647,21 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None)
         else:
             report("PRINTABLE", False,
                    "%d spanning overhang faces upright, %d flipped (allow %d), "
-                   "z %.1f..%.1f%s - inward floor/roof: unprintable in EITHER orientation "
-                   "(sealed cavity)" % (len(up), len(fl), allow,
-                                        min(up), max(up), note))
+                   "z %.1f..%.1f%s - inward floor/roof: unprintable in EITHER orientation"
+                   % (len(up), len(fl), allow, min(up), max(up), note))
+
+        # -- 7 SEALED-VOID (closed) -----------------------------------------------
+        # Edge parity cannot see this: a solid with a sealed cavity is a perfectly watertight
+        # mesh, and one passed WATERTIGHT twice here while being unprintable twice.
+        seal, seal_cols, odd, cols, tallest, pitch = \
+            _sealed_voids(tris3d, bins, minx, maxx, miny, maxy) if tris3d \
+            else (0, 0, 0, 0, 0.0, 0.0)
+        report("SEALED-VOID", seal == 0 and cols > 0,
+               "%d enclosed air pockets over %d of %d ray columns, tallest %.2f mm -- air with no "
+               "path out through any of the 4 neighbouring columns. %.3f mm grid, so a wall "
+               "thinner than that is below this gate's resolution; %d columns undecidable and "
+               "counted as unmeasured"
+               % (seal, seal_cols, cols, tallest, pitch, odd))
 
     # -- FABRIC: per-component watertight, overhang steepness, bed-all, clearance ----
     if cls == "fabric":
@@ -614,7 +772,7 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None)
 def main():
     ap = argparse.ArgumentParser(
         description="STL quality gate: LAW, HEADER, DEGENERATE, "
-                    "WATERTIGHT/LEAN, PRINTABLE, BED. Exit 1 on any FAIL.")
+                    "WATERTIGHT/LEAN, PRINTABLE, SEALED-VOID, BED. Exit 1 on any FAIL.")
     ap.add_argument("stl", nargs="+", help="binary STL file(s) to check")
     ap.add_argument("--class", dest="cls",
                     choices=("closed", "open", "vase-solid", "fabric"),

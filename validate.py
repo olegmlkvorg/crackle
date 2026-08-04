@@ -1090,18 +1090,12 @@ def check(path):
             problems.append(f"R4 constant flow: {len(_hi)} extruding moves exceed 120% of the "
                             f"declared {_decl_flow:g} mm3/s (worst {max(_hi):.1f})")
 
-    # FIRST LAYER MUST BE PRESSED TO THE PLATE, AND NOTHING MAY FLOAT ABOVE IT.
+    # R1  FIRST LAYER MUST BE PRESSED TO THE PLATE.
     # Oleg's rule -- "the nozel need to be 0,1 to board. we need adhesion" -- lived only as the
     # constant machine.PRESS_HARD, which generators were free to ignore. nucleon.py did: it carried
     # its own first_squish=0.85*layer_h model and laid layer 1 at 0.51mm. He caught it on the plate
     # TWICE. A rule that depends on every author remembering it is not a rule, so it is checked
     # here, on the artifact, where no generator can route around it.
-    # The second half is his follow-on: "play Z smartly we dont want floaring lines". Rebasing
-    # layer 1 to 0.1 without rebasing the ladder left a 1.10mm step onto layer 2 -- extruding into
-    # air over a 0.60mm bead. Any step bigger than one layer height is a floating line.
-    # ONLY Z MOVES THAT ARE FOLLOWED BY EXTRUSION ARE LAYERS. The end-of-print park lift is a Z
-    # move too, and on a short part it fell inside the scan window and was reported as a 30.7mm
-    # "floating line" -- a false positive that would refuse every 4-layer part.
     # THE PRIME IS NOT THE FIRST LAYER, AND R1 WAS READING IT AS ONE. The prime sequence descends
     # to Z and lays its line before the body starts, so the first "Z then extrude" pair in the file
     # belongs to the PRIME, not to layer 1. Every generator built on spiraltower's prime shape hit
@@ -1109,9 +1103,74 @@ def check(path):
     # about the purge line and not about the part. Proven on volume_marker — inject Z0.510 as the
     # BODY's layer 1 and R1 stayed green; move the PRIME's Z and R1 fired. The rule was measuring
     # the one line in the file it is not about.
-    # The prime is identified the way this file already identifies it for R4 (see _isprime, and the
-    # rule preamble above: "identified by its own comment"). One definition, reused — two definitions
-    # of "the prime" that can disagree is the bug class this repo keeps paying for.
+    # AND THEN R1 STILL SKIPPED 151 OF THE 230 FILES IN out/, IN SILENCE. It shared R2's sampler
+    # (_zs below), which records a height only when Z lands on a standalone "G1 [F..] Z<z>" line.
+    # solid.py, hanger.py and every flowspiral-shaped generator do not write that line: Z rides
+    # INSIDE the extruding move ("G1 X.. Y.. Z0.100 E..") or arrives on a "; PRIME-TRAVEL down".
+    # For those files _zs stayed empty, "if _zs:" was false, and the rule did not run -- reporting
+    # the same green tick a checked file gets, which is the failure the header of this file
+    # condemns by name. Proven, not inferred: rewrite all 7703 body Z0.100 in hangerpole to Z0.510
+    # -- an entirely unpressed first layer, contradicting that file's own "; PRESSED_LAYER1=0.1"
+    # stamp -- and it still printed "passes".
+    # Making Z sticky inside _zs would have fixed R1 and BROKEN R2, because _zs is also R2's layer
+    # ladder and on a continuous-Z generator the sticky list is not a ladder at all (archtest
+    # samples 1.2, 1.2119, 1.2457, 1.2961). So R1 asks its own question here, and _zs below stays
+    # exactly the thing R2 has always measured.
+    # THE QUESTION R1 ASKS: at what height does the BODY lay its first bead? Z is tracked from
+    # every motion line however it arrives -- alone, inside the move, or on a prime travel -- and
+    # read at the first extruding move after '; BODY_START'. The body boundary is not optional:
+    # 88 of the 230 files lay an UNTAGGED purge line ("G1 F1200 X.. E12", then G92 E0) before the
+    # body, so the prime comment alone does not separate purge from part. R3 draws the same
+    # boundary for the same reason. Prime-tagged lines are still skipped -- by R4's own test, one
+    # definition reused -- because the prime's own bead is not layer 1; but the Z a
+    # "; PRIME-TRAVEL down" leaves behind IS the body's Z, so Z is read from those lines even
+    # though their extrusion is not.
+    # NO BOUNDARY MEANS NO VERDICT, AND THAT IS A FAILURE, NOT A SKIP. A file with no
+    # '; BODY_START' cannot be checked, and this file already treats a missing input that way for
+    # '; LAYER_H=' and '; MATERIAL=' -- for the reason that is the whole point of this rule: a
+    # guard that switches itself off when its input goes missing hands out a tick nobody can tell
+    # from a checked one.
+    _r1cur, _r1z, _r1body, _r1found = None, None, False, False
+    for _l in open(path):
+        _c = _l.split(';')[0].strip()
+        if _c[:2] in ('G0', 'G1'):
+            _mz = re.search(r'\bZ(-?\d+(?:\.\d+)?)', _c)
+            if _mz:
+                _r1cur = float(_mz.group(1))
+        if not _r1body:
+            _r1body = 'BODY_START' in _l
+            continue
+        if 'PRIME' in _l.upper():
+            continue
+        if _c.startswith('G1') and ' E' in _c and 'X' in _c:
+            _r1z, _r1found = _r1cur, True
+            break
+    if _r1found and _r1z is not None:
+        if abs(_r1z - machine.PRESS_HARD) > 1e-6:
+            problems.append(f"first layer is at Z{_r1z:.3f} but must be pressed to "
+                            f"{machine.PRESS_HARD:.2f} — adhesion comes from the press, and this "
+                            f"generator is using its own first-layer model")
+    else:
+        if not _r1body:
+            _why = "the file carries no '; BODY_START' marker"
+        elif not _r1found:
+            _why = "'; BODY_START' is there but nothing extrudes after it"
+        else:
+            _why = "no Z is commanded anywhere before the body's first bead"
+        problems.append(f"R1 cannot find the body's first bead — {_why}, so nothing in this file "
+                        f"says whether layer 1 is pressed to {machine.PRESS_HARD:.2f}")
+
+    # R2  NOTHING MAY FLOAT ABOVE THE FIRST LAYER.
+    # Oleg's follow-on to the press rule: "play Z smartly we dont want floaring lines". Rebasing
+    # layer 1 to 0.1 without rebasing the ladder left a 1.10mm step onto layer 2 -- extruding into
+    # air over a 0.60mm bead. Any step bigger than one layer height is a floating line.
+    # ONLY Z MOVES THAT ARE FOLLOWED BY EXTRUSION ARE LAYERS. The end-of-print park lift is a Z
+    # move too, and on a short part it fell inside the scan window and was reported as a 30.7mm
+    # "floating line" -- a false positive that would refuse every 4-layer part.
+    # This sampler reads the STANDALONE Z line on purpose. It is the discrete layer ladder, and a
+    # generator that moves Z continuously through the extrusion has no ladder for it to measure --
+    # feeding it one built from mid-move Z would hand R2 a sampled curve and call the sample rate a
+    # layer height. R1 above no longer depends on it.
     _zs, _pend = [], None
     for _l in open(path):
         if 'PRIME' in _l.upper():
@@ -1127,10 +1186,6 @@ def check(path):
         if len(_zs) > 6:
             break
     if _zs:
-        if abs(_zs[0] - machine.PRESS_HARD) > 1e-6:
-            problems.append(f"first layer is at Z{_zs[0]:.3f} but must be pressed to "
-                            f"{machine.PRESS_HARD:.2f} — adhesion comes from the press, and this "
-                            f"generator is using its own first-layer model")
         _steps = [round(_zs[i + 1] - _zs[i], 4) for i in range(len(_zs) - 1)]
         _big = [g for g in _steps if _lh and g > _lh + 1e-6]
         if _big:
