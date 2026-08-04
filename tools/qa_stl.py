@@ -58,6 +58,9 @@ import struct
 import sys
 from collections import Counter
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from machine import SLICER_LINE_W, SLICER_FIRST_H
+
 FABRIC_MIN_FACE = 47.0  # deg floor for fabric downward faces (45 + 2 margin, low-fan TPU)
 DOWN_NZ = -0.707        # unit-normal nz below this = downward-facing
 BED_Z = 0.5             # mm; centroid at/below this sits on the bed
@@ -99,18 +102,22 @@ SEAL_MIN_COLS = 40       # ... but at least this many columns across the part, s
 # NOT PROVEN BY RUNNING THE SLICER. The Creality Print CLI segfaults headless (exit 139) on every
 # STL including known-good ones, so the mechanism is read off the shipped profiles and the
 # measured geometry. The THRESHOLD is arithmetic on those shipped numbers, not a guess.
-FOOT_LINE_W = 0.82       # mm initial_layer_line_width, K2 Plus 0.8 nozzle processes (the wider
-                         # of the two nozzles, so the demanding one)
-FOOT_EFC = 0.15          # mm elefant_foot_compensation, eaten off EACH side of layer 1
-FOOT_LAYER_H = 0.4       # mm initial_layer_print_height, same processes. A slicer takes layer 1's
-                         # cross-section at half this, so that is where this check looks.
+FOOT_LINE_W = SLICER_LINE_W   # mm initial_layer_line_width. IMPORTED from machine.py, never
+                         # retyped: a literal copy of a machine constant is exactly how an 0.80
+                         # wall ended up under an 0.82 line.
+FOOT_EFC = 0.15          # mm elefant_foot_compensation, eaten off EACH side of layer 1. Read from
+                         # the same six profiles; it has no machine.py home yet because nothing
+                         # else needs it.
+FOOT_LAYER_H = SLICER_FIRST_H  # mm initial_layer_print_height, machine.py. A slicer takes layer
+                         # 1's cross-section at half this, so that is where this check looks. It
+                         # is 1.67 x the ordinary layer height, which is the profile's own design;
+                         # nothing here assumes layers are uniform.
 FOOT_MIN_W = FOOT_LINE_W + 2.0 * FOOT_EFC    # 1.12 mm to survive as one full first-layer bead
 FOOT_PITCH = 0.05        # mm scanline pitch, 1/22 of FOOT_MIN_W: what matters is never decided
                          # by a single row
 FOOT_CAP = 10.0          # mm. Inscribed width is reported capped here and the search stops. The
                          # gate only asks whether the widest island clears FOOT_MIN_W; measuring
                          # a 100 mm slab exactly costs time and answers nothing.
-FOOT_CELL = 1.0          # mm bucket pitch for the nearest-boundary search
 
 BIN_PITCH = 4.0          # mm xy bucket pitch, so a vertical ray only tests nearby facets
 FUSE_GAP = 0.25          # mm. Two surfaces closer than this print as ONE: the measured
@@ -176,58 +183,78 @@ def _foot_spans(segs, y):
     return out
 
 
-def _foot_clearance(grid, px, py):
-    """Distance from (px, py) to the nearest boundary segment, searched outward a ring of buckets
-    at a time and stopped as soon as no further ring can beat what has been found. Capped at
-    FOOT_CAP / 2, because the gate asks a threshold question and an exact answer for a slab costs
-    time and decides nothing."""
-    best = FOOT_CAP / 2.0
-    ci, cj = int(math.floor(px / FOOT_CELL)), int(math.floor(py / FOOT_CELL))
-    for k in range(int(math.ceil(best / FOOT_CELL)) + 2):
-        # (k-1), NOT k. The query point sits anywhere inside its own bucket, so a segment first
-        # reachable at Chebyshev ring k can still pass within (k-1)*FOOT_CELL of it. Terminating
-        # on `best <= k*FOOT_CELL` stopped after ring 0 and reported a 0.8 mm ring as 1.55 mm
-        # wide -- it found the far wall, called it the answer, and PASSED the file this check
-        # exists to fail (2026-08-04).
-        if best <= (k - 1) * FOOT_CELL:
+def _dist_out(rows, k0, px, py, cap, ylo_edge, yhi_edge):
+    """Distance from an interior point to the EXTERIOR of the cross-section, measured off the
+    scanline spans rather than off the surface.
+
+    THIS DISTINCTION IS THE WHOLE CHECK. Measuring to the nearest SURFACE was wrong, and wrong in
+    the direction that condemns good parts: these meshes are unions of interpenetrating solids,
+    so most surface inside a node is an INTERIOR SEAM that the slicer's union erases and that no
+    bead ever has to fit between. A single slant of this lattice measures 0.8200 alone and
+    measured 0.66 inside the part, purely because its neighbours' buried faces were counted as
+    walls (2026-08-04). The spans come from a nonzero winding walk, so they describe the union
+    and cannot see an interior face at all.
+
+    Rows are visited nearest first and the walk stops as soon as the row offset alone exceeds the
+    best distance found, so a one-bead feature costs about a bead's worth of rows."""
+    best = cap
+    n = len(rows)
+    for dk in range(n):
+        for k in ((k0 - dk, k0 + dk) if dk else (k0,)):
+            # OFF THE END OF THE ROWS IS EXTERIOR, not "skip". Beyond the cross-section's own y
+            # range there is no material, so a virtual empty row bounds the answer. Skipping them
+            # left a point in the outermost island with no exterior in that direction and the walk
+            # returned the CAP: a 0.697 mm2 island reported as holding a 10 mm bead, which is
+            # geometrically impossible and is what the invariant below now refuses to accept.
+            if k < 0 or k >= n:
+                y = ylo_edge if k < 0 else yhi_edge
+                d = abs(y - py)
+                if d < best:
+                    best = d
+                continue
+            y, spans = rows[k]
+            dy = abs(y - py)
+            if dy >= best:
+                continue
+            dx = 0.0
+            for lo, hi in spans:
+                if lo <= px <= hi:
+                    dx = min(px - lo, hi - px)
+                    break
+            d = math.sqrt(dy * dy + dx * dx)
+            if d < best:
+                best = d
+        if dk and (rows[min(k0 + dk, n - 1)][0] - py) >= best and \
+                (py - rows[max(k0 - dk, 0)][0]) >= best:
             break
-        for i in range(ci - k, ci + k + 1):
-            for j in range(cj - k, cj + k + 1):
-                if k and max(abs(i - ci), abs(j - cj)) != k:
-                    continue
-                for p0, p1 in grid.get((i, j), ()):
-                    vx, vy = p1[0] - p0[0], p1[1] - p0[1]
-                    L2 = vx * vx + vy * vy
-                    t = 0.0 if L2 < 1e-18 else \
-                        max(0.0, min(1.0, ((px - p0[0]) * vx + (py - p0[1]) * vy) / L2))
-                    dx, dy = px - (p0[0] + t * vx), py - (p0[1] + t * vy)
-                    d = math.sqrt(dx * dx + dy * dy)
-                    if d < best:
-                        best = d
     return best
 
 
 def _foot_islands(tris, z):
-    """The first layer as the slicer will see it: connected islands of the cross-section at z,
-    each with its area and the widest first-layer bead it could hold.
+    """The cross-section at z as the slicer will see it: connected islands, each with its area
+    and the widest bead it could hold.
 
-    WIDTH, NOT AREA, IS THE MEASURE. The part that failed had one island of 630 mm2. Width is
-    twice the largest inscribed radius, probed at scanline span midpoints -- for an annulus, a
-    slab, a bar at any angle and a speck that midpoint IS the inscribed centre, so the probe is
-    exact on every shape a first layer is made of, and it never overstates."""
+    WIDTH, NOT AREA, IS THE MEASURE. The part that failed had 630 mm2 in ONE island and could not
+    be sliced, because the island was a ring one bead wide. Width is twice the largest inscribed
+    radius, found by probing scanline span midpoints and then hill-climbing to the true inscribed
+    centre, measured to the EXTERIOR (see _dist_out) so interior seams between interpenetrating
+    solids are never mistaken for walls."""
     segs = _foot_section(tris, z)
     if not segs:
         return []
-    grid = {}
-    for s in segs:
-        x0, x1 = sorted((s[0][0], s[1][0]))
-        y0, y1 = sorted((s[0][1], s[1][1]))
-        for i in range(int(math.floor(x0 / FOOT_CELL)), int(math.floor(x1 / FOOT_CELL)) + 1):
-            for j in range(int(math.floor(y0 / FOOT_CELL)), int(math.floor(y1 / FOOT_CELL)) + 1):
-                grid.setdefault((i, j), []).append(s)
-
     ys = [p[1] for s in segs for p in s]
     ylo, yhi = min(ys), max(ys)
+    y_edge_lo, y_edge_hi = ylo, yhi
+    nrow = int(math.ceil((yhi - ylo) / FOOT_PITCH))
+    rows = []
+    for k in range(nrow):
+        y = ylo + (k + 0.5) * FOOT_PITCH
+        rows.append((y, _foot_spans(segs, y)))
+
+    def row_of(py):
+        k = int((py - ylo) / FOOT_PITCH - 0.5 + 0.5)
+        return max(0, min(nrow - 1, k))
+
     parent = {}
 
     def find(x):
@@ -238,11 +265,12 @@ def _foot_islands(tris, z):
 
     area = {}
     width = {}
+    best_pt = {}
     prev = []
-    for k in range(int(math.ceil((yhi - ylo) / FOOT_PITCH))):
-        y = ylo + (k + 0.5) * FOOT_PITCH
+    cap = FOOT_CAP / 2.0
+    for k, (y, spans) in enumerate(rows):
         cur = []
-        for j, (a, b) in enumerate(_foot_spans(segs, y)):
+        for j, (a, b) in enumerate(spans):
             key = (k, j)
             parent[key] = key
             area[key] = (b - a) * FOOT_PITCH
@@ -253,7 +281,13 @@ def _foot_islands(tris, z):
             while x < b:
                 probes.append(x)
                 x += step
-            width[key] = 2.0 * max(_foot_clearance(grid, px, y) for px in probes)
+            bx, bc = a, -1.0
+            for px in probes:
+                c = _dist_out(rows, k, px, y, cap, y_edge_lo, y_edge_hi)
+                if c > bc:
+                    bx, bc = px, c
+            width[key] = 2.0 * bc
+            best_pt[key] = (bx, y, bc)
             for pk, pa, pb in prev:
                 if pb > a and b > pa:
                     ra, rb = find(key), find(pk)
@@ -265,9 +299,75 @@ def _foot_islands(tris, z):
     isl = {}
     for key in parent:
         r = find(key)
-        a, w = isl.get(r, (0.0, 0.0))
-        isl[r] = (a + area[key], max(w, width[key]))
-    return sorted(isl.values(), key=lambda t: -t[1])
+        a, w, pt = isl.get(r, (0.0, 0.0, None))
+        isl[r] = (a + area[key], max(w, width[key]),
+                  best_pt[key] if width[key] >= w else pt)
+
+    # REFINE. The row pitch alone cannot resolve the question being asked. A true 0.82 mm square
+    # measured 0.79 through a 0.05 mm pitch, because the row through its inscribed centre is not
+    # one of the rows sampled -- and this design sits EXACTLY on the 0.82 limit, so a 0.03 mm
+    # sampling shortfall is the difference between a verdict and its opposite. A gate whose
+    # resolution is coarser than the margin it judges is not measuring. Each island's best point
+    # is hill-climbed, which costs one refinement per island rather than one per row.
+    out = []
+    for a, w, pt in isl.values():
+        if pt is None:
+            out.append((a, w))
+            continue
+        px, py, pc = pt
+        # THE CLIMB MUST NOT LEAVE THE MATERIAL, or it would find the middle of a void and call
+        # it a feature. The invariant that guarantees it: the disc of radius pc about an interior
+        # point contains no exterior, so it is all interior. Keep every step shorter than pc and
+        # the walk can never cross out.
+        step = min(4.0 * FOOT_PITCH, 0.5 * pc)
+        while step > 1e-4:
+            moved = False
+            for dx, dy in ((step, 0.0), (-step, 0.0), (0.0, step), (0.0, -step)):
+                c = _dist_out(rows, row_of(py + dy), px + dx, py + dy, cap, y_edge_lo, y_edge_hi)
+                if c > pc:
+                    px, py, pc, moved = px + dx, py + dy, c, True
+            if not moved:
+                step /= 2.0
+            step = min(step, 0.5 * pc)
+        out.append((a, max(w, 2.0 * pc)))
+
+    # THE MEASUREMENT MUST BE POSSIBLE. An inscribed circle of diameter w has area pi*(w/2)^2 and
+    # it lies inside the island, so it can never exceed the island's own area. A width that fails
+    # this was not measured, it was a bug -- and this exact invariant is what exposed one: a
+    # 0.697 mm2 island reported as 10.00 mm wide. Raising here rather than clamping, because a
+    # silently corrected number is a wrong number that nobody ever looks at again.
+    for a, w in out:
+        if math.pi * (w / 2.0) ** 2 > a * 1.05 + 1e-9:
+            raise AssertionError(
+                "island width %.4f mm cannot fit in its own area %.4f mm2 at z=%.4f -- the width "
+                "probe is wrong, not the part" % (w, a, z))
+    return sorted(out, key=lambda t: -t[1])
+
+
+def _minwidth_scan(tris, zlo, zhi, line_w, nsample):
+    """Sample layers through the part and ask of each the only question that decides whether it
+    prints: is ANY island in it as wide as one extrusion?
+
+    A layer holding material but no island that wide emits NOTHING. The classic wall generator
+    offsets a region inward by half a line to place the perimeter centreline, so a region under
+    one line wide opens to empty, and with detect_thin_wall = 0 there is no fallback. That is not
+    a first-layer property, it is true of EVERY layer, and it is why a part built 0.80 wide under
+    an 0.82 line sliced to nothing at all. The first layer was merely where the slicer reported
+    it, because an empty FIRST layer is its one fatal emptiness.
+
+    SAMPLED, not exhaustive, and the sample size is stated in the verdict. A 313.8 mm part is
+    1308 layers and a full island decomposition each is minutes. This defect is a property of the
+    geometry that persists over a z range, so it cannot hide between samples; a defect confined
+    to one layer would be a different check. The first-layer plane is measured exactly, by FOOT."""
+    rows = []
+    for k in range(nsample):
+        z = zlo + (zhi - zlo) * (k + 0.5) / nsample
+        isl = _foot_islands(tris, z)
+        if not isl:
+            continue
+        rows.append((z, sum(a for a, _w in isl), sum(a for a, w in isl if w >= line_w),
+                     isl[0][1], len(isl)))
+    return rows
 
 
 def _components(tris3d):
@@ -660,7 +760,8 @@ def _layer_continuity(body_tris, dz=0.4, walk=1.1, sample=0.6):
     return runs, (max(runs) if runs else 0.0), orphans
 
 
-def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None):
+def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
+             line_w=None, minw_samples=24):
     """Run all checks for one file. Returns True if every check passed."""
     print("== %s [%s] ==" % (path, cls))
     fails = [0]
@@ -926,6 +1027,31 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None)
                "every layer must land on the layer below; bridges are a MEASURED allowance, not free"
                % (len(runs), longest, bridge_max, orphans))
 
+    # -- MINWIDTH --------------------------------------------------------------
+    # THE GATE THAT WAS MISSING. qa_stl passed icecage_pointyhex.stl green on every check it had
+    # -- watertight, zero spanning overhangs, no sealed void, on the bed -- and Creality Print
+    # could not slice one layer of it, because nothing in the gate knew what the MACHINE can lay
+    # down. Its members were 0.80 wide and the profile's line is 0.82.
+    if cls in ("closed", "fabric") and tris3d and line_w:
+        rows = _minwidth_scan([(t[0], t[1], t[2]) for t in tris3d], minz, maxz,
+                              line_w, minw_samples)
+        lost = [r for r in rows if r[1] > 0.0 and r[2] <= 0.0]
+        if not rows:
+            report("MINWIDTH", False,
+                   "%d sampled layers and not one holds material -- there is nothing to print"
+                   % minw_samples)
+        else:
+            thin = min(r[3] for r in rows)
+            frac = sum(r[2] for r in rows) / sum(r[1] for r in rows)
+            report("MINWIDTH", not lost,
+                   "%d of %d sampled layers emit NOTHING (limit: 0). Every feature must be at "
+                   "least one %.2f mm line wide; the narrowest sampled layer's widest island is "
+                   "%.2f mm, and %.1f%% of sampled cross-section is wide enough to hold a bead%s"
+                   % (len(lost), len(rows), line_w, thin, 100.0 * frac,
+                      "" if not lost else
+                      "  FIRST LOST LAYER z=%.2f, %.1f mm2 of material, widest island %.2f mm"
+                      % (lost[0][0], lost[0][1], lost[0][3])))
+
     # -- FOOT ------------------------------------------------------------------
     # Only for parts printed layer by layer. `open` and `vase-solid` are spiralize inputs: the
     # slicer traces the modelled SURFACE and the extrusion width comes from the profile, not from
@@ -1011,12 +1137,20 @@ def main():
                     help="also prove a rigid DIA mm part can be THREADED through this part's bore, "
                          "measured off the mesh (tools/transit.py). Use it on anything a rod, "
                          "marble or shaft must pass through.")
+    ap.add_argument("--line-width", type=float, default=SLICER_LINE_W,
+                    help="MINWIDTH: the slicer's extrusion width in mm. No feature may be thinner "
+                         "than this or its layer emits nothing. Default %.2f = machine.py "
+                         "SLICER_LINE_W, read from all six Creality K2 Plus 0.8 nozzle process "
+                         "profiles, which agree. Pass the value from YOUR profile if it differs; "
+                         "0 disables the check." % SLICER_LINE_W)
+    ap.add_argument("--minw-samples", type=int, default=24,
+                    help="MINWIDTH: how many layers to sample through the part (default 24)")
     args = ap.parse_args()
 
     failed = 0
     for path in args.stl:
         if not run_file(path, args.cls, args.bed, args.allow_overhang, args.clear_min,
-                        args.bridge_max, args.transit):
+                        args.bridge_max, args.transit, args.line_width, args.minw_samples):
             failed += 1
     n = len(args.stl)
     if failed:
