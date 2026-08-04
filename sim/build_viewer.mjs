@@ -1,16 +1,21 @@
 #!/usr/bin/env node
-// build_viewer.mjs — bundle viewer_src.mjs (three + rapier wasm + sim_core)
+// build_viewer.mjs: bundle viewer_src.mjs (three + rapier wasm + sim_core)
 // into ONE self-contained viewer.html: no network, double-clickable file://.
-//   node build_viewer.mjs [stl]
+//   node build_viewer.mjs [stl] [out]
 
 import { build } from 'esbuild';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
-const stlPath = process.argv[2] ?? 'assets/spiral_chute_snapshot.stl';
+// Paths resolve against THIS file, not the cwd, so the build runs from anywhere.
+const here = dirname(fileURLToPath(import.meta.url));
+const stlPath = resolve(here, process.argv[2] ?? 'assets/spiral_chute_snapshot.stl');
+const outPath = resolve(process.argv[3] ?? `${here}/viewer.html`);
 
 const result = await build({
-  entryPoints: ['viewer_src.mjs'],
+  entryPoints: [resolve(here, 'viewer_src.mjs')],
   bundle: true,
   minify: true,
   write: false,
@@ -28,7 +33,7 @@ const html = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>marble chute sim — local proof</title>
+<title>marble chute sim - local proof</title>
 <style>
   * { margin: 0; box-sizing: border-box; }
   html, body { height: 100%; }
@@ -48,7 +53,7 @@ const html = `<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>marble chute — physics sim</h1>
+  <h1>marble chute - physics sim</h1>
   <button id="drop">Drop marble</button>
   <span id="status">booting...</span>
   <span id="live"></span>
@@ -56,7 +61,7 @@ const html = `<!DOCTYPE html>
 <div id="view"></div>
 <footer>
   <span id="mesh">...</span><br>
-  Same sim_core.mjs as the headless QA gate (qa_sim.mjs) — one engine, two surfaces.
+  Same sim_core.mjs as the headless QA gate (qa_sim.mjs) - one engine, two surfaces.
   Sim material constants are ASSUMED (typical glass-on-PLA), not measured; treat timings as
   indicative, captivity verdict held across a friction/entry-speed sweep.
 </footer>
@@ -65,6 +70,6 @@ const html = `<!DOCTYPE html>
 </body>
 </html>
 `;
-writeFileSync('viewer.html', html);
-console.log(`[build_viewer] viewer.html written: bundle ${(js.length / 1e6).toFixed(2)}MB js + ` +
+writeFileSync(outPath, html);
+console.log(`[build_viewer] ${outPath} written: bundle ${(js.length / 1e6).toFixed(2)}MB js + ` +
   `${(stlB64.length / 1e6).toFixed(2)}MB stl(gz,b64), total ${(html.length / 1e6).toFixed(2)}MB`);
