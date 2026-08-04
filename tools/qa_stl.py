@@ -40,7 +40,14 @@ Checks:
                   connected component they belong to.
     7 SEALED-VOID (closed) 0 ray columns with material above AND below a void. watertight !=
                   printable: a sealed cavity is a flawless manifold and cannot print.
-    8 BED         bbox X and Y extents <= --bed (default 340)
+    8 FOOT        (closed, fabric) the first layer can hold a bead. Cross-section at half the
+                  first layer height, split into connected islands, and each island measured for
+                  the widest bead it could hold -- twice its largest inscribed radius -- against
+                  0.82 line + 2 x 0.15 elephant foot = 1.12 mm. AREA IS REPORTED, NOT GATED: the
+                  part that motivated this had 630 mm2 in ONE island and could not be sliced,
+                  because the island was a ring one bead wide. Skipped for open/vase-solid, which
+                  are spiralize inputs where the modelled wall is not the extrusion width.
+    9 BED         bbox X and Y extents <= --bed (default 340)
 
 Facet normals are recomputed from vertex winding; stored normals are not trusted.
 """
@@ -71,6 +78,40 @@ SEAL_DX_MAX = 1.0        # mm ray-cast column pitch for the sealed-void walk: re
 SEAL_MIN_COLS = 40       # ... but at least this many columns across the part, so the pitch is
                          # never coarse RELATIVE to what it measures. A flat pitch has the same
                          # failure mode a flat margin had: it goes vacuous as the part shrinks.
+# -- FOOT: can the first layer STICK? ------------------------------------------------------
+# icecage_pointyhex.stl passed WATERTIGHT, PRINTABLE (zero spanning overhangs), SEALED-VOID and
+# BED, and Creality Print 7.1.1 still refused it: "One object has empty initial layer and can't
+# be printed. Please Cut the bottom or enable supports." (2026-08-04)
+#
+# THE FIRST LAYER WAS NOT MISSING AND IT WAS NOT SPECKS. Measured off that mesh, the plane at
+# z = 0.2 held 630.32 mm2 in ONE connected island. An area test passes it. An island-count test
+# passes it. What was wrong was WIDTH: the island was a continuous ring 787.9 mm long and 0.8 mm
+# wide, one bead across with no margin. Every stock @Creality K2 Plus process shipped in
+# /Applications/Creality Print.app/Contents/Resources/profiles/Creality/process sets
+#     wall_generator            classic      (all 12 checked, 0.6 and 0.8 nozzle)
+#     detect_thin_wall          0            so there is no fallback for a sub-line region
+#     elefant_foot_compensation 0.15         on elefant_foot_compensation_layers = 1
+#     initial_layer_line_width  0.82 (0.8 nozzle) / 0.62 (0.6 nozzle)
+# 0.8 - 2 x 0.15 = 0.50 mm survives layer 1, under one line width either way, and the classic
+# generator lays no bead into a region narrower than a line. Layer 1 comes out empty while every
+# layer above it slices normally, which is exactly the error Oleg saw and no other.
+#
+# NOT PROVEN BY RUNNING THE SLICER. The Creality Print CLI segfaults headless (exit 139) on every
+# STL including known-good ones, so the mechanism is read off the shipped profiles and the
+# measured geometry. The THRESHOLD is arithmetic on those shipped numbers, not a guess.
+FOOT_LINE_W = 0.82       # mm initial_layer_line_width, K2 Plus 0.8 nozzle processes (the wider
+                         # of the two nozzles, so the demanding one)
+FOOT_EFC = 0.15          # mm elefant_foot_compensation, eaten off EACH side of layer 1
+FOOT_LAYER_H = 0.4       # mm initial_layer_print_height, same processes. A slicer takes layer 1's
+                         # cross-section at half this, so that is where this check looks.
+FOOT_MIN_W = FOOT_LINE_W + 2.0 * FOOT_EFC    # 1.12 mm to survive as one full first-layer bead
+FOOT_PITCH = 0.05        # mm scanline pitch, 1/22 of FOOT_MIN_W: what matters is never decided
+                         # by a single row
+FOOT_CAP = 10.0          # mm. Inscribed width is reported capped here and the search stops. The
+                         # gate only asks whether the widest island clears FOOT_MIN_W; measuring
+                         # a 100 mm slab exactly costs time and answers nothing.
+FOOT_CELL = 1.0          # mm bucket pitch for the nearest-boundary search
+
 BIN_PITCH = 4.0          # mm xy bucket pitch, so a vertical ray only tests nearby facets
 FUSE_GAP = 0.25          # mm. Two surfaces closer than this print as ONE: the measured
                          # vase-mode figure for this project's printer is that a modelled hole
@@ -81,6 +122,152 @@ FUSE_GAP = 0.25          # mm. Two surfaces closer than this print as ONE: the m
                          # otherwise calls a 0.036 mm sliver between two near-tangent rim
                          # surfaces a sealed cavity (gift/trashcan.stl, 2026-08-03), and a 0.4 mm
                          # nozzle cannot make a 0.036 mm void.
+
+
+def _foot_section(tris, z):
+    """Directed cross-section segments at height z, wound so that material is where the winding
+    number is nonzero. NONZERO and not even-odd, because this project's meshes are unions of
+    hundreds of INTERPENETRATING closed solids (5522 in the cage) and even-odd would punch the
+    overlaps back out as holes. Facet normals are recomputed from the winding; stored ones are
+    not trusted, same rule as everywhere else in this file."""
+    segs = []
+    for a, b, c in tris:
+        pts = []
+        for p, q in ((a, b), (b, c), (c, a)):
+            if (p[2] - z) * (q[2] - z) < 0:
+                t = (z - p[2]) / (q[2] - p[2])
+                pts.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+        if len(pts) != 2:
+            continue
+        e1x, e1y, e1z = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        e2x, e2y, e2z = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+        nx = e1y * e2z - e1z * e2y
+        ny = e1z * e2x - e1x * e2z
+        p0, p1 = pts
+        # orient the chord so the facet's outward xy normal lies to its RIGHT
+        if nx * (p1[1] - p0[1]) - ny * (p1[0] - p0[0]) > 0:
+            p0, p1 = p1, p0
+        segs.append((p0, p1))
+    return segs
+
+
+def _foot_spans(segs, y):
+    """x intervals of the cross-section on the scanline at y, by nonzero winding."""
+    xs = []
+    for p0, p1 in segs:
+        y0, y1 = p0[1], p1[1]
+        if (y0 - y) * (y1 - y) >= 0:
+            continue
+        t = (y - y0) / (y1 - y0)
+        xs.append((p0[0] + t * (p1[0] - p0[0]), 1 if y1 > y0 else -1))
+    if not xs:
+        return []
+    xs.sort()
+    out = []
+    w = 0
+    start = 0.0
+    for x, d in xs:
+        was = w
+        w += d
+        if was == 0 and w != 0:
+            start = x
+        elif was != 0 and w == 0:
+            out.append((start, x))
+    return out
+
+
+def _foot_clearance(grid, px, py):
+    """Distance from (px, py) to the nearest boundary segment, searched outward a ring of buckets
+    at a time and stopped as soon as no further ring can beat what has been found. Capped at
+    FOOT_CAP / 2, because the gate asks a threshold question and an exact answer for a slab costs
+    time and decides nothing."""
+    best = FOOT_CAP / 2.0
+    ci, cj = int(math.floor(px / FOOT_CELL)), int(math.floor(py / FOOT_CELL))
+    for k in range(int(math.ceil(best / FOOT_CELL)) + 2):
+        # (k-1), NOT k. The query point sits anywhere inside its own bucket, so a segment first
+        # reachable at Chebyshev ring k can still pass within (k-1)*FOOT_CELL of it. Terminating
+        # on `best <= k*FOOT_CELL` stopped after ring 0 and reported a 0.8 mm ring as 1.55 mm
+        # wide -- it found the far wall, called it the answer, and PASSED the file this check
+        # exists to fail (2026-08-04).
+        if best <= (k - 1) * FOOT_CELL:
+            break
+        for i in range(ci - k, ci + k + 1):
+            for j in range(cj - k, cj + k + 1):
+                if k and max(abs(i - ci), abs(j - cj)) != k:
+                    continue
+                for p0, p1 in grid.get((i, j), ()):
+                    vx, vy = p1[0] - p0[0], p1[1] - p0[1]
+                    L2 = vx * vx + vy * vy
+                    t = 0.0 if L2 < 1e-18 else \
+                        max(0.0, min(1.0, ((px - p0[0]) * vx + (py - p0[1]) * vy) / L2))
+                    dx, dy = px - (p0[0] + t * vx), py - (p0[1] + t * vy)
+                    d = math.sqrt(dx * dx + dy * dy)
+                    if d < best:
+                        best = d
+    return best
+
+
+def _foot_islands(tris, z):
+    """The first layer as the slicer will see it: connected islands of the cross-section at z,
+    each with its area and the widest first-layer bead it could hold.
+
+    WIDTH, NOT AREA, IS THE MEASURE. The part that failed had one island of 630 mm2. Width is
+    twice the largest inscribed radius, probed at scanline span midpoints -- for an annulus, a
+    slab, a bar at any angle and a speck that midpoint IS the inscribed centre, so the probe is
+    exact on every shape a first layer is made of, and it never overstates."""
+    segs = _foot_section(tris, z)
+    if not segs:
+        return []
+    grid = {}
+    for s in segs:
+        x0, x1 = sorted((s[0][0], s[1][0]))
+        y0, y1 = sorted((s[0][1], s[1][1]))
+        for i in range(int(math.floor(x0 / FOOT_CELL)), int(math.floor(x1 / FOOT_CELL)) + 1):
+            for j in range(int(math.floor(y0 / FOOT_CELL)), int(math.floor(y1 / FOOT_CELL)) + 1):
+                grid.setdefault((i, j), []).append(s)
+
+    ys = [p[1] for s in segs for p in s]
+    ylo, yhi = min(ys), max(ys)
+    parent = {}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    area = {}
+    width = {}
+    prev = []
+    for k in range(int(math.ceil((yhi - ylo) / FOOT_PITCH))):
+        y = ylo + (k + 0.5) * FOOT_PITCH
+        cur = []
+        for j, (a, b) in enumerate(_foot_spans(segs, y)):
+            key = (k, j)
+            parent[key] = key
+            area[key] = (b - a) * FOOT_PITCH
+            # the midpoint always, plus a bounded stride so an L or a U is probed inside each arm
+            probes = [(a + b) / 2.0]
+            step = max(4.0 * FOOT_PITCH, (b - a) / 8.0)
+            x = a + step / 2.0
+            while x < b:
+                probes.append(x)
+                x += step
+            width[key] = 2.0 * max(_foot_clearance(grid, px, y) for px in probes)
+            for pk, pa, pb in prev:
+                if pb > a and b > pa:
+                    ra, rb = find(key), find(pk)
+                    if ra != rb:
+                        parent[ra] = rb
+            cur.append((key, a, b))
+        prev = cur
+
+    isl = {}
+    for key in parent:
+        r = find(key)
+        a, w = isl.get(r, (0.0, 0.0))
+        isl[r] = (a + area[key], max(w, width[key]))
+    return sorted(isl.values(), key=lambda t: -t[1])
 
 
 def _components(tris3d):
@@ -738,6 +925,36 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None)
                "%d bridge runs (longest %.1f mm, allowed %.1f), %d unsupported orphan points -- "
                "every layer must land on the layer below; bridges are a MEASURED allowance, not free"
                % (len(runs), longest, bridge_max, orphans))
+
+    # -- FOOT ------------------------------------------------------------------
+    # Only for parts printed layer by layer. `open` and `vase-solid` are spiralize inputs: the
+    # slicer traces the modelled SURFACE and the extrusion width comes from the profile, not from
+    # the modelled wall, so a one-line-thick vase wall is what vase mode is for and this test
+    # would be measuring the wrong thing. That is the same reason vase-solid skips PRINTABLE.
+    if cls in ("closed", "fabric") and tris3d:
+        zc = minz + FOOT_LAYER_H / 2.0
+        isl = _foot_islands([(t[0], t[1], t[2]) for t in tris3d], zc)
+        flipped = ""
+        if not (isl and isl[0][1] >= FOOT_MIN_W):
+            up = _foot_islands([(t[0], t[1], t[2]) for t in tris3d],
+                               maxz - FOOT_LAYER_H / 2.0)
+            if up and up[0][1] >= FOOT_MIN_W:
+                isl, flipped = up, "  (only as printed UPSIDE-DOWN -- the as-sits bottom fails)"
+        if not isl:
+            report("FOOT", False, "nothing crosses z = %.3f, %.2f mm above the mesh floor: there "
+                                  "is no first layer at all" % (zc, FOOT_LAYER_H / 2.0))
+        else:
+            tot = sum(a for a, _w in isl)
+            wide = [(a, w) for a, w in isl if w >= FOOT_MIN_W]
+            best = isl[0][1]
+            report("FOOT", bool(wide),
+                   "first layer at z = %.3f: %d island(s), %.1f mm2 total; widest island holds a "
+                   "%s mm bead (limit %.2f = %.2f line + 2 x %.2f elephant foot), %d island(s) "
+                   "and %.1f mm2 survive it%s"
+                   % (zc, len(isl), tot,
+                      ">=%.2f" % best if best >= FOOT_CAP else "%.2f" % best,
+                      FOOT_MIN_W, FOOT_LINE_W, FOOT_EFC,
+                      len(wide), sum(a for a, _w in wide), flipped))
 
     # -- 7 BED ----------------------------------------------------------------
     if minx == float("inf"):
