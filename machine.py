@@ -838,3 +838,24 @@ def speed_for_flow(flow, bead_w, layer_h):
     violation. Never above DEFAULT_SPEED.
     """
     return min(DEFAULT_SPEED, flow / max(bead_w * layer_h, 1e-9))
+
+# ---------------------------------------------------------------- SLICER TRUTH
+# READ OFF HIS ACTUAL SLICER, 2026-08-04, not assumed. Every K2 Plus 0.8-nozzle process profile in
+# Creality Print 7.0 carries the SAME line width:
+#
+#   ~/Library/Application Support/Creality/Creality Print/7.0/system/Creality/process/
+#     0.24mm / 0.32mm / 0.40mm / 0.40mm Strength / 0.48mm / 0.56mm  @Creality K2 Plus 0.8 nozzle
+#     line_width = 0.82   initial_layer_line_width = 0.82   initial_layer_print_height = 0.40
+#
+# WHY THIS CONSTANT EXISTS AT ALL. A cage generated with 0.80 mm walls sliced to NOTHING: Creality
+# refused it with "One object has empty initial layer and can't be printed". 0.80 is under 0.82, so
+# not one feature in the part could hold a single extrusion and the slicer discarded all of it. The
+# first layer was merely where it noticed. qa_stl had passed that same file green on every check it
+# owns, because none of them knew what the MACHINE can lay down.
+#
+# THE RULE: NO FEATURE MAY BE THINNER THAN ONE LINE. A wall at exactly SLICER_LINE_W is filled by
+# exactly one line with nothing left over, which is the cheapest printable wall that exists.
+SLICER_LINE_W = 0.82    # mm, READ from all six K2 Plus 0.8 process profiles, 2026-08-04
+SLICER_FIRST_H = 0.40   # mm, initial_layer_print_height, same six profiles
+# Layer heights those profiles offer: 0.24, 0.32, 0.40, 0.48, 0.56. Oleg asked for 0.28, which is
+# NOT among them, so a 0.28 job is a hand-set profile. His number stands; the fact is recorded.
