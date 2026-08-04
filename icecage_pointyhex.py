@@ -11,43 +11,57 @@ WHAT THIS IS
     This one is an ordinary solid printed layer by layer with ~120 separate islands per layer.
     Slicing it in vase mode would destroy it.
 
-THE STACKING LAW (given, not re-derived)
-    At layer height h a member inclined T from VERTICAL shifts h*tan(T) sideways per layer. For
-    the bead to land on the bead below that shift must stay under about half the extrusion width.
-        h = 0.28, w = 0.8  ->  0.28*tan(T) < 0.40  ->  T < 55 deg
-    tools/qa_stl.py:58 LEAN_MAX_DEG = 55.0 is the same physics. This generator REFUSES to keep a
-    file whose worst measured MEMBER AXIS or sloped underside exceeds --lean-max, and deletes it.
-    Proven able to fire twice: --apex-rise 3.0 (65.5 deg) and --cells 12 (80.5 deg).
+WHY THE FIRST BUILD COULD NOT BE SLICED, and it was not the foot
+    Creality Print 7.1.1 refused it: "One object has empty initial layer and can't be printed."
+    The first layer was NOT missing and it was NOT specks. Measured off that mesh, the plane at
+    z = 0.2 held 630.32 mm2 in ONE connected island, a continuous 787.9 mm ring, and all 5522
+    solids were outward-oriented. It was too NARROW. The members were built 0.80 wide and his
+    slicer's line is 0.82, so NOT ONE FEATURE IN THE PART could hold a single extrusion. Every
+    stock @Creality K2 Plus process sets wall_generator = classic with detect_thin_wall = 0, so a
+    region narrower than a line gets no bead and no fallback. The first layer is simply where the
+    slicer says so, because an empty first layer is its one FATAL emptiness.
+    NOT PROVEN BY RUNNING THE SLICER: the Creality Print CLI segfaults headless (exit 139) on
+    every STL including known-good ones. Read off the shipped profiles and the measured geometry.
 
-FOOT WIDTH, and why the first build could not be sliced
-    Creality Print 7.1.1 refused the first build: "One object has empty initial layer and can't be
-    printed." The first layer was NOT missing -- it measured 630.32 mm2 in ONE connected island,
-    a continuous ring. It was too NARROW. Every stock @Creality K2 Plus process in
-    /Applications/Creality Print.app/Contents/Resources/profiles/Creality/process sets
-        wall_generator            classic
-        detect_thin_wall          0
-        elefant_foot_compensation 0.15   on elefant_foot_compensation_layers = 1
-        initial_layer_line_width  0.82 (0.8 nozzle) / 0.62 (0.6 nozzle)
-    A 0.8 mm ring loses 0.15 mm per side on layer 1 and is left 0.50 mm wide -- under one line
-    width either way. Classic emits no bead into a region narrower than a line, and with thin-wall
-    detection off there is no fallback, so layer 1 comes out empty while every layer above it
-    slices normally. NOT PROVEN BY RUNNING THE SLICER: the Creality Print CLI segfaults headless
-    (exit 139) on every STL including known-good ones, so this is read off the shipped profiles and
-    the measured geometry, not off a reproduction.
+THE STACKING LAW, re-derived at the machine's own numbers
+    At layer height h a member inclined T from VERTICAL shifts h*tan(T) sideways per layer. For
+    the bead to land on the bead below, that shift must stay under half the extrusion width.
+        h = SLICER_LAYER_H = 0.24, w = SLICER_LINE_W = 0.82
+        0.24 * tan(T) < 0.41  ->  T < 59.66 deg
+    That is LOOSER than the 55 deg this design was judged against (0.28 layer, 0.80 bead), so the
+    lattice clears with more room than before, not less. --lean-max stays at the stricter 55.0,
+    which is also tools/qa_stl.py LEAN_MAX_DEG: a change that buys slack is no reason to spend it.
+    This generator REFUSES to keep a file whose worst measured MEMBER AXIS or sloped underside
+    exceeds --lean-max, and deletes it. Proven able to fire twice: --apex-rise 3.0 (65.5 deg) and
+    --cells 12 (80.5 deg).
+
+THE FOOT, which is a SECOND defect and survives the width fix
+    Layer 1 is eroded by elefant_foot_compensation = 0.15 PER SIDE (elefant_foot_compensation_
+    layers = 1, so layer 1 only). A member at exactly one line width would be left 0.52 mm there,
+    still under a line -- so a part standing on its own 0.82 wall has an empty first layer even
+    after the width fix. The bottom is therefore a band --foot-width wide held for --foot-flat,
+    splayed back to the wall by --rim.
         foot width = 3 x 0.82 = 2.46, taken as 2.4. After 2 x 0.15 that is 2.10 mm of printed
         width = 2.56 lines, so two full loops survive with margin. 2 x 0.82 + 2 x 0.15 = 1.94 is
-        the bare minimum and 0.8 mm failed by 2%, which is why the minimum is not what was used.
-    tools/qa_stl.py FOOT is the same arithmetic as a gate, and it FAILS the pre-foot file.
+        the bare minimum, and the part before this failed by 2%, which is why the minimum is not
+        what was used.
+    The TOP gets no foot: see the note at the top_ring call.
+    tools/qa_stl.py gates both -- MINWIDTH for the line-width rule, FOOT for layer 1.
 
-CONSTANT PROVENANCE
-    nozzle 0.8              machine.py:26 NOZZLE
+CONSTANT PROVENANCE -- every dimension below now comes off HIS machine, none are hand-set
+    member width 0.82       machine.py SLICER_LINE_W, read from all six K2 Plus 0.8 profiles.
+                            Oleg asked for "single line 0.8 line width everywhere"; 0.82 is that
+                            same intent at his profile's own number, and 0.80 is what failed.
+    layer height 0.24       machine.py SLICER_LAYER_H. Oleg 2026-08-04 "yea i meant 0.24 update
+                            it" -- he first said 0.28, which is not among the stock heights.
+    first layer 0.40        machine.py SLICER_FIRST_H. Note it is 1.67 x the layer height; that
+                            is the profile's own design, and nothing here assumes uniform layers.
+    nozzle 0.8              machine.py NOZZLE
     bed 350 x 350 x 350     memory printer-k2plus (K2 Plus real ceiling)
-    member width 0.8        OLEG 2026-08-04 "single line 0.8 line width everywhere"
-    layer height 0.28       OLEG 2026-08-04 "(layer 0.28 height)"
     PLA density 1.24 g/cm3  handbook figure carried in from the ranking brief -- NOT measured here
     MISMATCH, unresolved on purpose:
-      machine.py:40 BEAD_W = 1.2 and machine.py:41 BEAD_H = 0.6 disagree with Oleg's 0.8 / 0.28.
-      0.8 * 0.28 * 50 mm/s = 11.2 mm3/s against machine.py:7 FLOW = 55.0.
+      machine.py BEAD_W = 1.2 and BEAD_H = 0.6 are the crackle stacking doctrine for hand-rolled
+      toolpaths. This part is sliced, so the SLICER_ constants govern it, and they disagree.
 
 EVERY NUMBER THIS SCRIPT PRINTS IS MEASURED OFF THE EMITTED FILE, by reading it back. Nothing
 is reported from the design arithmetic that produced it.
@@ -57,6 +71,11 @@ import math
 import os
 import struct
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# IMPORTED, never retyped. A literal copy of a machine constant is the bug class this repo keeps
+# paying for, and it is what put an 0.80 wall under an 0.82 line in the first place.
+from machine import SLICER_LINE_W, SLICER_LAYER_H, SLICER_FIRST_H
 
 
 # ---------------------------------------------------------------- mesh primitives
@@ -570,19 +589,25 @@ def main():
     ap.add_argument("--inner-dia", type=float, default=250.0)
     ap.add_argument("--height-rows", dest="rows", type=int, default=30)
     ap.add_argument("--cells", type=int, default=60, help="hex cells around")
-    ap.add_argument("--member", type=float, default=0.8, help="member width AND wall thickness")
-    ap.add_argument("--layer", type=float, default=0.28, help="layer height (stacking budget)")
+    ap.add_argument("--member", type=float, default=SLICER_LINE_W,
+                    help="member width AND wall thickness. Defaults to machine.py SLICER_LINE_W "
+                         "so exactly one line fills a member with nothing left over -- the "
+                         "cheapest printable wall that exists. 0.80 under an 0.82 line is what "
+                         "made the slicer discard the whole part")
+    ap.add_argument("--layer", type=float, default=SLICER_LAYER_H,
+                    help="layer height (stacking budget). machine.py SLICER_LAYER_H")
     ap.add_argument("--apex-rise", type=float, default=5.5, help="hex apex rise b")
     ap.add_argument("--side", type=float, default=4.5, help="hex vertical side v")
     ap.add_argument("--rim", type=float, default=1.4)
-    ap.add_argument("--foot-width", dest="foot_width", type=float, default=2.4,
-                    help="radial width of the band ON THE BED. See FOOT WIDTH in the docstring: "
-                         "3 x the 0.82 mm initial_layer_line_width, so 2 x 0.15 mm of elephant "
-                         "foot still leaves two full first-layer beads")
-    ap.add_argument("--foot-flat", dest="foot_flat", type=float, default=0.5,
+    ap.add_argument("--foot-width", dest="foot_width", type=float, default=3.0 * SLICER_LINE_W,
+                    help="radial width of the band ON THE BED. THREE line widths, so after the "
+                         "0.15 mm of elephant foot eaten off each side of layer 1 there are still "
+                         "two full first-layer lines with margin")
+    ap.add_argument("--foot-flat", dest="foot_flat", type=float,
+                    default=SLICER_FIRST_H + SLICER_LAYER_H,
                     help="height the full foot width is held before splaying back to --member. "
-                         "0.5 > the 0.4 mm initial_layer_print_height of every K2 Plus 0.8 nozzle "
-                         "process, so the slice plane at half the first layer lands inside it")
+                         "One first layer plus one ordinary layer, so layer 1 is full width "
+                         "throughout and layer 2 still lands on a band wider than a line")
     ap.add_argument("--ring-facets", type=int, default=720)
     ap.add_argument("--top-ring", dest="top_ring", action="store_true", default=True)
     ap.add_argument("--no-top-ring", dest="top_ring", action="store_false")
