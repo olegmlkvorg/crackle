@@ -456,6 +456,16 @@ def main():
                     help="part-cooling fan fraction 0..1 for the BODY, overriding machine.FAN_MAX. "
                          "Layer 1 is unaffected and keeps its material's first-layer value, so the "
                          "plate weld is never chilled.")
+    ap.add_argument("--cross-flow", type=float, default=0.25,
+                    help="fraction of the body's own extrusion rate to lay while crossing a gap on "
+                         "a NON-bridge layer. Oleg 2026-08-05: 'why we ever want to fly without "
+                         "anything coming out? Are not we releasing tiny all the time at least'. "
+                         "There is NO RETRACTION in this project, so a 'dry' crossing oozes anyway "
+                         "and the web in the printed part IS that ooze — the travel was never dry, "
+                         "it was UNCONTROLLED extrusion. This meters it. 0 restores the old G0 "
+                         "travel exactly. NOT 1.0: at full flow the crossings cost more than the "
+                         "posts and the part lands at 1.24x a solid single-bead wall; at 0.25 the "
+                         "same part is 0.51x. Thin is the point.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
@@ -575,6 +585,13 @@ def main():
     path_mm = sum(layer_mm(L)[0] for L in layers)
     trav_mm = sum(layer_mm(L)[1] for L in layers)
     floor_mm = sum(layer_mm(L)[0] for L in layers[:a.floor_layers])
+    # A METERED CROSSING IS EXTRUSION, NOT TRAVEL. layer_mm() classifies by kind, and kind "T" is
+    # travel only while --cross-flow is 0; above 0 the emitter writes those same moves as G1 with E
+    # ("; THIN CROSS"). Left as travel, the summary described a file it had just written as having
+    # 44.5m of dry crossings when validate.py reads the emitted file as travel=0.4m extrude=80.4m.
+    cross_mm = trav_mm if a.cross_flow > 0 else 0.0
+    ext_mm = path_mm + cross_mm                      # path with material coming out of the nozzle
+    dry_mm = trav_mm - cross_mm                      # path flown dry
     n_moves = sum(len(L["kind"]) for L in layers)
     # WHAT LAYER 1 ACTUALLY LANDS AT — which is w1, by construction, because e_mm_l1 was DERIVED
     # from it (e = w1 * press / A_FIL). This used to be re-typed as bw*lh/press, the DEFAULT w1,
@@ -607,7 +624,10 @@ def main():
                     pitch_hint = (_p, nc, _air)
                 break
     mins = (path_mm + trav_mm) / speed / 60.0
-    vol_cm3 = path_mm * bw * lh / 1000.0
+    # vol_cm3 IS NOT MODELLED HERE. It is read off the E the emitter actually writes, below the
+    # emission loop, because three different rates now leave this nozzle: the body's e_mm, layer 1's
+    # e_mm_l1 (--w1), and a crossing's e_mm x --cross-flow. path_mm x bw x lh knew only the first
+    # and called the part 7.0 cm3 when its own E said 9.59.
 
     L = []
     w = L.append
@@ -807,8 +827,16 @@ def main():
                 # chord provably clears both tower walls (check_paths gate 3), so there is no
                 # material under it. F is at the north star, which is also what keeps this move
                 # under validate.py's ploughing threshold rather than at it.
-                w(f"G0 F{f} X{x:.3f} Y{y:.3f} ; HOP flat across open air, no lift (clears both "
-                  f"tower walls)")
+                if a.cross_flow > 0:
+                    # THERE IS NO RETRACTION IN THIS PROJECT, so this move was never dry. It oozed,
+                    # and the web in the printed part IS that ooze. Metering it at a stated fraction
+                    # of the body's own rate turns an uncontrolled leak into a strand we chose.
+                    E += seg * e_mm * a.cross_flow
+                    w(f"G1 F{f} X{x:.3f} Y{y:.3f} E{E:.5f} ; THIN CROSS {a.cross_flow*100:.0f}% "
+                      f"-- deliberate strand, not ooze (clears both tower walls)")
+                else:
+                    w(f"G0 F{f} X{x:.3f} Y{y:.3f} ; HOP flat across open air, no lift (clears both "
+                      f"tower walls)")
             else:
                 # LAYER 1 IS METERED SEPARATELY AND ON PURPOSE.
                 # Oleg, 2026-08-05, after the first ring printed: "first layer need to be full flow
@@ -825,6 +853,10 @@ def main():
                     w(f"G1 X{x:.3f} Y{y:.3f} E{E:.5f}")
             ppx, ppy = x, y
 
+    # THE MATERIAL FIGURE IS THE ACCUMULATOR, NOT A SECOND MODEL OF IT. E is the body total, after
+    # the G92 E0 that follows the prime; the prime line itself is 20mm of filament on top.
+    vol_cm3 = E * A_FIL / 1000.0
+
     w("M107")
     w("M104 S0")
     w("M140 S0")
@@ -836,9 +868,14 @@ def main():
     # Regenerating with a stronger base on 2026-08-05 silently OVERWROTE the gcode of the part that
     # had already printed: same dia, same height, same tower count, same bridge interval, entirely
     # different floor. Two different parts cannot share a name.
+    # --cross-flow IS IN THE NAME FOR THE SAME REASON THE FLOOR IS. A run at 0.25 and a run at 0
+    # are the same geometry carrying different material: 9.59 cm3 against 7.40, and 44.5m of the
+    # path is a strand in one and open air in the other. Suffix only when it is on, so every
+    # filename written before --cross-flow existed still names the same file.
+    xf = f"_x{a.cross_flow*100:g}" if a.cross_flow > 0 else ""
     fn = os.path.join(a.out, f"bucket_towers_{a.printer}_{a.material}_d{a.dia:g}_h{a.height:g}_"
                              f"n{n_tow}t{a.tower_d:g}_b{a.bridge_every}_"
-                             f"f{a.floor_layers}x{a.floor_pitch:g}.gcode")
+                             f"f{a.floor_layers}x{a.floor_pitch:g}{xf}.gcode")
     open(fn, "w").write("\n".join(L) + "\n")
 
     print(fn)
@@ -872,8 +909,12 @@ def main():
         print(f"     inside the {PROVEN_AIR_MM:g}mm that held tonight (a lower bound, not a limit)")
     print(f"  cooling: {tow_ext:.0f}mm extruded per tower layer = {lay_s_ext:.2f}s, "
           f"{lay_s_all:.2f}s wall clock with the crossings (one tower gave 0.57s and roped)")
-    print(f"  {n_moves} moves, {path_mm/1000:.1f}m extruded ({floor_mm/1000:.1f}m of it floor) + "
-          f"{trav_mm/1000:.1f}m of flat crossings, {vol_cm3:.1f} cm3 of PLA")
+    print(f"  {n_moves} moves, {ext_mm/1000:.1f}m extruded ({floor_mm/1000:.1f}m of it floor"
+          + (f", {cross_mm/1000:.1f}m of it flat crossings at {a.cross_flow*100:g}% flow"
+             if cross_mm else "")
+          + f") + {dry_mm/1000:.1f}m of "
+          + ("flat crossings" if a.cross_flow <= 0 else "dry travel inside the body")
+          + f", {vol_cm3:.2f} cm3 of PLA (the file's own E, +0.05 for the prime line)")
     print(f"  est. {mins:.0f} min of motion at {speed:g} mm/s (no accel, no heat-up)")
     print(f"  ONE stroke: {len(layers)} layers, each starting exactly where the last ended, and Z "
           f"never descends (both checked, not claimed)")
