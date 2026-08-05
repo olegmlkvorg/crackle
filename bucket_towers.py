@@ -454,6 +454,19 @@ def main():
                          "a different first-layer speed would not inherit that result. Oleg "
                          "2026-08-06: \"may he half the speed?\" — a slower bead has longer to wet "
                          "the plate before it freezes.")
+    ap.add_argument("--h1", type=float, default=None,
+                    help="the REAL first-layer height in mm, measured off zladder.py's plate. This "
+                         "is the one number to carry over from that coupon, and it sets TWO things "
+                         "that were previously hand-converted: the machine offset needed to reach "
+                         "that height (--zoff, derived), and layer 1's extrusion rate, which must "
+                         "scale WITH the height or the layer lands narrower than --w1 claims. "
+                         "Getting that conversion wrong by hand is exactly how a ladder's answer "
+                         "stops transferring to the part it was measured for.")
+    ap.add_argument("--zerr", type=float, default=0.15,
+                    help="how much HIGHER than it reports this machine's Z zero sits, mm. Only used "
+                         "to turn --h1 into an offset. MEASURED 2026-08-06 off a printed plate: at "
+                         "offset -0.15 the first layer was clean, at -0.20 the nozzle dragged "
+                         "through its own material.")
     ap.add_argument("--zoff", type=float, default=0.0,
                     help="SET_GCODE_OFFSET Z applied right after G28, mm. NEGATIVE brings the "
                          "nozzle CLOSER to the plate. NOT a tuning knob — a correction for a Z "
@@ -498,10 +511,23 @@ def main():
     # the plate. Refused here because validate.py cannot see SET_GCODE_OFFSET at all — R1 would go
     # on reading the commanded Z0.100 and passing a file printing half a millimetre in the air,
     # which is exactly the blindness that let three max-bucket starts through on 2026-08-05/06.
+    # --h1 DERIVES --zoff RATHER THAN SITTING BESIDE IT. Two knobs that set the same physical
+    # quantity is a footgun: whichever the caller forgets silently wins. Given together, refuse.
+    if a.h1 is not None:
+        if abs(a.zoff) > 1e-9:
+            raise SystemExit(f"REFUSING TO EMIT: --h1 {a.h1:g} and --zoff {a.zoff:+g} both set. "
+                             f"--h1 DERIVES the offset (h1 - {press:g} - zerr); passing both means "
+                             f"one of them is silently ignored. Pass --h1 alone.")
+        if a.h1 <= 0:
+            raise SystemExit(f"REFUSING TO EMIT: --h1 {a.h1:g} is not a positive height.")
+        a.zoff = round(a.h1 - press - a.zerr, 4)
     if a.zoff > 1e-9:
+        _why = (f" With --zerr {a.zerr:g} the tallest first layer reachable without lifting the "
+                f"nozzle above the machine's own zero is {press + a.zerr:.3f}mm."
+                if a.h1 is not None else "")
         raise SystemExit(f"REFUSING TO EMIT: --zoff {a.zoff:+g} is POSITIVE, which lifts the "
-                         f"nozzle AWAY from the plate. Use a negative value to press harder, or 0 "
-                         f"for the machine's own zero.")
+                         f"nozzle AWAY from the plate.{_why} Use a negative value to press harder, "
+                         f"or 0 for the machine's own zero.")
     speed = a.speed
     f = round(speed * 60)
     # LAYER 1 CARRIES ITS OWN FEEDRATE. F is sticky in gcode, so it is enough to set it on each
@@ -523,7 +549,14 @@ def main():
     # needs is w1 * press / A_FIL. Stating it as a width rather than a flow multiplier means the
     # number in the header is the thing you can measure on the plate with callipers.
     w1 = a.w1 if a.w1 else bw * lh / press          # default reproduces the old behaviour exactly
-    e_mm_l1 = w1 * press / A_FIL
+    # LAYER 1'S RATE IS METERED AGAINST THE HEIGHT IT ACTUALLY LANDS AT, not against PRESS_HARD.
+    # Those are the same number only when the machine's Z zero is honest, and on this K2 it is not:
+    # it homes ~0.15mm high, so a file commanding Z0.100 lays its first layer into whatever gap
+    # --zoff leaves. Metering w1 * press / A_FIL into a 0.20 gap lands HALF the width the header
+    # claims, which is precisely the mismatch that made three ladders unreadable -- the material
+    # stayed still while the gap moved. h1_real is the gap the bead is actually laid into.
+    h1_real = a.h1 if a.h1 is not None else press
+    e_mm_l1 = w1 * h1_real / A_FIL
     flow = bw * lh * speed
     r8cap = machine.flow_cap(a.material, a.printer)
 
