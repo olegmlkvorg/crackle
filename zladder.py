@@ -87,10 +87,23 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
-    ap.add_argument("--offsets", default="0,-0.15,-0.20,-0.25,-0.30,-0.35",
-                    help="SET_GCODE_OFFSET Z per cell, in print order. Negative brings the nozzle "
-                         "CLOSER to the plate. Positive is refused — it lifts the nozzle further "
-                         "away, which is the defect this file exists to correct, not a test of it.")
+    ap.add_argument("--heights", default="0.05,0.10,0.15,0.20,0.25",
+                    help="FIRST-LAYER HEIGHT per cell, mm, in print order. This is the thing being "
+                         "swept and the material scales with it, so every cell lands the same "
+                         "--w1 width and is equally solid — the height is then the ONLY variable "
+                         "on the plate. Every commanded Z in the file stays at PRESS_HARD; "
+                         "the height is reached by SET_GCODE_OFFSET, so R1 and R2 read the ladder "
+                         "they were written for and the check that matters is not disabled.")
+    ap.add_argument("--zerr", type=float, default=0.15,
+                    help="how much HIGHER than it thinks this machine's Z zero sits, mm. Needed "
+                         "because a height has to be turned into an offset: offset = height - "
+                         "PRESS_HARD - zerr. MEASURED 2026-08-06 on the K2, off a printed plate "
+                         "rather than by feel: at offset -0.15 the first layer was clean and at "
+                         "-0.20 the nozzle was dragging through the material it had just laid, so "
+                         "the error is about 0.15 and it is NOT the 0.30 the paper test suggested "
+                         "— a spring-steel sheet flexes under a paper shim and absorbs exactly the "
+                         "difference. If the whole plate scrapes, this is too big; if the whole "
+                         "plate is round strands, too small.")
     ap.add_argument("--cell", type=float, default=40.0, help="cell side, mm")
     ap.add_argument("--w1", type=float, default=2.0,
                     help="target LANDED width of a layer-1 line, mm. Oleg's number. Stated as a "
@@ -124,31 +137,49 @@ def main():
             sys.exit(f"REFUSING TO EMIT: {nm} {v:g} is above the {machine.MAX_SPEED:g} mm/s north "
                      f"star, which is a ceiling. Slower is legitimate; faster is not.")
 
-    offs = [float(s) for s in a.offsets.split(",") if s.strip()]
-    # A POSITIVE OFFSET IS THE DEFECT, NOT A TEST OF IT: it lifts the nozzle further from the plate.
-    # Refused here because validate.py cannot see SET_GCODE_OFFSET at all — R1 would keep reading
-    # the commanded Z0.100 and passing a file printing 0.5 mm in the air, which is precisely the
-    # blindness that let three bucket starts through.
-    bad = [o for o in offs if o > 1e-9]
-    if bad:
-        sys.exit(f"REFUSING TO EMIT: --offsets contains positive value(s) {bad}. Positive lifts "
-                 f"the nozzle AWAY from the plate. Use negative to press harder, or 0 to print "
-                 f"the machine's own uncorrected zero as a control.")
-    if len(offs) > len(DIGIT) - 1:
-        sys.exit(f"REFUSING TO EMIT: {len(offs)} cells but only single digits are drawn.")
+    hts = [float(s) for s in a.heights.split(",") if s.strip()]
+    # A POSITIVE OFFSET IS THE DEFECT, NOT A CORRECTION FOR IT: it lifts the nozzle further from
+    # the plate. Refused here because validate.py cannot see SET_GCODE_OFFSET at all — R1 goes on
+    # reading the commanded Z and passing, which is exactly the blindness that let three bucket
+    # starts print half a millimetre in the air.
+    if any(h <= 0 for h in hts):
+        sys.exit(f"REFUSING TO EMIT: --heights contains a non-positive value {hts}.")
+    if len(hts) > len(DIGIT) - 1:
+        sys.exit(f"REFUSING TO EMIT: {len(hts)} cells but only single digits are drawn.")
+    # A HEIGHT BECOMES AN OFFSET. Commanded Z never moves off PRESS_HARD, so the only way to reach
+    # a different real height is to move where Z zero is: offset = height - PRESS_HARD - zerr.
+    offs = [round(h - press - a.zerr, 4) for h in hts]
+    # A POSITIVE OFFSET LIFTS THE NOZZLE ABOVE THE MACHINE'S OWN ZERO. That is the state the three
+    # cancelled bucket starts printed in, and validate.py is blind to it — R1 reads the commanded
+    # Z0.100 and passes whatever the plate is actually doing. Refused at the source instead.
+    hi = [(h, o) for h, o in zip(hts, offs) if o > 1e-9]
+    if hi:
+        sys.exit("REFUSING TO EMIT: these heights need a POSITIVE offset, which lifts the nozzle "
+                 "above the machine's own zero:\n  " +
+                 "\n  ".join(f"height {h:g} -> offset {o:+.3f}" for h, o in hi) +
+                 f"\nWith --zerr {a.zerr:g} the tallest reachable first layer is "
+                 f"{press + a.zerr:.3f}mm. Drop the taller cells, or raise --zerr if the plate "
+                 f"says the reference error really is bigger.")
 
     # THE TWO FAN REGIMES, NAMED. fan1 protects the weld to the plate; fan2 is whatever the bucket's
     # body runs at, because a second layer laid without the bucket's cooling is not the bucket's
     # second layer however exactly its flow matches.
     fan1 = machine.fan_first_layer(material)
     fan2 = max(0.0, min(1.0, a.fan))
-    e1 = a.w1 * press / A_FIL                       # layer 1: metered from the LANDED width
+    # LAYER 1'S RATE IS PER CELL, AND THAT IS THE WHOLE CORRECTION. The first version of this file
+    # metered every cell for a 0.10 gap and then printed cells at 0.15, 0.20, 0.25 — so the taller
+    # cells were UNDER-FILLED, landing 1.33mm, 1.00mm and 0.80mm on a 1.6mm pitch instead of the
+    # 2.00mm they were labelled with. Oleg, seeing it: "I dont know what you measuring with that 5
+    # numbers but first layer was getting thinner as thiner, why?" — because the material stayed
+    # still while the gap moved. Scaling e with the cell's own height makes every cell land the
+    # SAME width and be equally solid, which leaves the height as the only variable on the plate.
+    def e1_for(h):
+        return a.w1 * h / A_FIL
     e2 = bw * lh / A_FIL                            # layer 2: the bucket's own bead, unchanged
-    mm2_1, mm2_2 = a.w1 * press, bw * lh
-    z2 = press + lh
+    mm2_2 = bw * lh
     f1, f2 = round(a.speed1 * 60), round(a.speed * 60)
     travel_f = round(machine.MACHINE_MAX_SPEED * 60)
-    n = len(offs)
+    n = len(hts)
 
     # LAYOUT. Cells left to right with the digit above each. Stride is derived from the plate so a
     # wider --cell cannot silently overlap its neighbour — the one class of bug a per-move
@@ -167,7 +198,8 @@ def main():
     L = []
     w = L.append
 
-    w(f"; Z LADDER — {n} numbered cells, offsets {a.offsets}")
+    w(f"; Z LADDER — {n} numbered cells, real first-layer heights {a.heights}mm, reached by "
+      f"offset against a measured Z-zero error of {a.zerr:+.3f}mm")
     w(f"; PRINTER={a.printer}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={lh:g}")
@@ -186,23 +218,26 @@ def main():
       f"thickness IS its bead. A test that ran at a different flow would not be testing the bucket.")
     w(";")
     w("; ---------------- WHAT THIS IS ----------------")
-    w(f"; {n} cells of {a.cell:g}x{a.cell:g}mm, each printed TWICE:")
-    w(f";   layer 1  Z{press:.3f}  raster at {a.pitch:g}mm pitch, metered to land {a.w1:.2f}mm "
-      f"wide = {a.w1/a.pitch:.2f}x coverage, {a.speed1:g} mm/s")
-    w(f";   layer 2  Z{z2:.3f}  the SAME pitch turned 90 deg, at the bucket's own {bw:g}x{lh:g} "
-      f"bead, {a.speed:g} mm/s — bucket_latch's cross-latch floor, cell for cell")
-    w(f"; Same flow both layers: {mm2_1:.3f} vs {mm2_2:.3f} mm2/mm ({mm2_1/mm2_2:.3f}x). Layer 1 is "
-      f"not over-extruded — it is the same material in a {lh/press:.1f}x thinner gap, so it lands "
-      f"{lh/press:.1f}x wider.")
-    w("; Every cell commands the SAME two Z values. What differs is SET_GCODE_OFFSET, which moves")
-    w("; where Z zero IS — so the gap to the PLATE changes and the gap between layer 1 and layer 2")
-    w("; stays exactly one layer height, which is what the bucket does.")
+    w(f"; {n} cells of {a.cell:g}x{a.cell:g}mm, each printed TWICE. COMMANDED Z NEVER MOVES: every")
+    w(f"; cell writes Z{press:.3f} for layer 1 and Z{press+lh:.3f} for layer 2. What changes is")
+    w("; SET_GCODE_OFFSET, which moves where Z zero IS, so each cell's first layer lands at a")
+    w(f"; different REAL height -- and the material scales with that height, so all {n} land the")
+    w(f"; same {a.w1:.2f}mm wide and the height is the only thing that differs.")
+    w(f";   layer 1  {a.pitch:g}mm pitch, {a.w1/a.pitch:.2f}x coverage in EVERY cell, "
+      f"{a.speed1:g} mm/s, fan {fan1*100:.0f}%")
+    w(f";   layer 2  the SAME pitch turned 90 deg, one layer height above its own cell's layer 1, "
+      f"at the bucket's own {bw:g}x{lh:g} bead, {a.speed:g} mm/s, fan {fan2*100:.0f}%")
+    w(";            — bucket_latch's cross-latch floor, cell for cell")
     w(";")
-    for i, o in enumerate(offs):
-        tag = ("   <- the uncorrected machine; this is what the 3 cancelled bucket starts did"
-               if abs(o) < 1e-9 else
-               ("   <- where the paper says one sheet grips" if abs(o + 0.30) < 1e-9 else ""))
-        w(f";   cell {i+1}  offset {o:+.2f}{tag}")
+    for i, h in enumerate(hts):
+        w(f";   cell {i+1}  first layer {h:.3f}mm REAL, offset {offs[i]:+.3f}, {a.w1*h:.3f} mm2/mm "
+          f"({a.w1*h/mm2_2:.2f}x the body's bead)")
+    w(";")
+    w("; WHY THE MATERIAL SCALES AND THE FIRST VERSION OF THIS FILE WAS WRONG. It metered every")
+    w("; cell for a 0.10 gap and then printed cells at 0.15, 0.20 and 0.25, so the taller cells were")
+    w("; UNDER-FILLED — landing 1.33, 1.00 and 0.80mm on a 1.6mm pitch while being labelled 2.00.")
+    w("; Only the two cells that never printed would have been solid. A ladder whose rungs are not")
+    w("; comparable is not a measurement.")
     w(";")
     w("; MEASURED, NOT ASSUMED (2026-08-06, nozzle hot at bed centre, Oleg sliding paper):")
     w(";   commanded Z0.100 -> 3 sheets slid free, 4 touched.  commanded Z-0.200 -> one sheet.")
@@ -233,6 +268,10 @@ def main():
     # macro zeroes it for exactly this reason — so a file that only wrote it when non-zero would
     # inherit whatever the previous print or a hand command left behind, and cell 1 would silently
     # be testing someone else's number.
+    # THE ONE CORRECTION, EMITTED ALWAYS INCLUDING A ZERO. SET_GCODE_OFFSET survives a job -- the
+    # K2's own start_print macro zeroes it for exactly this reason -- so a file that only wrote it
+    # when non-zero would inherit whatever the last print or a hand command left behind, and cell 1
+    # would silently be testing someone else's number.
     w("SET_GCODE_OFFSET Z=0                 ; start from the machine's own zero, not last run's")
     w(f"M190 S{bed if a.printer == 'k2plus' else machine.bed_start(material, bed):.0f}")
     w(f"M140 S{bed:.0f}")
@@ -263,21 +302,24 @@ def main():
     # out at 0.34, so an obvious "lift one millimetre above the part" clears the part and ploughs
     # straight through the PRIME purge, which stands at Z2 by design so it cannot collar the tip.
     # validate.py caught exactly that: 39 travels at Z1.34 against material standing at Z2.0.
-    safe_z = max(z2, 2.0) + 1.0
+    safe_z = max(press + lh, 2.0) + 1.0
 
     def hop(tx, ty, note):
         w(f"G0 Z{safe_z:.3f} F1800   ; HOP lift, clear of the part AND the Z2 prime purge")
         w(f"G0 X{tx:.3f} Y{ty:.3f} F{travel_f}   ; HOP {note}")
 
-    for i, o in enumerate(offs):
+    for i, h in enumerate(hts):
         cx = x0 + i * stride
-        w(f"; ================ cell {i+1} of {n}: offset {o:+.3f} "
-          f"(real plate gap {press:.3f}{o:+.3f} + whatever Z zero is off by) ================")
-        # MOVE=1 applies the shift to the toolhead NOW rather than at the next Z word. The next word
-        # is a flat travel, so without MOVE the digit and part of the cell would print at the
-        # PREVIOUS cell's offset — a ladder one rung out of step with its own printed labels, which
-        # is worse than no labels at all.
-        w(f"SET_GCODE_OFFSET Z={o:.3f} MOVE=1")
+        z1, z2 = press, press + lh          # COMMANDED Z, identical in every cell
+        o = offs[i]
+        e1 = e1_for(h)
+        w(f"; ================ cell {i+1} of {n}: first layer {h:.3f}mm REAL "
+          f"(commanded Z{z1:.3f}, offset {o:+.3f}), {a.w1*h:.3f} mm2/mm ================")
+        # MOVE=1 applies the shift NOW rather than at the next Z word. The next word is a flat
+        # travel, so without it the digit and part of the cell would print at the PREVIOUS cell's
+        # offset — a ladder one rung out of step with its own printed labels, which is worse than
+        # no labels at all.
+        w(f"SET_GCODE_OFFSET Z={o:.3f} MOVE=1   ; real first layer {h:.3f}mm")
         # BACK TO THE LAYER-1 FAN FOR THIS CELL. The previous cell left it at the body value, and a
         # cell whose first layer was cooled while its neighbour's was not is not a ladder rung, it
         # is a second variable.
@@ -286,22 +328,23 @@ def main():
         # ---- the digit, at this cell's first-layer settings, so the number is itself a sample
         dx = cx + (a.cell - dw) / 2.0
         segs = DIGIT[str(i + 1)]
-        w(f"; ---- cell {i+1} digit '{i+1}': {len(segs)} segments at Z{press:.3f}, {a.speed1:g} mm/s")
+        w(f"; ---- cell {i+1} digit '{i+1}': {len(segs)} segments at Z{z1:.3f}, {a.speed1:g} mm/s")
         for k, s in enumerate(segs):
             u0, v0, u1, v1 = SEG[s]
             ax, ay = dx + u0 * dw, dy + v0 * dh
             bx_, by_ = dx + u1 * dw, dy + v1 * dh
             hop(ax, ay, f"to digit {i+1} segment '{s}'")
-            w(f"G1 F600 Z{press:.3f}")
+            w(f"G1 F600 Z{z1:.3f}")
             E += math.hypot(bx_ - ax, by_ - ay) * e1
             w(f"G1 F{f1} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; segment '{s}'")
 
         # ---- layer 1: raster along X, metered to land --w1 wide in the press gap
         n1 = int(a.cell / a.pitch) + 1
         hop(cx, y0, f"to cell {i+1} layer 1")
-        w(f"G1 F600 Z{press:.3f}")
-        w(f"; ---- cell {i+1} layer 1: {n1} passes at Z{press:.3f}, {a.pitch:g}mm pitch, "
-          f"lands {a.w1:.2f}mm wide, {a.speed1:g} mm/s")
+        w(f"G1 F600 Z{z1:.3f}")
+        w(f"; ---- cell {i+1} layer 1: {n1} passes at Z{z1:.3f}, {a.pitch:g}mm pitch, "
+          f"{a.w1*h:.3f} mm2/mm so it lands {a.w1:.2f}mm wide -- the SAME width as every other "
+          f"cell, which is what makes the heights comparable, {a.speed1:g} mm/s")
         ex, ey = cx, y0
         for p in range(n1):
             y = y0 + p * a.pitch
@@ -364,12 +407,15 @@ def main():
 
     open(out, "w").write("\n".join(L) + "\n")
     print(out)
-    print(f"  {n} cells, offsets {a.offsets}")
-    print(f"  layer 1  Z{press:.3f}  {a.w1:g}mm landed on {a.pitch:g}mm pitch = "
-          f"{a.w1/a.pitch:.2f}x coverage, {mm2_1:.3f} mm2/mm, {a.speed1:g} mm/s")
-    print(f"  layer 2  Z{z2:.3f}  bucket bead {bw:g}x{lh:g} PERPENDICULAR, "
-          f"{mm2_2:.3f} mm2/mm, {a.speed:g} mm/s")
-    print(f"  flow ratio layer1:layer2 = {mm2_1/mm2_2:.3f}x   ~{mins:.0f} min   {vol:.2f}cm3")
+    print(f"  {n} cells, first-layer heights {a.heights}")
+    print(f"  Z-zero error assumed {a.zerr:+.3f}mm (MEASURED off the plate, not by feel)")
+    print(f"  commanded Z is Z{press:.3f}/Z{press+lh:.3f} in EVERY cell; the offset does the work")
+    for i, h in enumerate(hts):
+        print(f"    cell {i+1}: first layer {h:.3f}mm REAL  offset {offs[i]:+.3f}  "
+              f"{a.w1*h:.3f} mm2/mm -> lands {a.w1:g}mm ({a.w1/a.pitch:.2f}x coverage)")
+    print(f"  layer 2 everywhere: bucket bead {bw:g}x{lh:g} PERPENDICULAR, {mm2_2:.3f} mm2/mm, "
+          f"{a.speed:g} mm/s, fan {fan2*100:.0f}%")
+    print(f"  ~{mins:.0f} min   {vol:.2f}cm3")
 
 
 if __name__ == "__main__":

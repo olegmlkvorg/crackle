@@ -382,6 +382,22 @@ def check(path):
     for _i, _l in enumerate(_lines):
         if '; BODY_START' in _l: _inbody = True
         _b = _l.split(';')[0].strip()
+        # G92 RESETS THE E AXIS, AND NOT HONOURING IT BLINDED THIS GUARD OVER LAYER 1.
+        # _pe2 is a running MAX of E, which is right for catching a retraction and wrong across a
+        # reset: every generator here primes to E20-E30 and then writes `G92 E0`, so _pe2 stayed at
+        # the prime's value while the body counted up from zero. Two things followed, and the second
+        # is the serious one. (1) The move where the body's cumulative E finally crossed the prime's
+        # value measured (E - prime) instead of (E - previous) and was reported STARVED -- a
+        # phantom, 40mm at 0.005mm2, on a file whose thinnest real move was 0.100. (2) EVERY body
+        # move before that crossing was skipped by the `_ne > _pe2` test and never checked at all:
+        # 108 of 532 moves in one file, and they are the FIRST 108 -- layer 1, the one layer whose
+        # adhesion this whole project turns on. A file whose entire body uses less filament than its
+        # prime was never checked by this guard at all and still printed a green tick.
+        if _b.startswith('G92'):
+            _mg = re.search(r'E([-\d.]+)', _b)
+            if _mg:
+                _pe2 = float(_mg.group(1))
+            continue
         if not _b.startswith(('G0', 'G1')): continue
         _mx = re.search(r'X([-\d.]+)', _b); _my = re.search(r'Y([-\d.]+)', _b)
         _me = re.search(r'E([\d.]+)', _b)
