@@ -13,18 +13,160 @@ streaming off disk. That isn't caution, it's corruption — Klipper reads the ru
 progressively, so rewriting it mid-print garbles the remainder. Everything else is now opt-out.
 
 Usage:
-  python3 push.py --list                      # what's on the network + what each is doing
-  python3 push.py out/crackle_A_*.gcode       # upload to the K2 Plus (default)
-  python3 push.py FILE --printer k1c          # or another machine
+  python3 tools/push.py --list                # what's on the network + what each is doing
+  python3 tools/push.py out/crackle_A_*.gcode # upload to the K2 Plus (default)
+  python3 tools/push.py FILE --printer k1c    # or another machine
 """
-import argparse, json, os, sys, time, urllib.request, uuid
+import argparse, concurrent.futures, json, os, socket, sys, time, uuid
+import urllib.error, urllib.parse, urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import machine
 
-PRINTERS = {            # discovered from Creality Print's own deviceInfo on this laptop
+# ADDRESSES MOVE. Every number below is a DHCP LEASE, not a fact — the K2 Plus took a new one on
+# 2026-08-03 and read as "offline" for a day until somebody scanned the subnet by hand. So this
+# table is only a first GUESS at where a machine was last seen. HOSTNAMES is what a machine IS,
+# and nothing is ever pushed to an address that has not just identified itself by hostname.
+PRINTERS = {            # last-known address; refreshed into CACHE as the leases move
     "k2plus": "192.168.3.140",
     "k1c":    "192.168.3.117",
     "f022":   "192.168.3.138",
 }
+HOSTNAMES = {           # Moonraker /printer/info `hostname` — the stable identity, confirmed on this fleet
+    "k2plus": "K2Plus-22A0",
+    "k1c":    "K1C-0517",
+    "f022":   "F022-EAE2",
+}
+
+CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".printers.json")
+PROBE_TIMEOUT = 1.5     # one address. A printer on the LAN answers in ~30ms, so this is generous.
+SWEEP_WORKERS = 64      # 253 addresses, 64 at a time, 1.5s each -> a whole-subnet sweep under 6s
+
+
+def _probe(ip, timeout=PROBE_TIMEOUT):
+    """What the Moonraker at `ip` calls itself.
+
+    Three distinct answers, and collapsing them is how "unreachable" became meaningless: a hostname
+    string (a printer, identified), "" (something IS listening on :7125 but would not name itself —
+    Klipper down, or not a printer at all), and None (nothing is there)."""
+    try:
+        with urllib.request.urlopen(f"http://{ip}:7125/printer/info", timeout=timeout) as r:
+            return json.load(r).get("result", {}).get("hostname") or ""
+    except urllib.error.HTTPError:
+        return ""
+    except Exception:
+        return None
+
+
+def _subnet():
+    """The /24 this laptop is on. Hardcoding 192.168.3 is the same bug as hardcoding .140."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))      # a UDP connect sends no packet; it only picks the route
+        return s.getsockname()[0].rsplit(".", 1)[0]
+    except Exception:
+        return PRINTERS["f022"].rsplit(".", 1)[0]
+    finally:
+        s.close()
+
+
+_SWEEP, _SWEEP_SECS = None, 0.0
+
+def _sweep():
+    """Every Moonraker on this /24 as {ip: hostname}. Swept concurrently, and once per process so
+    that resolving all three printers costs at most one sweep."""
+    global _SWEEP, _SWEEP_SECS
+    if _SWEEP is not None:
+        return _SWEEP
+    net, t0 = _subnet(), time.time()
+    addrs = [f"{net}.{n}" for n in range(2, 255)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=SWEEP_WORKERS) as ex:
+        found = {ip: h for ip, h in zip(addrs, ex.map(_probe, addrs)) if h is not None}
+    _SWEEP, _SWEEP_SECS = found, time.time() - t0
+    return _SWEEP
+
+
+def _cache_read():
+    try:
+        return json.load(open(CACHE))
+    except Exception:
+        return {}
+
+
+def _cache_write(key, ip, host):
+    c = _cache_read()
+    c[key] = {"ip": ip, "hostname": host, "seen": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        with open(CACHE + ".tmp", "w") as f:
+            json.dump(c, f, indent=2, sort_keys=True)
+        os.replace(CACHE + ".tmp", CACHE)
+    except Exception:
+        pass                # a cache that will not write costs one sweep, never a wrong push
+
+
+_RESOLVED = {}
+
+def resolve(key, quiet=False):
+    """Where `key` is RIGHT NOW, identified by HOSTNAME. None if it is not on the network.
+
+    Order: the cached address, then the seed address, then a sweep of the whole /24. The first two
+    are one request each, so the common case is instant and never sweeps; the sweep runs only when
+    the machine is not where it was.
+
+    An address is never accepted because it ANSWERED — only because the thing that answered calls
+    itself the right name. A DHCP pool that hands .140 to the K1C tomorrow must not be able to send
+    a K2 file there; that file runs 130mm past the K1C plate.
+
+    "Unreachable" is two different facts and this says which: MOVED (on the network, new lease) or
+    OFF (nothing anywhere answers to that name).
+    """
+    if key in _RESOLVED:
+        return _RESOLVED[key]
+    want = HOSTNAMES[key]
+    say = (lambda *a: None) if quiet else print
+    known, occupant = [], None
+    for ip in (_cache_read().get(key, {}).get("ip"), PRINTERS[key]):
+        if ip and ip not in known:
+            known.append(ip)
+    for ip in known:
+        host = _probe(ip)
+        if host and host.lower() == want.lower():
+            _RESOLVED[key] = ip
+            _cache_write(key, ip, host)
+            return ip
+        if host and occupant is None:
+            occupant = (ip, host)       # somebody else holds that lease now — say so, don't push
+    found = _sweep()
+    hit = [ip for ip, h in found.items() if h.lower() == want.lower()]
+    if not hit:
+        # A re-flashed or renamed machine keeps its model prefix. Accept that only when it is the
+        # ONLY such machine on the subnet, and say out loud that the table is now wrong.
+        pre = want.split("-")[0].lower() + "-"
+        near = [ip for ip, h in found.items() if h.lower().startswith(pre)]
+        if len(near) == 1:
+            say(f"{key}: hostname is {found[near[0]]!r}, not {want!r} — matched on the model prefix "
+                f"and it is the only such machine here. Fix HOSTNAMES[{key!r}] in push.py.")
+            hit = near
+    occ = (f" A different machine, {occupant[1]!r}, holds {occupant[0]} now." if occupant else "")
+    if hit:
+        ip = hit[0]
+        if ip in known:     # same address, different name: renamed or re-flashed, it never moved
+            say(f"{key}: RENAMED — still at {ip}, but it now calls itself {found[ip]!r}. Using {ip}.")
+        else:
+            say(f"{key}: MOVED — {want} is no longer at {known[0]}; it now answers at {ip} "
+                f"(new DHCP lease, found by sweeping {len(found)} live host(s) in "
+                f"{_SWEEP_SECS:.1f}s).{occ} Using {ip}.")
+        _RESOLVED[key] = ip
+        _cache_write(key, ip, found[ip])
+        return ip
+    live = ", ".join(f"{ip} {h or '(listening, unidentified)'}" for ip, h in sorted(found.items()))
+    say(f"{key}: OFF — no host on {_subnet()}.0/24 identifies as {want} (tried "
+        f"{' then '.join(known)}, then swept 253 addresses in {_SWEEP_SECS:.1f}s). It is powered "
+        f"off or on another network — it has NOT been re-addressed.{occ} "
+        f"Moonrakers answering right now: {live or 'none'}.")
+    _RESOLVED[key] = None
+    return None
+
 
 def api(ip, path, timeout=6):
     try:
@@ -195,23 +337,36 @@ if __name__ == "__main__":
     ap.add_argument("--force", action="store_true", help="upload even if that printer is mid-print")
     ap.add_argument("--no-start", action="store_true", help="upload only, do not start")
     ap.add_argument("--skip-validate", action="store_true", help="push a file that fails validate.py")
+    ap.add_argument("--refresh", action="store_true", help="ignore the address cache and re-resolve")
     a = ap.parse_args()
+    if a.refresh:
+        try: os.remove(CACHE)
+        except OSError: pass
     if a.list or not a.files:
-        for k, ip in PRINTERS.items():
+        for k in PRINTERS:
+            ip = resolve(k)
+            if not ip:
+                print(f"  {k:<7} {'-':<15} {HOSTNAMES[k]:<14} off")
+                continue
             st = status(ip)
             print(f"  {k:<7} {ip:<15} {info(ip):<14} {st['state']:<10} {st.get('pct',0):>3}%  {str(st.get('file'))[:44]}")
         sys.exit(0)
-    ip = PRINTERS[a.printer]
     # THE FILE MUST MATCH THE MACHINE. push knows both facts and never compared them: a K2 file
     # started on the K1C runs 130mm past the plate. The stamp is written by every generator.
+    # This runs BEFORE resolution and before any socket opens, so a wrong-machine push dies offline
+    # and no amount of address-hunting can route around it.
     for _f in a.files:
-        if remote_differs(ip, _f):
-            print(f"   note: {os.path.basename(_f)} on {a.printer} has a DIFFERENT command stamp "
-                  f"than the local file — overwriting with the local one.")
         _built = printer_of(_f)
         if _built and _built != a.printer:
             raise SystemExit(f"{os.path.basename(_f)} was built for {_built}, but you are sending "
                              f"it to {a.printer}. Regenerate with --printer {a.printer}.")
+    ip = resolve(a.printer)
+    if not ip:
+        sys.exit(1)
+    for _f in a.files:
+        if remote_differs(ip, _f):
+            print(f"   note: {os.path.basename(_f)} on {a.printer} has a DIFFERENT command stamp "
+                  f"than the local file — overwriting with the local one.")
     ok = all(upload(ip, f, a.force, a.skip_validate) for f in a.files)
     if ok and not a.no_start:
         if len(a.files) > 1:
