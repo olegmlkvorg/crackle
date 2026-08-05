@@ -521,6 +521,13 @@ def main():
       f"Declared, not silent.")
     w(f"; bead {bw:g} x {lh:g}   nozzle {P['nozzle']:g} ({P['nozzle_src']})")
     w(f"; towers D=" + "/".join(f"{t['d']:g}" for t in towers) + f" mm, pitch {a.pitch:g}mm")
+    # MACHINE-READABLE, so the collar step can be ASSERTED instead of described. The caption under
+    # the measurement table has always said the step "must be 2 x the declared radius bonus", and
+    # two towers already read 0.596 and 0.598 against a stated 0.600 -- a MUST written in prose,
+    # with nothing behind it, already disagreeing at the third decimal. A number a tool can parse is
+    # the difference between a claim and a check.
+    w(f"; RULER_BONUS={bonus_mm:.4f}")
+    w(f"; RULER_PERIOD={period:d}")
     w(f"; ladder: {P['ladder_src']}")
     w(f"; single-wall floor D_min = 2 x bead = {floor_d:.2f}mm — below it the toolpath circle is "
       f"narrower than the bead and the loop folds through its own centre")

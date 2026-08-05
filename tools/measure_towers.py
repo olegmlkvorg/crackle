@@ -395,6 +395,13 @@ def report(path, R):
     return check(path, R)
 
 
+
+def _bead_of(path):
+    """The bead width this file declares, or the historical default. One place, because the tower
+    diameter assert and the report table must not disagree about it."""
+    m = re.search(r'bead ([\d.]+)', open(path).read()[:4000])
+    return float(m.group(1)) if m else 0.42
+
 def check(path, R):
     """Compare what was MEASURED to what the file DECLARES. Disagreement = generator bug."""
     decl = R["decl"]
@@ -410,6 +417,61 @@ def check(path, R):
             fails.append(f"{name}: measured {measured:.5f} vs declared {declared:.5f}")
 
     print("\n  MEASURED vs DECLARED")
+
+    # THE DEFINING DIMENSION, ASSERTED. This tool is called measure_towers and until now it checked
+    # everything about the towers except what makes them towers: the coupon exists to vary ONE thing
+    # across its specimens -- slenderness -- and DIAMETER is that variable. A generator bug shifting
+    # every tower by a bead would leave Z step, flow, feedrates and tops all green, print ALL
+    # MEASUREMENTS AGREE, and silently relabel the whole experiment.
+    _txt = open(path).read()[:6000]
+    _md = re.search(r'^; towers D=([\d./]+)\s*mm', _txt, re.M)
+    _tow = R["towers"]
+    if not _md:
+        fails.append("towers D: the file declares no '; towers D=' stamp, so the ONE dimension this "
+                     "coupon varies cannot be checked at all")
+        print("  FAIL towers D: no '; towers D=' stamp in the header")
+    else:
+        _decl_d = [float(x) for x in _md.group(1).split('/')]
+        if len(_decl_d) != len(_tow):
+            fails.append(f"towers D: {len(_decl_d)} declared but {len(_tow)} found by clustering")
+            print(f"  FAIL towers D: {len(_decl_d)} declared, {len(_tow)} clustered")
+        else:
+            # measured OUTER diameter is the modal path extent plus one bead, which is what the
+            # generator's own d means -- the toolpath circle is inset by half a bead on each side.
+            _bad = []
+            for _i, (_t, _d) in enumerate(zip(sorted(_tow, key=lambda t: t["x"]), _decl_d)):
+                _meas = _t["path_d"] + _bead_of(path)
+                if abs(_meas - _d) > 0.05:
+                    _bad.append(f"#{_i+1} at x{_t['x']:.1f}: measured {_meas:.3f} "
+                                f"vs declared {_d:g}")
+            _meas_list = "/".join(f"{t['path_d'] + _bead_of(path):.3f}"
+                                  for t in sorted(_tow, key=lambda t: t["x"]))
+            _decl_list = "/".join(f"{d:g}" for d in _decl_d)
+            print(f"  {'OK  ' if not _bad else 'FAIL'} towers D: {len(_decl_d)} tower(s), "
+                  f"declared {_decl_list} vs measured {_meas_list} (tol 0.05)")
+            for _b in _bad:
+                print(f"       {_b}")
+                fails.append("towers D " + _b)
+
+    # THE COLLAR STEP, ASSERTED against the number the generator now stamps rather than against a
+    # sentence in a caption.
+    _mb = re.search(r'^; RULER_BONUS=([\d.]+)', _txt, re.M)
+    if _mb:
+        _want = 2.0 * float(_mb.group(1))
+        _sbad = []
+        for _t in sorted(_tow, key=lambda t: t["x"]):
+            _step = _t["collar_d"] - _t["path_d"]
+            if abs(_step - _want) > 0.02:
+                _sbad.append(f"x{_t['x']:.1f}: step {_step:.3f} vs 2 x bonus {_want:.3f}")
+        print(f"  {'OK  ' if not _sbad else 'FAIL'} collar step: 2 x RULER_BONUS = {_want:.3f} "
+              f"(tol 0.02)")
+        for _b in _sbad:
+            print(f"       {_b}")
+            fails.append("collar step " + _b)
+    else:
+        print("  NOTE collar step: no '; RULER_BONUS=' stamp, so the caption's MUST is still "
+              "only a sentence. Regenerate with a towercoupon.py that stamps it.")
+
     lh = float(decl["LAYER_H"]) if "LAYER_H" in decl else None
     speed = float(decl["SPEED"]) if "SPEED" in decl else None
     flow = float(decl["FLOW"]) if "FLOW" in decl else None
