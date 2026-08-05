@@ -245,13 +245,26 @@ def _validated(path):
     and started anyway, because push.py never asked. A check that depends on remembering to run it
     is not a check."""
     import subprocess, sys as _s
-    r = subprocess.run([_s.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                    "validate.py"), path],
-                       capture_output=True, text=True)
+    # validate.py lives at the REPO ROOT, not in tools/. This resolved to tools/validate.py until
+    # 2026-08-05, which does not exist -- so python exited non-zero on a missing file, every file
+    # was BLOCKED, and no file had ever passed this guard. It printed no reason either, because the
+    # reason loop looks for "FAIL" in stdout and a missing-file error goes to stderr with no such
+    # line. A guard that rejects everything reads exactly like a guard that works.
+    validator = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "validate.py")
+    if not os.path.exists(validator):
+        # NEVER silently skip. A validator this cannot find is an unknown, and an unknown must not
+        # become an all-clear -- that is the whole failure above, pointed the other way.
+        print(f"BLOCKED: cannot find the validator at {validator}, so {os.path.basename(path)} "
+              f"was NOT checked. This is not an all-clear.")
+        return False
+    r = subprocess.run([_s.executable, validator, path], capture_output=True, text=True)
     if r.returncode != 0:
         print(f"BLOCKED: {os.path.basename(path)} fails validation —")
-        for ln in r.stdout.split("\n"):
-            if "FAIL" in ln:
+        # stderr too: a crash in the validator carries its traceback there and would otherwise
+        # print a bare BLOCKED with no reason, which is what sent this session hunting.
+        for ln in (r.stdout + "\n" + r.stderr).split("\n"):
+            if "FAIL" in ln or "Error" in ln or "Traceback" in ln:
                 print("  " + ln.strip())
         print("  fix it, or pass --skip-validate if you know better than the validator.")
         return False
