@@ -398,6 +398,10 @@ def main():
     ap.add_argument("--speed", type=float, default=machine.DEFAULT_SPEED,
                     help=f"mm/s for every move. Default is the {machine.DEFAULT_SPEED:g} north "
                          f"star, which is a ceiling: slower is allowed, faster is refused.")
+    ap.add_argument("--w1", type=float, default=None,
+                    help="target LANDED WIDTH of layer 1 in mm. Default reproduces the body's "
+                         "own flow pressed into the gap. Oleg 2026-08-05: layer 1 needs full "
+                         "flow, a lot of filament glued to the base at max width.")
     ap.add_argument("--fan", type=float, default=None,
                     help="part-cooling fan fraction 0..1 for the BODY, overriding machine.FAN_MAX. "
                          "Layer 1 is unaffected and keeps its material's first-layer value, so the "
@@ -425,6 +429,12 @@ def main():
     # fan_first_layer(), which is the exact thing the 20% rule protects.
     fan = machine.FAN_MAX[a.material] if a.fan is None else max(0.0, min(1.0, a.fan))
     e_mm = bw * lh / A_FIL                          # filament mm per mm of path -- ONE value
+    # LAYER 1 GETS ITS OWN RATE, from a target LANDED WIDTH. See the emitter for his instruction.
+    # A bead pressed into a `press` gap occupies w1 x press of cross-section, so the filament it
+    # needs is w1 * press / A_FIL. Stating it as a width rather than a flow multiplier means the
+    # number in the header is the thing you can measure on the plate with callipers.
+    w1 = a.w1 if a.w1 else bw * lh / press          # default reproduces the old behaviour exactly
+    e_mm_l1 = w1 * press / A_FIL
     flow = bw * lh * speed
     r8cap = machine.flow_cap(a.material, a.printer)
 
@@ -550,6 +560,7 @@ def main():
     w(f"; SPEED={speed:.4f}")
     w(f"; FLOW={flow:.4f}")
     w(f"; PRESSED_LAYER1={press:g}")
+    w(f"; LAYER1_WIDTH={w1:.2f}mm landed ({w1/(bw*lh/press):.2f}x the body's own flow pressed into the {press:g} gap)")
     w(f"; PRINT_TEMP={temp}")
     w(f"; bead {bw:g}x{lh:g}   nozzle {machine.NOZZLE:g}   (Oleg 2026-08-04; Klipper's "
       f"nozzle_diameter field reads 0.4 on this machine and lies)")
@@ -715,7 +726,14 @@ def main():
                 w(f"G0 F{f} X{x:.3f} Y{y:.3f} ; HOP flat across open air, no lift (clears both "
                   f"tower walls)")
             else:
-                E += seg * e_mm
+                # LAYER 1 IS METERED SEPARATELY AND ON PURPOSE.
+                # Oleg, 2026-08-05, after the first ring printed: "first layer need to be full flow
+                # ( a lot of fillament glued to base max width". The body's e_mm carries the SAME
+                # volume into the 0.10 press gap, which lands about 1.97mm wide -- wide, but it is
+                # the body's flow flattened, not more of it. He is asking for more of it. So layer 1
+                # gets its own rate, derived from a TARGET LANDED WIDTH rather than from a
+                # multiplier nobody can check: e = w1 * press / A_FIL. The width is the adhesion.
+                E += seg * (e_mm_l1 if li == 0 else e_mm)
                 if kind == "B":
                     w(f"G1 X{x:.3f} Y{y:.3f} E{E:.5f} ; BRIDGE {seg:.2f}mm seam to seam, "
                       f"{bridge_air:.2f}mm unsupported air")
