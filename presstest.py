@@ -70,10 +70,26 @@ def main():
                          "height or the Z-ladder guard (correctly) refuses the file.")
     ap.add_argument("--length", type=float, default=200.0, help="ladder ribbon length")
     ap.add_argument("--probe-length", type=float, default=55.0, help="corner ribbon length")
+    ap.add_argument("--zoff", type=float, default=0.0,
+                    help="SET_GCODE_OFFSET Z applied immediately after G28, mm. NEGATIVE brings "
+                         "the nozzle CLOSER to the plate. Every commanded Z in the file stays "
+                         "exactly what it was, so R1 still reads a pressed 0.1 first layer — the "
+                         "difference is that it now IS one. MEASURED 2026-08-06: under a commanded "
+                         "Z0.100, three sheets of paper slid free and four touched, so the real "
+                         "gap was ~0.35mm and Z zero homes ~0.25mm high. Positive is refused.")
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
+
+    # A POSITIVE OFFSET IS THE BUG, NOT A TEST OF IT. It lifts the nozzle further from the plate,
+    # which is precisely the failure this file exists to measure, and it would also print ABOVE the
+    # press R1 guarantees while R1 kept reading Z0.100 and passing. Refused at the source rather
+    # than left to a validator that cannot see SET_GCODE_OFFSET at all.
+    if a.zoff > 1e-9:
+        sys.exit(f"REFUSING TO EMIT: --zoff {a.zoff:+g} is POSITIVE, which lifts the nozzle AWAY "
+                 f"from the plate. That is the defect being measured. Use a negative value to "
+                 f"press harder, or 0 to test the machine's own zero.")
 
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
     flow = machine.flow_cap(a.material, a.printer)
@@ -130,6 +146,14 @@ def main():
     # (validate.py R7). This is also the leading suspect for the press failure -- a tip carrying
     # oozed PLA measures the plate as HIGHER than it is -- so the ladder is what settles it.
     w("G28")
+    # THE OFFSET IS ALWAYS EMITTED, INCLUDING THE ZERO. SET_GCODE_OFFSET is machine state that
+    # survives a job — the K2's own start_print macro sets it to 0 for this reason — so a file that
+    # only writes it when non-zero would silently inherit whatever the previous print, or a hand
+    # command, left behind. That is a variable this test cannot afford to carry: the whole plate
+    # would shift by an unknown amount and every width on it would fit a wrong gap.
+    w(f"SET_GCODE_OFFSET Z={a.zoff:.3f}"
+      + ("                 ; the machine's own zero, uncorrected" if abs(a.zoff) < 1e-9 else
+         f"            ; nozzle {abs(a.zoff):.3f}mm CLOSER than the machine's zero"))
     w(f"M190 S{machine.bed_start(a.material, bed):.0f}")
     w(f"M140 S{bed:.0f}")
     w(f"M109 S{temp}")

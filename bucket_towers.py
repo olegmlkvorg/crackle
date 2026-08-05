@@ -448,6 +448,21 @@ def main():
     ap.add_argument("--speed", type=float, default=machine.DEFAULT_SPEED,
                     help=f"mm/s for every move. Default is the {machine.DEFAULT_SPEED:g} north "
                          f"star, which is a ceiling: slower is allowed, faster is refused.")
+    ap.add_argument("--speed1", type=float, default=25.0,
+                    help="mm/s for LAYER 1 only. Half the north star by default, because that is "
+                         "the speed zladder.py measured the winning offset at and a bucket run at "
+                         "a different first-layer speed would not inherit that result. Oleg "
+                         "2026-08-06: \"may he half the speed?\" — a slower bead has longer to wet "
+                         "the plate before it freezes.")
+    ap.add_argument("--zoff", type=float, default=0.0,
+                    help="SET_GCODE_OFFSET Z applied right after G28, mm. NEGATIVE brings the "
+                         "nozzle CLOSER to the plate. NOT a tuning knob — a correction for a Z "
+                         "reference that homes HIGH. Measured 2026-08-06: a commanded Z0.100 on "
+                         "this K2 left a gap four sheets of paper thick, and it took one sheet "
+                         "only at a commanded Z-0.200. Every commanded Z in the file is unchanged, "
+                         "so R1 still reads a pressed 0.1 first layer; the difference is that with "
+                         "this set it finally IS one. Take the value from the best-numbered cell "
+                         "on zladder.py's plate. Positive is refused.")
     ap.add_argument("--w1", type=float, default=None,
                     help="target LANDED WIDTH of layer 1 in mm. Default reproduces the body's "
                          "own flow pressed into the gap. Oleg 2026-08-05: layer 1 needs full "
@@ -474,12 +489,26 @@ def main():
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
     bw, lh = machine.SLICER_LINE_W, machine.SLICER_LAYER_H
     press = machine.PRESS_HARD                      # 0.10, R1
-    if a.speed > machine.MAX_SPEED + 1e-9:
-        raise SystemExit(f"REFUSING TO EMIT: --speed {a.speed:g} is above the "
-                         f"{machine.MAX_SPEED:g} mm/s north star, which is a ceiling. Slower is "
-                         f"allowed; faster is not.")
+    for _nm, _v in (("--speed", a.speed), ("--speed1", a.speed1)):
+        if _v > machine.MAX_SPEED + 1e-9:
+            raise SystemExit(f"REFUSING TO EMIT: {_nm} {_v:g} is above the "
+                             f"{machine.MAX_SPEED:g} mm/s north star, which is a ceiling. Slower "
+                             f"is allowed; faster is not.")
+    # A POSITIVE OFFSET IS THE DEFECT, NOT A CORRECTION FOR IT: it lifts the nozzle further from
+    # the plate. Refused here because validate.py cannot see SET_GCODE_OFFSET at all — R1 would go
+    # on reading the commanded Z0.100 and passing a file printing half a millimetre in the air,
+    # which is exactly the blindness that let three max-bucket starts through on 2026-08-05/06.
+    if a.zoff > 1e-9:
+        raise SystemExit(f"REFUSING TO EMIT: --zoff {a.zoff:+g} is POSITIVE, which lifts the "
+                         f"nozzle AWAY from the plate. Use a negative value to press harder, or 0 "
+                         f"for the machine's own zero.")
     speed = a.speed
     f = round(speed * 60)
+    # LAYER 1 CARRIES ITS OWN FEEDRATE. F is sticky in gcode, so it is enough to set it on each
+    # layer's standalone Z word — except in the gap-crossing branch, which writes its own F and
+    # would otherwise snap layer 1 back to the body speed halfway through the floor.
+    speed1 = a.speed1
+    f_l1 = round(speed1 * 60)
     temp = machine.MATERIAL_TEMP[a.material]        # READ, never typed: 210 for the pla loaded now
     bed = machine.bed_for(a.material, a.printer)
     # BODY FAN. machine.FAN_MAX is Oleg's 20% PLA ceiling (2026-07-26), right for a flat part where
@@ -637,6 +666,10 @@ def main():
     w(f"; MATERIAL={a.material}")
     w(f"; LAYER_H={lh:g}")
     w(f"; SPEED={speed:.4f}")
+    # R3 EXEMPTS A DECLARED LAYER-1 REGIME, AND ONLY A DECLARED ONE. Without this stamp a file
+    # running two feedrates fails constant-speed, which is correct: layer 1 is a different
+    # regime (pressed to the plate), not a wobble inside the body's one.
+    w(f"; SPEED_LAYER1={speed1:.4f}")
     w(f"; FLOW={flow:.4f}")
     w(f"; PRESSED_LAYER1={press:g}")
     w(f"; LAYER1_WIDTH={w1:.2f}mm landed ({w1/(bw*lh/press):.2f}x the body's own flow pressed into the {press:g} gap)")
@@ -776,6 +809,14 @@ def main():
     # THE NOZZLE PROBES AT FULL PRINT TEMPERATURE (R7). A cold nozzle is SHORTER, so Z zero records
     # high and the hot tip then grows down into the plate, turning a 0.10 gap into ~0.054.
     w("G28")
+    # ALWAYS EMITTED, INCLUDING THE ZERO. SET_GCODE_OFFSET is machine state that survives a job
+    # -- the K2's own start_print macro zeroes it for exactly this reason -- so a file that only
+    # wrote it when non-zero would inherit whatever the previous print or a hand command left
+    # behind. On a 10-hour part that is not a variable worth carrying.
+    w(f"SET_GCODE_OFFSET Z={a.zoff:.3f}"
+      + ("                 ; the machine's own zero, uncorrected" if abs(a.zoff) < 1e-9 else
+         f"            ; nozzle {abs(a.zoff):.3f}mm CLOSER than the machine's zero -- Z zero\n"
+         f";                                       homes HIGH on this machine, MEASURED 2026-08-06"))
     _fan_l1 = int(round(machine.fan_first_layer(a.material) * 255))
     w(f"M106 S{_fan_l1}                              ; layer 1 gets no fan — the weld to the plate "
       f"is the job" if _fan_l1 == 0 else
@@ -809,7 +850,9 @@ def main():
     for li, Lay in enumerate(layers):
         z = press + li * lh
         w(f"; ---- layer {li+1} of {n_lay}  z {z:.3f}  ({Lay['label']})")
-        w(f"G1 F{f} Z{z:.3f}")                   # STANDALONE Z -- this is R2's layer ladder
+        w(f"G1 F{f_l1 if li == 0 else f} Z{z:.3f}")   # STANDALONE Z -- this is R2's layer ladder,
+        # and it is also where layer 1's slower feedrate is set: F is sticky, so one word here
+        # carries the whole layer.
         if li == 1 and not fan_on:
             _src = (f"machine.FAN_MAX['{a.material}']" if a.fan is None
                     else f"--fan {a.fan:g} on the command line, OVERRIDING "
@@ -832,7 +875,8 @@ def main():
                     # and the web in the printed part IS that ooze. Metering it at a stated fraction
                     # of the body's own rate turns an uncontrolled leak into a strand we chose.
                     E += seg * e_mm * a.cross_flow
-                    w(f"G1 F{f} X{x:.3f} Y{y:.3f} E{E:.5f} ; THIN CROSS {a.cross_flow*100:.0f}% "
+                    w(f"G1 F{f_l1 if li == 0 else f} X{x:.3f} Y{y:.3f} E{E:.5f} ; THIN CROSS "
+                      f"{a.cross_flow*100:.0f}% "
                       f"-- deliberate strand, not ooze (clears both tower walls)")
                 else:
                     w(f"G0 F{f} X{x:.3f} Y{y:.3f} ; HOP flat across open air, no lift (clears both "
