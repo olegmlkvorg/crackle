@@ -71,9 +71,53 @@ the layer ladder R2 measures). If a tower splits, look at the inside seam first.
 
 THE FLOOR IS bucket_latch.py's, IMPORTED, NOT RE-WRITTEN
 ---------------------------------------------------------
---floor-layers (default 2) cross-latch layers: parallel chords at --floor-pitch, each layer's
+--floor-layers (default 5) cross-latch layers: parallel chords at --floor-pitch, each layer's
 lines perpendicular to the one below. That code is imported from bucket_latch.py and called, so
 there is exactly one cross-latch implementation in this repo and a fix to it fixes both parts.
+
+WHY THE FLOOR IS 5 LAYERS AT 2.5 mm AND NOT 5 LAYERS AT 5 mm — MEASURED, 2026-08-05
+------------------------------------------------------------------------------------
+Oleg, holding the first printed ring: "Base need to be way stronger, otherwise look like perfect
+piece." His own earlier instruction (2026-07-27) was "for the bucket. floor 5 layers. walls single
+layer. strict", and the 2 here was a later "couple cross latch layers" that he has now questioned.
+
+Raising the count alone WAS TRIED FIRST AND validate.py REFUSED IT:
+    FAIL  OVERHANG: 23% of layer Z0.58 has no material within one bead (0.82mm) of it on
+                    layer Z0.34 -- that fraction of the layer is being extruded onto nothing.
+The reason is the latch's own geometry and it is not cosmetic. Consecutive layers are
+PERPENDICULAR, so layer 3 touches layer 2 only where the two rasters cross -- once every
+--floor-pitch -- and flies over the (pitch - bead) between crossings. At 5.0 mm pitch that is
+4.18 mm of air under 84% of every rib. Stacking a sparse lattice higher does not build a floor; it
+builds ribs joined at points, and three more layers of it is three more layers of that.
+
+So the pitch comes down WITH the count, and the criterion is the support fraction bead/pitch:
+    pitch 5.0 -> 16% of each rib over material, 4.18 mm bridged   -> gate says 23% unsupported
+    pitch 2.5 -> 33% of each rib over material, 1.68 mm bridged   -> gate says  2%, passes
+    pitch 1.6 -> 51%, 0.78 mm bridged (under one bead: they touch) -> gate says 0%, passes
+2.5 is taken. 1.6 buys 2 percentage points of a gate reading for +7.1 m of extrusion and +3 min,
+and it also forces --w1 down to about the pitch or layer 1 over-extrudes ~1.9x -- which would undo
+"first layer needs full flow, a lot of filament glued to base max width" to chase a number that is
+already inside its threshold.
+
+WHAT THE SAME ONE CHANGE BUYS, all of it from the floor block being taller and denser:
+  * FLOOR THICKNESS 0.34 -> 1.06 mm. Plate bending stiffness goes as thickness CUBED, so that term
+    alone is ~30x. DERIVED from the layer ladder, not measured on a part -- and it is a lattice, so
+    the absolute figure is well under a solid plate of the same thickness.
+  * THE RIM RING, FREE. The gap crossings are extruded on every floor layer, so the 16-gon tying
+    the tower feet together grows from 0.34 mm tall to 1.06 mm: 0.28 -> 0.87 mm2 of hoop section,
+    3.1x, and hoop section is what resists a tower splaying outward at its foot.
+  * LAYER 1 BECOMES SOLID. At --w1 3.0 landed on a 2.5 mm pitch the first layer's own lines overlap
+    1.2x instead of covering 60% of the disc, so the thing welded to the plate is a disc and not a
+    grid -- and every layer above it lands on material.
+
+WHAT WAS CONSIDERED AND REJECTED, with the reason rather than a shrug:
+  * A SOLID PAD UNDER EACH TOWER FOOT. The tower is a hollow single-wall tube for all 40 mm of it,
+    so a 1 mm plug moves the hollow-to-solid transition up by 1 mm rather than removing it, and the
+    annulus the tube actually stands on is already solid (latch + rim + its own loop, every floor
+    layer). It also needs new path code threading in and out of 16 loops without breaking the
+    one-stroke invariant or the seam window. Cost and risk for no load path.
+  * A WIDER RIM BAND. Hoop section is width x height and both are linear, so the layer count already
+    bought the same 3.1x without a second knob or a second thing to keep true.
 
 Two things are different here, and both are about what the towers stand on:
   * the latch disc stops one bead inside the RIM POLYGON (the 13-gon joining the tower seams),
@@ -386,10 +430,16 @@ def main():
     ap.add_argument("--bridge-every", type=int, default=10,
                     help="lay bridges across every gap every N layers. 0 disables the periodic "
                          "bridges; the top layer is bridged either way (it is the rim).")
-    ap.add_argument("--floor-layers", type=int, default=2,
+    ap.add_argument("--floor-layers", type=int, default=5,
                     help="cross-latch floor layers (bucket_latch.py's lattice), each perpendicular "
-                         "to the one below. 0 stands the towers straight on the plate.")
-    ap.add_argument("--floor-pitch", type=float, default=5.0, help="mm between latch lines")
+                         "to the one below. 5 is Oleg's own 2026-07-27 'floor 5 layers ... strict', "
+                         "restored 2026-08-05 after he held the 2-layer part: 'Base need to be way "
+                         "stronger'. 0 stands the towers straight on the plate.")
+    ap.add_argument("--floor-pitch", type=float, default=2.5,
+                    help="mm between latch lines. MUST come down with --floor-layers and this is "
+                         "measured, not taste: layers are perpendicular, so a layer lands on the "
+                         "one below only where the rasters cross. At the old 5.0 a 5-layer floor "
+                         "was REFUSED by validate.py at 23%% unsupported; 2.5 reads 2%%.")
     ap.add_argument("--height", type=float, default=40.0, help="total height mm including floor")
     ap.add_argument("--seam-deg", type=float, default=None,
                     help="seam offset in degrees from each tower's OUTWARD radial. Default is the "
@@ -526,7 +576,16 @@ def main():
     trav_mm = sum(layer_mm(L)[1] for L in layers)
     floor_mm = sum(layer_mm(L)[0] for L in layers[:a.floor_layers])
     n_moves = sum(len(L["kind"]) for L in layers)
-    land_w1 = bw * lh / press                        # what layer 1 ACTUALLY lands at, pressed
+    # WHAT LAYER 1 ACTUALLY LANDS AT — which is w1, by construction, because e_mm_l1 was DERIVED
+    # from it (e = w1 * press / A_FIL). This used to be re-typed as bw*lh/press, the DEFAULT w1,
+    # so every run with --w1 printed a floor description of a first layer it was not laying: the
+    # part that printed tonight declares LAYER1_WIDTH=3.00 in one header line and "lands 1.97mm
+    # wide" in another. Same file, two widths, and the wrong one was the one the floor's coverage
+    # claim was computed from.
+    land_w1 = w1
+    # FLOOR THICKNESS OFF THE LAYER LADDER, not off the argument: layer 1 occupies the press gap
+    # and every layer after it one lh, which is the same z ladder the emitter writes.
+    floor_h = press + max(0, a.floor_layers - 1) * lh
     gap_chord = math.dist(seams[0], seams[1])
     bridge_air = air_span(seams[0], seams[1], centres[0], centres[1], r_t, bw)
     # WHEN THE SPAN IS PAST THE ONE THAT HAS HELD, SAY SO AND HAND OVER THE FIX. Searched by
@@ -600,15 +659,36 @@ def main():
       f"{r_h:.1f}mm disc — bucket_latch.py's")
     w(f";        lattice, imported and called, so there is one implementation of it in this repo.")
     if a.floor_layers >= 2:
-        w(f";        Layer 1 is pressed into the {press:g} gap carrying the full {bw*lh:.4f}mm2/mm, "
-          f"so it lands")
-        w(f";        {land_w1:.2f}mm wide and the second latch layer bridges "
-          f"{max(0.0, a.floor_pitch-land_w1):.2f}mm of clear air between landings.")
+        w(f";        {a.floor_layers} x {lh:g} on the {press:g} press = {floor_h:.2f}mm of floor. "
+          f"Plate bending goes as thickness")
+        w(f";        CUBED, so against the 2-layer {press+lh:.2f}mm that Oleg called too weak that "
+          f"term is ~{(floor_h/(press+lh))**3:.0f}x — DERIVED")
+        w(f";        from the layer ladder, not measured on a part, and it is a lattice so the real "
+          f"figure is under")
+        w(f";        a solid plate of the same thickness.")
+        w(f";        Layer 1 lands {land_w1:.2f}mm wide on a {a.floor_pitch:g}mm pitch = "
+          f"{land_w1/a.floor_pitch:.2f}x coverage, so what welds to the plate is")
+        w(f";        {'a SOLID disc' if land_w1 >= a.floor_pitch else 'a GRID'}"
+          f"{'' if land_w1 >= a.floor_pitch else f' leaving {a.floor_pitch-land_w1:.2f}mm of clear air between landings'}.")
+        w(f";        SUPPORT, the number that decides the pitch: layers are PERPENDICULAR, so a "
+          f"latch rib touches the")
+        w(f";        one below only where the rasters cross, every {a.floor_pitch:g}mm, and flies "
+          f"{max(0.0, a.floor_pitch-bw):.2f}mm between crossings")
+        w(f";        ({100*min(1.0, bw/a.floor_pitch):.0f}% of each rib over material). At 5.0mm "
+          f"pitch that was 4.18mm and validate.py REFUSED a")
+        w(f";        5-layer floor at 23% unsupported. Stacking a sparse lattice higher does not "
+          f"build a floor.")
     w(f"; RIM    on a FLOOR layer the gap crossings are EXTRUDED, so the floor ends as a solid "
       f"{n_tow}-gon tying")
     w(f";        every tower foot together. Each tower's first airborne layer lands on its own "
       f"footprint,")
     w(f";        not on a lattice with {a.floor_pitch:g}mm holes in it.")
+    w(f";        IT IS DRAWN ON EVERY FLOOR LAYER, so raising the floor to {a.floor_layers} raised "
+      f"the ring to {floor_h:.2f}mm tall:")
+    w(f";        {bw*floor_h:.2f}mm2 of hoop section against {bw*(press+lh):.2f}mm2 at 2 layers, "
+      f"{floor_h/(press+lh):.1f}x, and hoop section is")
+    w(f";        what resists a tower splaying outward at its foot. That is why the rim needed no "
+      f"second knob.")
     w("; ---------------- WHY NOTHING LIFTS ----------------")
     w(f"; Every tower's seam sits {seam_deg:.2f} deg from its own outward radial — inside the "
       f"{win_w:.2f} deg window")
@@ -636,7 +716,11 @@ def main():
     w(f"; rope. A ring cannot have a short layer — the head must walk the whole circle before it "
       f"returns.")
     w("; ---------------- WATCH ----------------")
-    w(f"; FIRST 2 MINUTES: the latch and the rim. If the rim {n_tow}-gon is not stuck flat and "
+    # THE FLOOR'S DURATION IS MEASURED OFF THE EMITTED PATH, not the "2 minutes" that was typed when
+    # the floor was 2 layers at 5mm. A watch instruction with a stale clock tells the operator to
+    # stop looking before the thing it names has finished printing.
+    w(f"; FIRST {floor_mm/speed/60.0:.0f} MINUTES ({a.floor_layers} floor layers, z up to "
+      f"{floor_h:.2f}): the latch and the rim. If the rim {n_tow}-gon is not stuck flat and "
       f"glossy, stop —")
     w(f";   it is the only thing holding {n_tow} x {a.height:g}mm of lever.")
     w(f"; THEN THE FIRST BRIDGE LAYER (z {press + (min(bridges) if bridges else 0)*lh:.2f}mm): "
@@ -748,8 +832,13 @@ def main():
     w("G0 F3000 X10 Y10")
 
     os.makedirs(a.out, exist_ok=True)
+    # THE FLOOR IS IN THE FILENAME, and it is here because leaving it out cost the printed record.
+    # Regenerating with a stronger base on 2026-08-05 silently OVERWROTE the gcode of the part that
+    # had already printed: same dia, same height, same tower count, same bridge interval, entirely
+    # different floor. Two different parts cannot share a name.
     fn = os.path.join(a.out, f"bucket_towers_{a.printer}_{a.material}_d{a.dia:g}_h{a.height:g}_"
-                             f"n{n_tow}t{a.tower_d:g}_b{a.bridge_every}.gcode")
+                             f"n{n_tow}t{a.tower_d:g}_b{a.bridge_every}_"
+                             f"f{a.floor_layers}x{a.floor_pitch:g}.gcode")
     open(fn, "w").write("\n".join(L) + "\n")
 
     print(fn)
@@ -760,6 +849,10 @@ def main():
           f"{top_z:.2f}mm, {len(bridges)} bridge layers at z "
           f"{', '.join(f'{press+li*lh:.1f}' for li in sorted(bridges)[:4])}"
           f"{' ...' if len(bridges) > 4 else ''}")
+    print(f"  floor {a.floor_layers} latch layers at {a.floor_pitch:g}mm pitch = {floor_h:.2f}mm "
+          f"thick; layer 1 lands {land_w1:.2f}mm on {a.floor_pitch:g}mm "
+          f"({land_w1/a.floor_pitch:.2f}x, {'SOLID' if land_w1 >= a.floor_pitch else 'grid'}); "
+          f"ribs cross every {a.floor_pitch:g}mm and bridge {max(0.0, a.floor_pitch-bw):.2f}mm")
     print(f"  bead {bw:g} x {lh:g} at {speed:g} mm/s -> {flow:.2f} mm3/s "
           f"({100*flow/r8cap:.1f}% of the {r8cap:g} figure, DECLARED)")
     print(f"  seam {seam_deg:.2f} deg from the outward radial, inside a {win_w:.2f} deg window "
@@ -790,8 +883,16 @@ def main():
           f"row of six towers, which is a")
     print("     different part with different air around it, and that figure is a lower bound "
           "rather than a limit.")
-    print("   - anything about what it can CARRY. The wall has 13 gaps in it and the floor is a")
-    print("     lattice: this is a bucket in SHAPE. It is not a vessel and it will not hold liquid.")
+    # n_tow, NOT 13. This line was typed when --pitch 25 gave 13 towers and it kept saying 13 while
+    # the part on the plate had 16 gaps in its wall — a constant in a report about the artifact.
+    print(f"   - anything about what it can CARRY. The wall has {n_tow} gaps in it and the floor is "
+          f"a")
+    print(f"     {floor_h:.2f}mm lattice: this is a bucket in SHAPE. It is not a vessel and it will "
+          f"not hold liquid.")
+    print(f"   - whether {floor_h:.2f}mm of floor is what he means by 'way stronger'. The thickness "
+          f"and the rim's hoop")
+    print("     section are derived from the layer ladder; nothing about the new base has been "
+          "printed or handled.")
     print("   - how much it strings. There is no retraction in this project and the head crosses "
           "open air")
     print(f"     {n_tow} times on {n_lay-a.floor_layers-len(bridges)} layers. The coupon's web was "
