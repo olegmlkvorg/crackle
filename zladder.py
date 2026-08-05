@@ -66,7 +66,7 @@ import argparse, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
 
-A_FIL = math.pi * (1.75 / 2) ** 2       # 2.40528 mm2 of 1.75mm filament
+A_FIL = machine.A_FIL       # 2.40528 mm2 of 1.75mm filament
 
 # SEVEN SEGMENTS, in a unit box: (x0,y0)-(x1,y1) as fractions of the digit's width and height.
 SEG = {
@@ -174,7 +174,7 @@ def main():
     # still while the gap moved. Scaling e with the cell's own height makes every cell land the
     # SAME width and be equally solid, which leaves the height as the only variable on the plate.
     def e1_for(h):
-        return a.w1 * h / A_FIL
+        return machine.layer1_rate(a.w1, h)   # ONE implementation, machine.py
     e2 = bw * lh / A_FIL                            # layer 2: the bucket's own bead, unchanged
     mm2_2 = bw * lh
     f1, f2 = round(a.speed1 * 60), round(a.speed * 60)

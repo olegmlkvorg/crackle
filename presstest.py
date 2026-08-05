@@ -57,7 +57,7 @@ import argparse, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
 
-A_FIL = math.pi * (1.75 / 2) ** 2      # 2.40528 mm2 of filament
+A_FIL = machine.A_FIL      # 2.40528 mm2 of filament
 
 
 def main():
@@ -76,7 +76,7 @@ def main():
                          "exactly what it was, so R1 still reads a pressed 0.1 first layer — the "
                          "difference is that it now IS one. MEASURED 2026-08-06: under a commanded "
                          "Z0.100, three sheets of paper slid free and four touched, so the real "
-                         "gap was ~0.35mm and Z zero homes ~0.25mm high. Positive is refused.")
+                         "gap read ~0.35mm. That paper figure was WRONG BY 2x -- a printed ladder later put the error at ~0.15mm, because the spring-steel sheet flexes under the shim. Positive is refused.")
     ap.add_argument("--printer", default="k2plus", choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--out", default="out")
@@ -99,7 +99,7 @@ def main():
 
     mm2 = a.width * a.layer                       # 2.00 mm2 per mm of path
     speed = machine.speed_for_flow(flow, a.width, a.layer)   # the wide-bead crawl: 30 mm/s
-    e_mm = mm2 / A_FIL                            # 0.8315 mm of filament per mm of path
+    e_mm = machine.layer1_rate(a.width, a.layer)   # ONE implementation, machine.py
     rungs = [float(s) for s in a.rungs.split(",") if s.strip()]
 
     # PITCH MATCHED TO EXPECTED SPREAD, so every ribbon keeps ~20mm of clean plate beside it and

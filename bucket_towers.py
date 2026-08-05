@@ -149,7 +149,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
 import bucket_latch as latch          # the cross-latch floor — imported, not copied
 
-A_FIL = math.pi * (1.75 / 2) ** 2     # mm2 of 1.75mm filament; computed once
+A_FIL = machine.A_FIL     # mm2 of 1.75mm filament; computed once
 SEG = 1.0                             # mm target segment on every curve and every rib
 MIN_TOWER_SEGS = 24                   # never fewer than this per tower loop, however small it is
 SEAM_SCAN_DEG = 0.25                  # resolution of the seam-window measurement
@@ -520,7 +520,10 @@ def main():
                              f"one of them is silently ignored. Pass --h1 alone.")
         if a.h1 <= 0:
             raise SystemExit(f"REFUSING TO EMIT: --h1 {a.h1:g} is not a positive height.")
-        a.zoff = round(a.h1 - press - a.zerr, 4)
+        try:
+            a.zoff = machine.zoff_for(a.h1, a.zerr)
+        except ValueError as _e:
+            raise SystemExit(f"REFUSING TO EMIT: {_e}")
     if a.zoff > 1e-9:
         _why = (f" With --zerr {a.zerr:g} the tallest first layer reachable without lifting the "
                 f"nozzle above the machine's own zero is {press + a.zerr:.3f}mm."
@@ -556,7 +559,7 @@ def main():
     # claims, which is precisely the mismatch that made three ladders unreadable -- the material
     # stayed still while the gap moved. h1_real is the gap the bead is actually laid into.
     h1_real = a.h1 if a.h1 is not None else press
-    e_mm_l1 = w1 * h1_real / A_FIL
+    e_mm_l1 = machine.layer1_rate(w1, h1_real)   # ONE implementation, machine.py
     flow = bw * lh * speed
     r8cap = machine.flow_cap(a.material, a.printer)
 

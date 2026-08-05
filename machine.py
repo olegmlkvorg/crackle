@@ -3,6 +3,7 @@
 Oleg, 2026-07-25: "you should be extruding at max speed we know nozzle can flow. that is not
 negotiable. 100% of the time."
 """
+import math
 MAX_FLOW = 81.2        # mm3/s, MEASURED (spiral ramp, first skips at 81.2 @ r137, 0.8 nozzle, PLA 230C)
 FLOW = 55.0            # CAPPED for BOTH machines (Oleg, 2026-07-25). K2 cracks ~74 and
                        # then still cracking at 70. Oleg heard the extruder
@@ -607,6 +608,56 @@ K1C_MEASURED = 59.6     # where it began skipping, 1.0 nozzle, 210C
 # the plate. It wants a well-trammed bed and a clean sheet; if the first pass sounds like scratching
 # rather than squashing, raise it rather than continue.
 PRESS_HARD = 0.10       # absolute Z for anything anchoring to the plate
+
+# ---------------------------------------------------------------- layer 1 ---
+# ONE PLACE FOR THE FIRST-LAYER ARITHMETIC, because three copies of it had already drifted.
+# On 2026-08-06 bucket_towers.py metered layer 1 as `w1 * PRESS_HARD / A_FIL` while zladder.py
+# metered it as `w1 * the height the bead actually lands at`. Those agree only when the machine's
+# Z zero is honest, and on this K2 it is not -- it homes about 0.15mm high. So the bucket would have
+# laid HALF the width its own header claimed at any first-layer height except 0.10, silently, with
+# every gate green: validate.py R1 reads the COMMANDED Z and cannot see where the plate is.
+#
+# A_FIL lived as a local in five generators as well. A constant copied is a constant that can be
+# edited in one place and stay wrong in four.
+A_FIL = math.pi * (1.75 / 2) ** 2       # 2.40528 mm2 of 1.75mm filament
+
+
+def layer1_rate(landed_w, gap):
+    """Filament mm per mm of path to land a bead `landed_w` wide in a `gap` high.
+
+    STATED AS A LANDED WIDTH, NOT A FLOW MULTIPLIER, and that is deliberate: a width is the thing
+    measurable on the plate with callipers, while a multiplier can only be checked by rerunning the
+    arithmetic that produced it, which is not an independent check.
+
+    `gap` IS THE HEIGHT THE BEAD LANDS AT, not PRESS_HARD. Passing PRESS_HARD when the real gap is
+    something else is exactly the bug this function exists to stop being written a fourth time."""
+    if gap <= 0:
+        raise ValueError(f"layer1_rate: gap {gap!r} is not a positive height")
+    if landed_w <= 0:
+        raise ValueError(f"layer1_rate: landed_w {landed_w!r} is not a positive width")
+    return landed_w * gap / A_FIL
+
+
+def zoff_for(h1, zerr):
+    """The SET_GCODE_OFFSET Z that makes a commanded PRESS_HARD first layer land `h1` high.
+
+    `zerr` is how much HIGHER than it reports this machine's Z zero sits. MEASURED on the K2 on
+    2026-08-06 off a printed ladder, not by feel: at offset -0.15 the first layer was clean and at
+    -0.20 the nozzle dragged through material it had just laid. A paper feeler said 0.30 and was
+    wrong by 2x, because the spring-steel sheet flexes under the shim and absorbs the very quantity
+    being measured.
+
+    A POSITIVE RESULT IS REFUSED HERE rather than left to a caller. Positive lifts the nozzle AWAY
+    from the plate, which is the defect, not a test of it -- and no gate downstream can catch it,
+    because validate.py sees only the commanded Z."""
+    off = round(h1 - PRESS_HARD - zerr, 4)
+    if off > 1e-9:
+        raise ValueError(
+            f"zoff_for({h1:g}, {zerr:g}) = {off:+g}, which is POSITIVE and would lift the nozzle "
+            f"above the machine's own zero. With this zerr the tallest reachable first layer is "
+            f"{PRESS_HARD + zerr:.3f}mm.")
+    return off
+
 # ---------------------------------------------------------------------------------------------
 
 
