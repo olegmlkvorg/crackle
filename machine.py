@@ -169,7 +169,12 @@ MAX_MOVES_PER_SEC = 300.0  # above this Klipper drains its lookahead and the hea
 # another filament's temperature under another filament's flow clamp. Update this when a spool
 # changes; nothing else should carry a material or printer name as a literal default.
 LOADED = {
-    "k2plus": "pla-matte",   # matte gray, 230C, loaded 2026-07-27
+    # CORRECTED 2026-08-05 by Oleg at the machine: "material is 210c btw pla". This had read
+    # pla-matte since 07-27, so every K2 file since then commanded 230C on filament rated 210 --
+    # twenty degrees hot. Not cosmetic on a slender tower: hotter plastic stays fluid longer, which
+    # is simultaneously the coiling failure and the stringing artifact. Both the six-tower coupon
+    # and the collapsed single tower were printed at 230 on this wrong entry.
+    "k2plus": "pla",         # 210C, corrected at the machine 2026-08-05
     "k1c":    "pla-matte",   # Oleg swapped 2026-07-27 late: "k1 is now wth pla 230 filament"
     "f022":   "pla",
 }

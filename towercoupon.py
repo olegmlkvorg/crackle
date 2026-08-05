@@ -406,16 +406,55 @@ def main():
     ap.add_argument("--ruler-bonus", type=float, default=None,
                     help="collar radius step mm; 0 disables the ruler (re-run control if every "
                          "tower breaks at a collar)")
+    ap.add_argument("--bridge-every", type=int, default=0,
+                    help="lay an unsupported horizontal span between adjacent towers every N "
+                         "layers; 0 disables. Oleg's spec was 10.")
+    ap.add_argument("--fan", type=float, default=None,
+                    help="part-cooling fan fraction 0..1 for the BODY, overriding "
+                         "machine.FAN_MAX. Layer 1 is unaffected and stays at its material's "
+                         "first-layer value, so the plate weld is never chilled.")
+    ap.add_argument("--beads", default=None,
+                    help="override the ladder with an explicit list of WHOLE-BEAD counts, e.g. "
+                         "--beads 10 for a single tower, or --beads 6,8,10. Diameter is always "
+                         "count x bead, so the derived floor and the ruler gates still apply.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
     P = PROFILES[a.printer]
+    # WHY AN OVERRIDE EXISTS AT ALL. Oleg, 2026-08-05, after breaking the first plate by hand:
+    # "6 is unbreakable 5 somewhat breakable 4 easy breakable". The strength threshold sits BETWEEN
+    # two rungs of the fixed ladder, and a six-tower plate cannot answer where -- it can only
+    # re-print the rungs it already has.
+    #
+    # It also fixes a defect the first plate revealed. Printing six towers layer-synchronised means
+    # the head travels between them on EVERY layer, and each travel drags a molten string. The
+    # result is a horizontal web that BRACES the towers to each other, so a thin tower that appears
+    # to stand may be held up by its neighbours: "Because of this horizontal nets I think even
+    # thinnest one was standing fine". One tower has no neighbour and no inter-tower travel, so the
+    # result means what it claims.
+    #
+    # The counts stay WHOLE BEADS rather than millimetres on purpose. A single-wall tower's
+    # diameter is only meaningful as a multiple of the bead it is drawn with, and the derived floor
+    # (2 x bead) is expressed the same way -- so an override in mm could silently ask for a wall
+    # the nozzle cannot draw. check_ladder() below still runs on whatever this produces.
+    if a.beads:
+        try:
+            _counts = [int(s) for s in str(a.beads).replace("/", ",").split(",") if s.strip()]
+        except ValueError:
+            ap.error(f"--beads takes whole numbers, got {a.beads!r}")
+        if not _counts:
+            ap.error("--beads was given with no counts")
+        P = dict(P)
+        P["diameters"] = [round(k * P["bead_w"], 3) for k in _counts]
+        P["ladder_src"] = ("EXPLICIT --beads " + "/".join(str(k) for k in _counts)
+                           + "; the fixed ladder was overridden on the command line")
     # MATERIAL FOLLOWS THE PRINTER. A part generated for one machine with another machine's
     # filament is silently wrong: right geometry, wrong temperature, wrong flow ceiling.
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
     if a.height is None:
         a.height = P["height"]
     bonus_mm = P["ruler_bonus"] if a.ruler_bonus is None else a.ruler_bonus
+    bridge_every = max(0, a.bridge_every)
     bw, lh = P["bead_w"], P["layer_h"]
     period = P["ruler_period"]
     minor, major_every, major = P["ruler_minor"], P["ruler_major_every"], P["ruler_major"]
@@ -427,7 +466,14 @@ def main():
     f = round(speed * 60)                         # F3000
     temp = machine.MATERIAL_TEMP[a.material]
     bed = machine.bed_for(a.material, a.printer)
-    fan = machine.FAN_MAX[a.material]
+    # BODY FAN. machine.FAN_MAX is Oleg's own 20% ceiling for PLA (2026-07-26, "fans for printing
+    # pla should be only on 20% at most"), written because high fan chills the bead as it lands and
+    # costs ADHESION. A tall slender tower is the opposite regime: it failed on 2026-08-05 by never
+    # freezing at all, coiling into a rope. So the override exists, and it is per-run rather than a
+    # change to FAN_MAX, because that ceiling is right for every flat part and must not move.
+    # Layer 1 is deliberately NOT affected -- fan_first_layer() still governs the plate weld, which
+    # is the exact thing the 20% rule protects.
+    fan = machine.FAN_MAX[a.material] if a.fan is None else max(0.0, min(1.0, a.fan))
     press = machine.PRESS_HARD                    # 0.10, R1
     e_mm = bw * lh / A_FIL                        # filament mm per mm of path — ONE value, all file
     flow = bw * lh * speed
@@ -576,9 +622,13 @@ def main():
         w(f"; ---- layer {li+1} of {n_lay}  z {z:.3f}")
         w(f"G1 F{f} Z{z:.3f}")                  # STANDALONE Z — this is R2's layer ladder
         if li == 1 and not fan_on:
-            w(f"M106 S{int(round(fan*255))}     ; {fan*100:.0f}% — machine.FAN_MAX['{a.material}']")
+            _fan_src = (f"machine.FAN_MAX['{a.material}']" if a.fan is None
+                        else f"--fan {a.fan:g} on the command line, OVERRIDING "
+                             f"machine.FAN_MAX['{a.material}']={machine.FAN_MAX[a.material]:g}")
+            w(f"M106 S{int(round(fan*255))}     ; {fan*100:.0f}% — {_fan_src}")
             fan_on = True
         bonus = collar_bonus(li, bonus_mm, period, minor, major_every, major)
+        ppx0 = ppy0 = None          # where the PREVIOUS tower's loop ended, for a bridge to start
         for j, ti in enumerate(order):
             t = towers[ti]
             seam = li % t["n"]
@@ -592,9 +642,33 @@ def main():
                 head = foot_spiral(t["cx"], t["cy"], r_out, r, step, seam, t["n"])
             path = head + pts if head else pts
             sx, sy = path[0]
+            # ON A BRIDGE LAYER THE MOVE BETWEEN TOWERS IS EXTRUDED, NOT TRAVELLED.
+            # Oleg, 2026-08-05: "connect them with bridges. 10layers ... to next". The first
+            # version of this laid bridges as a SEPARATE pass -- hop up, fly to the anchor, drop
+            # back down, extrude across -- and validate.py refused the file twice over: "Z descends
+            # to 36.1 below layer floor 36.5, nozzle would plough the part" and "96 TRAVEL move(s)
+            # inside the object, prints must be one continuous extrusion". Both were right.
+            #
+            # The fix is not a smaller hop, it is deleting the visit. A bridge IS the inter-tower
+            # move, so on a bridge layer the G0 becomes a G1 and the span leaves the wall it is
+            # welded to rather than landing on top of it. No lift, no descent, no travel, and the
+            # extrusion stays continuous exactly as the rule requires.
+            _bridging = (bridge_every and j > 0 and li >= FOOT_LAYERS
+                         and (li % bridge_every) == 0)
             if j == 0:
                 # continuing on the tower this layer's predecessor ended on: one segment of travel
                 w(f"G0 F{f} X{sx:.3f} Y{sy:.3f} ; HOP seam-walk")
+            elif _bridging:
+                _span = math.hypot(sx - ppx0, sy - ppy0)
+                # TWO LENGTHS, AND ONLY ONE OF THEM IS THE ACHIEVEMENT. _span is seam to seam, so
+                # its two ends land ON the towers. The UNSUPPORTED part is just the air between
+                # the walls. The first version of this line reported _span as "unsupported", which
+                # overstates it by a full tower diameter -- 25.00 against a real 16.80 here. Both
+                # are printed now, because a gcode comment is where a number goes to be believed.
+                _air = max(0.0, _span - (towers[order[j - 1]]["d"] + t["d"]) / 2.0)
+                E += _span * e_mm
+                w(f"G1 X{sx:.3f} Y{sy:.3f} E{E:.5f} ; BRIDGE seam-to-seam {_span:.2f}mm, "
+                  f"unsupported air {_air:.2f}mm, to tower D{t['d']:g}")
             else:
                 w(f"G0 F{f} Z{z+HOP_Z:.3f} ; HOP lift clear")
                 w(f"G0 F{f} X{sx:.3f} Y{sy:.3f} ; HOP to tower D{t['d']:g}")
@@ -607,6 +681,7 @@ def main():
                 E += seg * e_mm
                 w(f"G1 X{x:.3f} Y{y:.3f} E{E:.5f}")
                 ppx, ppy = x, y
+            ppx0, ppy0 = ppx, ppy   # this tower's end is the next bridge's start
 
     w("M107")
     w("M104 S0")
