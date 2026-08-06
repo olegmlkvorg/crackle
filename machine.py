@@ -693,6 +693,105 @@ PROVEN_LAYER1 = {
     "k2plus": [(0.10, 2.00)],
 }
 
+
+# ------------------------------------------------------------------- the send ledger ---
+# THE VALUES THAT HAVE BEEN ON A PLATE AND WERE ACCEPTED, per machine, per send-critical parameter.
+# Read by send.py, which is the only path to a printer. PROVEN_LAYER1 above is the first entry of
+# this same ledger and is NOT copied here -- send.py asks it directly, because a second copy of the
+# proven first layer is exactly the drift that put three different first-layer models in three
+# files.
+#
+# WHY THIS EXISTS SEPARATELY FROM validate.py. Every gate written on 2026-08-06 -- R9, R10, R4e,
+# and bucket_towers' own gates 5 and 6 -- runs on a FILE, and all of them passed on files that then
+# failed on the plate. Nothing guarded the DECISION TO PRINT: uploading and pressing start was done
+# by hand, on judgement, by an actor that is not deterministic. Four plates were lost through that
+# gap in one day. This is the ledger that gap is checked against.
+#
+# EVERY ENTRY IS A THING SOMEBODY WATCHED COME OFF A PLATE, NOT A RANGE AND NOT A DEFAULT. Ranges
+# are why the stencil coupon printed: 1.00x coverage sits between 0.80 and 1.25, so any threshold
+# would have passed it, and it had already been written down as likely to pinhole before it ran.
+# A LIST REFUSES WHAT SITS BETWEEN TWO PROVEN POINTS. That is the whole difference.
+#
+# HOW AN ENTRY GETS ADDED, and it is deliberately not a function call: a human edits this file.
+# send.py has NO code path that writes here. The actor that decides to print must not also hold the
+# key to the set it is checked against. `send.py accept` will PRINT a ready-made entry, but only
+# for a file that appears in send-log.jsonl as an actual live send, only with `--by oleg`, and only
+# on the word `held` -- never on `completed`. COMPLETION IS NOT ACCEPTANCE: the 100mm bucket
+# completed for weeks against a wrong Z zero, masked by 1.52x layer-1 flow, and was read as a
+# baseline.
+#
+# THE LAST FIELD OF EVERY TUPLE IS PROVENANCE and it is not decoration. A value with no story is a
+# value nobody can argue with, which is how an invented constant labelled MEASURED survived here
+# once already.
+SEND_LEDGER_VERSION = "2026-08-06.1"
+
+# MOTION-ONLY MINUTES PAST WHICH A COUPON-BACKED VALUE IS NO LONGER ENOUGH ON ITS OWN.
+# A coupon proves a value AT COUPON SCALE. The stencil ran 5.7 min and the bore gauge 20.5 min;
+# nothing that has ever been read off a plate here took more than half an hour. 90 is ~4x the
+# longest coupon anybody has actually read, and it is the point where a failure costs an evening
+# rather than a coffee -- which is a different decision from "is this value sound", and so it is
+# asked separately. It is deliberately NOT scaled from the estimate's error: validate's number is
+# motion-only and the K2 adds a roughly FIXED calibration block (+2.2 min on the stencil, +11.0 on
+# the gauge, +1.37 h on the 320 bucket), so a ratio taken from a bucket must never be applied to a
+# coupon. Overridable with `--allow-long --why`, which is RECORDED in send-log.jsonl.
+LONG_PRINT_MIN = 90.0
+
+PROVEN_SEND = {
+    "k2plus": {
+        # (landed w1 mm, floor line pitch mm, provenance) -- THE PAIR, because coverage is what
+        # welds and either number alone is meaningless. Raising --w1 2 -> 3 -> 5 never closed a
+        # gappy floor because the nozzle never travels into the gap; the pitch decides that.
+        "coverage": [
+            (2.00, 1.6, "320x300 bucket printed complete and STOOD 2026-08-06; 1.25x, a solid "
+                        "sheet. Measured off its own moves: 196 gaps at 1.6."),
+            (2.00, 2.5, "the 341.5mm bamboo bucket's base at a 2.5 grid was accepted by Oleg "
+                        "2026-08-06; 0.80x, an open latch grid on purpose. 132 gaps at 2.5."),
+            # 1.00x IS ABSENT ON PURPOSE. It is the stencil coupon, it is the theoretical minimum
+            # with zero margin, it was recorded hours before the run as likely to pinhole, and it
+            # came off as separated strands. It sits BETWEEN two proven points, which is exactly
+            # what a list of watched pairs is for and a threshold is not.
+        ],
+        # (purge mm of filament, lead-in fat multiplier or None, stationary mm, provenance)
+        "prime": [
+            (12.0, None, 12.0,
+             "the 320x300 bucket that stood, measured: `G1 E12 F300 ; PRIME stationary purge`. "
+             "IT IS THE ONLY PRIME WITH AN ACCEPTED PRINT BEHIND IT, AND validate.py R10 NOW "
+             "REFUSES IT -- Oleg photographed the clump it leaves on the nozzle and then that "
+             "clump dropped into a printing plate. So this entry is unreachable, and saying so is "
+             "the point: the 5.0mm moving purge that replaced it in 32 generators has NO accepted "
+             "print, and a file carrying it must cite the coupon that ran it."),
+        ],
+        # (max tip-to-tip span of one unsubdivided BRIDGE / THIN CROSS move, mm, provenance)
+        "span_mm": [
+            (17.85, "every one of the 7000 bridge and 62776 thin-cross moves in the 320x300 bucket "
+                    "that stood measures exactly 17.85mm. Its own header calls 16.8mm of that "
+                    "UNSUPPORTED AIR, and 16.8 is the only span this project has ever seen hold."),
+        ],
+        # (mm/s on '; THIN CROSS' moves, provenance)
+        "cross_mms": [
+            (50.0, "the north star. A crossing at the body's own speed is not a second regime at "
+                   "all, and everything this project has printed has laid material at 50."),
+            (100.0, "VERIFIED LIVE on the machine: 44 samples at 100 mm/s against 65 at 50, taken "
+                    "at z=3.22. Sampling the floor instead would have proved the opposite."),
+        ],
+        # (nozzle C, bed C, provenance)
+        "temps": [
+            (210, 60, "Oleg at the machine 2026-08-05: 'material is 210c btw pla'. machine.LOADED "
+                      "had read pla-matte since 07-27, so every K2 file commanded 230 on filament "
+                      "rated 210 and a tower coiled into a rope; at 210 the identical geometry "
+                      "stood. Bed 60 is the mid of the filament's rated 50-70 and the minimum that "
+                      "works -- 0 gave 'spagetti, no adhesion' twice and 120 held PLA above Tg so "
+                      "a pressed floor never set."),
+        ],
+        # (bore mm, provenance) -- EMPTY, AND THAT IS THE HONEST STATE.
+        # The bore was guessed twice, printed twice and wrong twice before a gauge was printed, and
+        # the gauge's answer has not been read back into this file. SHRINK=0.25 was calibrated on a
+        # 4mm METAL hole, silently sized every 6.35mm BAMBOO bore, and condemned ~21 printed parts.
+        # An empty list means every file that declares a bore must cite a gauge. That is correct.
+        "fit_bore": [],
+    },
+}
+
 # ---------------------------------------------------------------------------------------------
 
 
