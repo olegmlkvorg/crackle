@@ -13,7 +13,7 @@ isolated C-channel stubs. It would have measured a bore and told him NOTHING abo
 actually asked about, because a stub standing alone has no net crossing to merge with and no floor
 to bond to. So this is a SECTOR OF THE ACTUAL PART: posts on the real 341.5 mm pitch circle at the
 real angular pitch, with the real crossings between them, the real merge laps, and a floor under
-them -- just 5 posts of the 28 instead of the whole ring.
+them -- just 4 posts of the 28 instead of the whole ring, three times over.
 
 THE GEOMETRY IS IMPORTED, NOT REIMPLEMENTED. tower_arc, merge_arc, seam_point, arc_segs, dip and
 air_span all come from bucket_towers.py, and the per-layer ordering below is the same one build()
@@ -49,9 +49,16 @@ stick that is --bore-allow near 0.90. What was shipped and rejected was 0.40. So
 WHY THESE WRAP ANGLES. mouth = (bore + bead) * sin((360 - wrap)/2) - bead. The rejected part ran
 --wrap-deg 220, which models a 3.310 mm mouth against a 3.175 mm stick: THE OPENING WAS WIDER THAN
 THE STICK BEFORE ANY SHRINK, so nothing could ever have clicked past it. 210 and 240 are no better
-at the old bore. Over THIS bore sweep the three wraps here put the fifteen modelled mouths on both
+at the old bore. Over THIS bore sweep the three wraps here put the twelve modelled mouths on both
 sides of the stick with the interesting zone densely covered, and gate 4 refuses any wrap set that
 does not.
+
+WHY 18 mm AND NOT 25-30. The plate had to come in near 20 minutes and at 25 mm it ran 27. Height is
+the right thing to spend, because it is the one dimension none of the three questions is a function
+of: the merge is per crossing and there are already 71 crossing rows in every gap, the base join is
+a floor property that does not care how tall the wall is, and 18 mm is still about six stick
+diameters -- long enough that a marginal grip cannot pass by the stick levering out sideways. Cutting
+a wrap angle instead would have cost the click answer, which is the one that has now failed twice.
 
 Usage:  python3 bucket_sector.py
         python3 validate.py out/bucket_sector_*.gcode
@@ -96,15 +103,25 @@ def glyph_segments(label, cx, y_bot, gw, gh, gap):
     return [((p[0] + dx, p[1]), (q[0] + dx, q[1])) for p, q in out]
 
 
-def strip_path(cx, cy, a_lo, a_hi, r_in, r_out, pitch, parity, seg):
-    """The floor lattice under one sector, as ONE continuous serpentine.
+def strip_path(cx, cy, a_lo, a_hi, r_in, r_out, pitch, parity, end_lo, seg):
+    """The floor under one sector: a cross-hatch fill, then a CONTINUOUS OUTER RIM at r_out.
 
     TWO DIRECTIONS ON ALTERNATE LAYERS, which is what bucket_latch does and what makes a floor a
     latch instead of a stack of parallel lines: parity 0 lays radial ribs, parity 1 lays concentric
     arcs, so consecutive layers cross at right angles and lock.
 
-    The OUTER radius is not a free choice -- see fit_floor() -- it stops exactly where the bamboo's
-    volume begins, so the lattice touches the post feet and nothing reaches into the bore."""
+    THE OUTER RIM IS ON EVERY LAYER AND IT IS NOT DECORATION. Two things need it. First, it is the
+    line the WALL BONDS TO -- r_out is derived to sit exactly where the bamboo's volume begins, so
+    the rim's bead touches the post feet without anything reaching into the bore, and question 2 of
+    this coupon is whether that join holds. Second, it is what the path leaves the floor ALONG:
+    without it, the run from the fill's last point to the first post's tip was a free chord that
+    could pass outside the lattice entirely, and it did. Measured on the first emit: 5.6% of the
+    third floor layer landed up to 6.20mm from anything underneath, against a 2.5mm fill pitch.
+    That is not a lattice gap, it is a line in the air, and no amount of squinting at the fill
+    would have found it -- the number that gave it away was the DISTANCE, not the percentage.
+
+    `end_lo` finishes the rim at whichever end of the sector the head is about to walk from, so the
+    connector onto the first post is short and lands on material in both directions of travel."""
     pts = []
     if parity == 0:
         n = max(2, int(math.ceil((a_hi - a_lo) * r_out / pitch)) + 1)
@@ -119,9 +136,14 @@ def strip_path(cx, cy, a_lo, a_hi, r_in, r_out, pitch, parity, seg):
                 pts.append(p0)
             pts += latch.line_pts(p0, p1, seg)
     else:
-        n = max(2, int(math.ceil((r_out - r_in) / pitch)) + 1)
+        # STOPS ONE PITCH SHORT OF r_out, because the rim below already lays that circle. Running
+        # the fill out to r_out as well would put a second full bead on top of the first the whole
+        # way round -- 135mm of double extrusion on the one line that has to stay dimensional,
+        # since it is the line the post feet weld to.
+        r_top = r_out - pitch
+        n = max(2, int(math.ceil((r_top - r_in) / pitch)) + 1)
         for i in range(n):
-            r = r_in + (r_out - r_in) * i / (n - 1)
+            r = r_in + (r_top - r_in) * i / max(1, n - 1)
             b0, b1 = (a_lo, a_hi) if i % 2 == 0 else (a_hi, a_lo)
             p0 = (cx + r * math.cos(b0), cy + r * math.sin(b0))
             if pts:
@@ -129,6 +151,11 @@ def strip_path(cx, cy, a_lo, a_hi, r_in, r_out, pitch, parity, seg):
             else:
                 pts.append(p0)
             pts += latch.arc_to(cx, cy, r, b0, b1, seg)
+    a_end = a_lo if end_lo else a_hi
+    a_start = a_hi if end_lo else a_lo
+    rim0 = (cx + r_out * math.cos(a_start), cy + r_out * math.sin(a_start))
+    pts += latch.line_pts(pts[-1], rim0, seg)
+    pts += latch.arc_to(cx, cy, r_out, a_start, a_end, seg)
     return pts
 
 
@@ -154,9 +181,11 @@ def build_sector(cx, cy, posts, stagger, half_rad, n_lay, n_floor, bridges,
         cross = "B" if li in bridges else ("R" if is_floor else "T")
         pts, kind = [], []
         if is_floor:
-            sp = strip(li % 2)
-            if not fwd:
-                sp = sp[::-1]
+            # end_lo = fwd: post 0 sits at the LOWEST angle of the sector, so a forward walk leaves
+            # the floor at the low end and a reversed one at the high end. The strip is rebuilt for
+            # the direction rather than reversed point-for-point -- reversing it would put the rim
+            # at the START and hand the connector the same free chord this rim exists to remove.
+            sp = strip(li % 2, fwd)
             pts = list(sp)
             kind = ["E"] * (len(sp) - 1)
         for idx, k in enumerate(order):
@@ -219,11 +248,11 @@ def main():
                     help="how many posts the FULL ring has. Only the angular pitch is taken from "
                          "it; the coupon prints --n-post of them. 28 on a 341.5 circle is the real "
                          "part's spacing, 38.3mm between post centres.")
-    ap.add_argument("--n-post", type=int, default=5, help="posts per sector")
+    ap.add_argument("--n-post", type=int, default=4, help="posts per sector")
     ap.add_argument("--stick-d", type=float, default=3.175,
                     help="1/8 inch NOMINAL, and nominal is what is not trusted: the 6.35mm nominal "
                          "bamboo in the empirics guide measured 5.8-6.2 and varied per stick.")
-    ap.add_argument("--bore-allow", default="0.55,0.675,0.80,0.925,1.05",
+    ap.add_argument("--bore-allow", default="0.55,0.72,0.88,1.05",
                     help="mm added to --stick-d for the MODELLED bore, ONE PER POST. The rejected "
                          "part ran 0.40, which is below the bottom of this sweep on purpose; the "
                          "one bamboo fit that ever worked scales to about 0.90, which is inside it.")
@@ -231,10 +260,10 @@ def main():
                     help="one SECTOR per wrap angle. 220 (what was rejected), 210 and 240-at-the-"
                          "old-bore all model a mouth WIDER than the stick, so they could not click "
                          "at all; these three straddle it over this bore sweep.")
-    ap.add_argument("--height", type=float, default=25.0, help="total height incl. floor, mm")
+    ap.add_argument("--height", type=float, default=18.0, help="total height incl. floor, mm")
     ap.add_argument("--floor-layers", type=int, default=5, help="the real part's default")
     ap.add_argument("--floor-pitch", type=float, default=2.5, help="the real part's default")
-    ap.add_argument("--floor-w", type=float, default=16.0,
+    ap.add_argument("--floor-w", type=float, default=10.0,
                     help="radial width of the floor strip under each sector, mm. Not the real "
                          "bucket's 165mm floor disc, and the header says so: it is as much base as "
                          "is needed to test whether the WALL BONDS TO IT.")
@@ -442,8 +471,8 @@ def main():
         sec["posts_bed"] = posts
         cxr, cyr = ox, oy                      # ring centre, translated
         sec["ring"] = (cxr, cyr)
-        strip = lambda parity, _c=(cxr, cyr): strip_path(_c[0], _c[1], a_lo, a_hi, r_in, r_out,
-                                                         a.floor_pitch, parity, bt.SEG)
+        strip = lambda parity, end_lo, _c=(cxr, cyr): strip_path(
+            _c[0], _c[1], a_lo, a_hi, r_in, r_out, a.floor_pitch, parity, end_lo, bt.SEG)
         sec["layers"] = build_sector(cxr, cyr, posts, sec["stagger"], sec["half_rad"],
                                      n_lay, a.floor_layers, bridges, a.merge_mm, strip, True)
         sec["layers_rev"] = build_sector(cxr, cyr, posts, sec["stagger"], sec["half_rad"],
@@ -597,7 +626,21 @@ def main():
     cur = [px + 52.0, py + 12.0, press]
 
     def hop(tx, ty, z, note):
+        """Lift, cross, come back down -- unless the head is ALREADY THERE.
+
+        The alternating walk means each sector's layer ends exactly where its next layer begins, so
+        one of the two hops per layer has zero length. Emitting it anyway would lift the nozzle a
+        millimetre off the wall and set it back down on the same point 70 times for nothing, which
+        is a seam artefact bought with print time. The Z word is still emitted so the layer ladder
+        R2 reads is never missing a rung."""
         nonlocal d_trav, d_z
+        if math.hypot(tx - cur[0], ty - cur[1]) < 1e-6 and abs(cur[2] - z) < 1e-6:
+            return
+        if math.hypot(tx - cur[0], ty - cur[1]) < 1e-6:
+            w(f"G1 F1800 Z{z:.3f}")
+            d_z += abs(cur[2] - z)
+            cur[2] = z
+            return
         sz = max(z + 1.0, 3.0)
         w(f"G0 Z{sz:.3f} F1800   ; HOP lift, clear of the wall AND the Z2 prime purge")
         w(f"G0 X{tx:.3f} Y{ty:.3f} F{travel_f}   ; HOP {note}")
@@ -711,7 +754,17 @@ def main():
               f"{'DROPS IN' if d > 0.05 else 'marginal' if d > -0.15 else 'should CLICK'}")
     print(f"  modelled mouths {mn:.3f}..{mx:.3f} — straddle the {a.stick_d:g} stick by more than "
           f"the {SHRINK_SUSPECT:g} the shrink is unknown by, both ways")
+    # WHERE THE TIME GOES, BROKEN OUT. A single total sends you tuning the wrong knob: the first
+    # three attempts at this coupon cut post height, which is not where the minutes are. The
+    # crossings are, because they are the real part's 38.3mm post pitch and they are most of every
+    # layer -- so the honest levers are the number of SECTORS and the number of POSTS, not height.
+    t_l1 = d_l1 / a.speed1 / 60.0
+    t_body = d_body / a.speed / 60.0
+    t_trav = d_trav / machine.MACHINE_MAX_SPEED / 60.0
+    t_z = d_z / 30.0 / 60.0
     print(f"  ~{mins:.1f} min of motion, {vol:.2f}cm3")
+    print(f"    layer 1 {t_l1:>5.1f} min   wall+floor {t_body:>5.1f} min   "
+          f"hops {t_trav:>4.1f} min   Z {t_z:>4.1f} min")
 
 
 if __name__ == "__main__":

@@ -1714,6 +1714,106 @@ def check(path):
                       f"offset {_zoff:+.3f} + {_zerr:.3f} machine error), which is "
                       f"{_l1machine}'s proven weld.")
 
+    # R10  NOTHING MAY EXTRUDE BEFORE THE FIRST BEAD IS PINNED.
+    # Oleg, 2026-08-06, with a photograph of a clump of filament hanging off the nozzle and a second
+    # of that clump dropped into the middle of a printing plate: "The beginning of extrusion need to
+    # be improved generically" / "Also few unacceptable artifacts".
+    #
+    # WHAT IS REFUSED: any commanded move that advances the extruder while the head does not travel
+    # in XY. In this project that is always an opening purge, and it was in 32 generators in seven
+    # copy-pasted shapes, dumping 12 to 25mm of filament (28.9 to 60.1 mm3) in one spot.
+    #
+    # WHY IT IS PHYSICS AND NOT TASTE. The only force that separates molten PLA from a 210C brass
+    # face is tension at the far end of the strand, and the only thing that can supply it is a bead
+    # already welded to the plate. A stationary purge has no far end: 4 seconds at F300 makes ~96mm
+    # of 0.8mm strand whose entire weight is 0.56 mN, against wetted adhesion to hot brass over
+    # several mm2. It cannot fall off. It coils onto the tip, and the head carries it into the part.
+    #
+    # WHY THE RULE IS NOT "ABOVE THE PLATE". Only 17 of the 270 files in out/ purged in free air at
+    # Z2; the other 132 purged AT the 0.10 press gap, and this repo had already recorded THAT as the
+    # worse failure (presstest.py:168 -- "a 20mm stationary purge (~48mm3) at the 0.1 press gap
+    # cannot spread -- it balloons up and COLLARS the nozzle"). Both ends of the Z axis have now
+    # been tried and both have been photographed failing, so keying on Z would pass the majority of
+    # the defect. The clause is stationary extrusion at ANY Z, and machine.prime() is the third
+    # option nobody had tried: move from the first millimetre and let the plate strip the nozzle.
+    #
+    # PARSING NOTES, each of which is a way this check could have gone blind:
+    #   'G1 E20 F300' carries no X and no Y at all, so "did it move" cannot be read off the line --
+    #     the last commanded position has to be carried forward and compared.
+    #   M82/M83 and 'G92 E' both appear in these files, so the E DELTA has to be tracked and not the
+    #     E word. validate.py:988 already records a guard that went blind for the G92 reason.
+    #   the purge is usually the FIRST extruding move in the file, so there IS no previous position.
+    #     That case is treated as STATIONARY, not as unknown: a machine that has not been told where
+    #     it is does not move when it is told only to extrude.
+    #   PRIME-tagged lines are NOT exempt here, unlike in R1-R4. The prime is the thing this rule is
+    #     about; exempting it would leave the rule with nothing to judge.
+    #
+    # WHAT THIS RULE DELIBERATELY DOES NOT REFUSE, so that its name stays true to what it measures:
+    # a stationary extrusion AFTER material is down. 20-odd solid.py files step Z while extruding at
+    # the spiral seam ("G1 F900 Z0.500 E7.57208"), which is XY-stationary but happens with the bead
+    # welded to the plate and the previous layer holding the far end -- the strand HAS a far end, so
+    # the mechanism this rule is about does not apply. Those are counted and printed, never hidden,
+    # because they are a real question; they are just not THIS question, and a rule that refuses
+    # them would be refusing 20 files for a reason that is not the defect in the photograph.
+    _r10 = []
+    _x10 = _y10 = None
+    _z10 = 0.0
+    _e10 = 0.0
+    _abs10 = True
+    _pinned10 = False
+    for _i, _l in enumerate(open(path), 1):
+        _c = _l.split(';')[0].strip()
+        if _c.startswith('M82'):
+            _abs10 = True
+            continue
+        if _c.startswith('M83'):
+            _abs10 = False
+            continue
+        if _c.startswith('G92'):
+            _m = re.search(r'\bE(-?\d+(?:\.\d+)?)', _c)
+            if _m:
+                _e10 = float(_m.group(1))
+            continue
+        if _c[:2] not in ('G0', 'G1'):
+            continue
+        _mx = re.search(r'\bX(-?\d+(?:\.\d+)?)', _c)
+        _my = re.search(r'\bY(-?\d+(?:\.\d+)?)', _c)
+        _mz = re.search(r'\bZ(-?\d+(?:\.\d+)?)', _c)
+        _nx = float(_mx.group(1)) if _mx else _x10
+        _ny = float(_my.group(1)) if _my else _y10
+        _nz = float(_mz.group(1)) if _mz else _z10
+        _me = re.search(r'\bE(-?\d+(?:\.\d+)?)', _c)
+        _d = (math.dist((_x10, _y10), (_nx, _ny))
+              if None not in (_x10, _y10, _nx, _ny) else 0.0)
+        if _me:
+            _v = float(_me.group(1))
+            _de = _v - _e10 if _abs10 else _v
+            _e10 = _v if _abs10 else _e10 + _v
+            if _de > 1e-4:
+                if _d < 0.01:
+                    _r10.append((_i, _de, _nz, _pinned10))
+                else:
+                    _pinned10 = True
+        _x10, _y10, _z10 = _nx, _ny, _nz
+    _unpinned = [r for r in _r10 if not r[3]]
+    _seam10 = [r for r in _r10 if r[3]]
+    if _unpinned:
+        _i0, _de0, _z0, _ = _unpinned[0]
+        problems.append(
+            f"R10 line {_i0}: {_de0:.2f}mm of filament ({_de0 * machine.A_FIL:.1f} mm3) extruded "
+            f"with the head STANDING STILL at Z{_z0:.3f}, before anything has been pinned to the "
+            f"plate ({len(_unpinned)} such move(s) in this file). Nothing holds that extrudate, so "
+            f"it coils onto the nozzle and rides into the part -- the artifact Oleg photographed on "
+            f"2026-08-06. Extrudate must be pinned from the first millimetre it leaves the nozzle: "
+            f"call machine.prime(), which moves from the first millimetre at the part's own "
+            f"first-layer rate. Files generated before 2026-08-06 fail this legitimately -- "
+            f"regenerate them rather than weakening the rule.")
+    if _seam10:
+        print(f"  R10 {len(_seam10)} stationary extrusion(s) AFTER material is down (first at line "
+              f"{_seam10[0][0]}, {_seam10[0][1]:.3f}mm) — not refused: the previous bead holds the "
+              f"far end of the strand, which is the mechanism R10 is about. Counted so it is not "
+              f"invisible.")
+
     # R2  NOTHING MAY FLOAT ABOVE THE FIRST LAYER.
     # Oleg's follow-on to the press rule: "play Z smartly we dont want floaring lines". Rebasing
     # layer 1 to 0.1 without rebasing the ladder left a 1.10mm step onto layer 2 -- extruding into

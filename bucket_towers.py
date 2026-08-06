@@ -1661,23 +1661,28 @@ def main():
         w(f"{_ln}                  ; no chamber draft on a ring of cantilevers")
     w("G92 E0")
 
-    # prime, off the part, in the front-left corner. The part's footprint starts at
-    # X{cx-r_ring-a.tower_d/2:.0f}, so this corner is clear of it.
-    px, py = 20.0, 16.0
-    w(f"G1 F{f} Z{press:.3f}")
-    w(f"G0 F{f} X{px:.3f} Y{py:.3f}")
-    w("G1 E12 F300                          ; PRIME stationary purge")
-    w(f"G1 F{f} X{px+40:.3f} Y{py:.3f} E20  ; PRIME line")
-    w(f"G0 F{f} X{px+52:.3f} Y{py+12:.3f}   ; PRIME break-off wipe")
-    w("G92 E0")
+    sx0, sy0 = layers[0]["pts"][0]
+    # ONE SHARED PRIME, machine.prime(). This was six hand-written lines whose second one extruded
+    # 12mm of filament (28.9 mm3) with the head STANDING STILL at the 0.10 press gap, in a corner
+    # the comment above them ASSERTED was clear rather than computing it. That is the clump Oleg
+    # photographed on 2026-08-06, and validate.py R10 now refuses the shape on the emitted file.
+    # THE FOOTPRINT HANDED OVER IS THE RING'S OUTERMOST MATERIAL, NOT A BOUNDING BOX: the bbox of a
+    # 341.5mm circle covers this entire plate and would leave nowhere to prime, while the circle's
+    # own corners are wide open. Metering comes from e_mm_l1, layer 1's own rate, so the prime
+    # physically cannot be a different bead from the part's first layer -- the old E12/E20 pair ran
+    # 2.43x it.
+    machine.prime(w, printer=a.printer, z=press, rate=e_mm_l1, feed=f_l1,
+                  travel_feed=round(machine.MACHINE_MAX_SPEED * 60),
+                  avoid=(("circle", cx, cy, r_ring + a.tower_d / 2.0),), near=(sx0, sy0))
     w("; BODY_START")
 
     E = 0.0
-    sx0, sy0 = layers[0]["pts"][0]
     # THE ONE TRAVEL IN THE BODY, and it happens before any of the part exists: flat at the press
-    # height, across bare plate, from the prime corner to the first line. No lift and no drop --
-    # there is nothing here to lift over.
-    w(f"G0 F{f} X{sx0:.3f} Y{sy0:.3f} ; HOP prime corner -> first line, over bare plate")
+    # height, across bare plate, from the prime to the first line. No lift and no drop -- there is
+    # nothing here to lift over. It is safe flat BECAUSE the prime now stands 0.10 tall instead of
+    # the 2.0 a lifted purge left; it also starts on the runway prime() reserved beyond the last
+    # row, so it does not begin by dragging along the prime itself.
+    w(f"G0 F{f} X{sx0:.3f} Y{sy0:.3f} ; HOP prime -> first line, over bare plate")
     fan_on = False
     for li, Lay in enumerate(layers):
         z = press + li * lh

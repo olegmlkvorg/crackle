@@ -431,27 +431,32 @@ def main():
     w(f"SET_GCODE_OFFSET Z={zoff:.3f} MOVE=1   ; commanded Z{press:.3f} lands {a.h1:.3f}mm on a "
       f"machine whose zero sits {zerr:.3f} high")
 
-    px, py = 20.0, 16.0
-    w("G1 F600 Z2.000")
-    w(f"G0 F{travel_f} X{px:.3f} Y{py:.3f}")
-    w("G1 E20 F300                      ; PRIME purge, LIFTED to Z2 so it cannot collar the tip")
-    w(f"G1 F600 Z{press:.3f}")
-    w(f"G1 F1200 X{px+40:.3f} Y{py:.3f} E30   ; PRIME line, in the clear at the press gap")
-    w(f"G0 F3000 X{px+52:.3f} Y{py+12:.3f}  ; PRIME break-off — angled wipe, no extrusion")
-    w("G92 E0")
+    # ONE SHARED PRIME, machine.prime(). What was here lifted to Z2.000, extruded 20mm of filament
+    # (48.1 mm3) with the head STANDING STILL in free air, and then drove the nozzle 1.9mm DOWN into
+    # the pile it had just made. That is the exact sequence in Oleg's 2026-08-06 photograph, and
+    # validate.py R10 now refuses it on the emitted file. The line that followed was metered E20->30
+    # over 40mm = 0.601 mm2/mm, asking a 0.8 orifice to spread a 6.01mm bead at the 0.10 gap, five
+    # lines above this file's own comment stating layer 1 as 0.200 mm2/mm landing 2.00mm wide.
+    # `e1` is that same 0.200, so the prime is now the part's own first layer.
+    _px, _py, _ = machine.prime(
+        w, printer=a.printer, z=press, rate=e1, feed=f1, travel_feed=travel_f,
+        avoid=(("rect", x0, y0, x0 + pw, y0 + ph),), near=(x0, y0))
     w("; BODY_START")
 
     E = 0.0
     ext1 = ext2 = trav = zmm = 0.0
-    cur = [px + 52.0, py + 12.0, press]
+    cur = [_px, _py, press]
 
-    # HOP HEIGHT IS DERIVED FROM THE TALLEST THING ON THE PLATE, NOT FROM THE PART. The PRIME purge
-    # stands at Z2 by design, so an obvious "one millimetre above the part" clears the posts for the
-    # first six layers and ploughs straight through the purge.
+    # HOP HEIGHT IS THE PART'S, NOW THAT NOTHING ELSE STANDS ON THE PLATE. It used to be
+    # max(z+1.0, 3.0), and the 3.0 floor was not about the posts at all: it was clearing the Z2
+    # prime purge, which an obvious "one millimetre above the part" ploughed straight through for
+    # the first six layers. machine.prime() lays its line at the press gap, so the tallest thing on
+    # this plate is once again the part, and the floor that protected against the blob goes with the
+    # blob. Keeping it would be guarding a wall that is not there.
     def hop(tx, ty, z, note):
         nonlocal trav, zmm
-        sz = max(z + 1.0, 3.0)
-        w(f"G0 Z{sz:.3f} F1800   ; HOP lift, clear of the posts AND the Z2 prime purge")
+        sz = z + 1.0
+        w(f"G0 Z{sz:.3f} F1800   ; HOP lift, clear of the posts")
         w(f"G0 X{tx:.3f} Y{ty:.3f} F{travel_f}   ; HOP {note}")
         w(f"G1 F1800 Z{z:.3f}")
         trav += math.hypot(tx - cur[0], ty - cur[1])

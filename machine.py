@@ -710,6 +710,372 @@ BED = {
 }
 
 
+# THE PROBED MESH, WHICH IS SMALLER THAN THE PLATE. Until 2026-08-06 these four numbers per machine
+# existed ONLY as the comment three lines above BED, so nothing could check them -- and eight
+# emitted files primed outside the mesh in consequence: six k1c files laid their prime at X6.0 or
+# Y6.0 on a machine whose mesh starts at 10.0 (a `max(6.0, ...)` clamp chosen for the K2 and copied
+# across), and two volume_marker files wiped at Y348 on a mesh that ends at 345. Outside the mesh
+# Klipper EXTRAPOLATES the bed shape, so a first layer there is laid against a guess.
+#
+# READ from each machine's own [bed_mesh] mesh_min/mesh_max, 2026-07-25, same reading that produced
+# the BED comment above. (x_min, y_min, x_max, y_max).
+#
+# A MACHINE WITH NO ENTRY IS NOT A MACHINE WITH AN UNLIMITED MESH -- it is one nobody has read, and
+# prime() below refuses rather than inventing a window, for the same reason ZERR refuses to default
+# to zero. f022 is absent on purpose: nobody has opened its config.
+MESH = {
+    "k1c":    (10.0, 10.0, 210.0, 210.0),
+    "k2plus": (5.0, 5.0, 345.0, 345.0),
+}
+
+
+# ---------------------------------------------------------------------- the prime ---
+# EXTRUDATE MUST BE PINNED TO THE PLATE FROM THE FIRST MILLIMETRE IT LEAVES THE NOZZLE.
+#
+# Oleg, 2026-08-06, photographing a clump of filament hanging off the nozzle and then a lump of it
+# dropped into the middle of a printing plate: "The beginning of extrusion need to be improved
+# generically" / "Also few unacceptable artifacts".
+#
+# WHAT WAS THERE BEFORE, AND WHY IT COULD NOT WORK. Thirty-two generators each hand-rolled an
+# opening sequence, in seven distinct shapes, and every one of them began by extruding 12 to 25mm
+# of filament (28.9 to 60.1 mm3) WITH THE HEAD STANDING STILL. Both ends of the only axis anybody
+# varied are already written down in this repo as failures:
+#   at the press gap (presstest.py:168) "a 20mm stationary purge (~48mm3) at the 0.1 press gap
+#     cannot spread -- it balloons up and COLLARS the nozzle"
+#   lifted to Z2 (borelock.py and four others) is Oleg's photograph: 4.0 seconds of extrusion makes
+#     ~96mm of 0.8mm strand falling 2.0mm into open air, whose own weight is 0.56 mN against wetted
+#     adhesion to hot brass over several mm2. It cannot fall away. It coils onto the tip, and the
+#     head then carries it into the part.
+# The third option is the one nobody tried: DO NOT EXTRUDE WITHOUT MOVING, at any Z. The only force
+# that strips melt off a 210C brass face is tension at the far end of the strand, and the only thing
+# that supplies it is a bead already welded to the plate. The plate is the tool. validate.py R10
+# refuses the alternative on the emitted artifact so this cannot drift back.
+#
+# HOW MUCH FILAMENT THE OPENING ACTUALLY NEEDS. DERIVED, NOT MEASURED, and the falsifier is stated.
+# The inherited 12/18/20/25 all sit inside the geometric melt-zone bracket (a 2.0mm channel 12-22mm
+# long is 37.7-69.1 mm3 = 15.7-28.7mm of filament), which is the tell: they answer "how much fills
+# an EMPTY hotend", a filament-change number. At the start of a print the melt zone is already full.
+# What is actually missing is two much smaller things:
+#   drool during heat-up and probe -- PLA at 1.24 solid to 1.18 melt is +5.1% on ~50mm3 of zone
+#     contents = 2.5 mm3, plus gravity creep (driving head rho.g.h = 232 Pa against a Laplace
+#     back-pressure 2.gamma/r = 150 Pa, net ~80 Pa, order 0.005 mm3/s over the 200-400s of
+#     M190/M109/G28) = 1-2 mm3. Total 3.5 to 5 mm3.
+#   pressure re-establishment -- at layer 1's own 5.0 mm3/s the melt pressure is ~5 bar, so 1.2 N on
+#     the filament; a 25mm direct-drive column at EA/L = 337 N/mm compresses 0.004mm, and the melt
+#     itself 0.017 mm3. Under a worst-case 800mm Bowden at 30 N it is still only 2.9mm of filament.
+#     There is no pressure argument for 20mm; the stored compliance is under 0.05 mm3.
+# So the purge exists to expel the degraded tip slug, not to fill anything, and 5.0mm of filament
+# (12.0 mm3) is 2.5x the high drool estimate and 50x every compliance term.
+# FALSIFIER: if the first 20-30mm of the lead-in prints thin, gappy or discontinuous, the slug is
+# too small and the fix is a LONGER lead-in, never a stationary dump.
+PRIME_PURGE_MM = 5.0        # filament mm of deliberate purge, DERIVED above, not weighed
+
+# The lead-in is over-fat ON PURPOSE, which is the same technique this file already documents for
+# layer 1 ("LAYER 1 RUNS AT FULL FLOW. THE LINE WIDTH IS WHAT CHANGES"). It is bounded, because the
+# old prime lines ran 2.4x to 5.0x the part's own layer-1 rate -- 0.601 mm2/mm asks a 0.8 orifice to
+# spread a 6.0mm bead in one pass at a 0.10 gap, which it cannot do, so the excess goes up and round
+# the tip. That is a SECOND blob source, in the moving line, and fixing only the stationary purge
+# would have left it. Every rate below is a multiple of the caller's own layer1_rate, so the prime
+# physically cannot be a different bead from the part's first layer.
+PRIME_FAT = 1.20            # lead-in rate, x the part's layer-1 rate -> 1.2x its landed width
+PRIME_FAT_MAX = 1.50        # past this the nozzle ploughs its own bead; refused, not clamped
+
+PRIME_TAPER = (0.60, 0.30, 0.10, 0.00)   # rate multipliers over the last segments
+PRIME_TAPER_SEG = 5.0       # mm of path per taper step -- pressure decays WHILE motion continues,
+                            # so nothing is left stored when the E word stops. This project has no
+                            # retraction (validate.py refuses a backward E as an unintended one), so
+                            # the end of a line has to be geometric and hydraulic or nothing.
+PRIME_WIPE_MM = 18.0        # E frozen, retraced back over the taper at travel speed: any residue is
+                            # ironed into the thinnest, most sacrificial part of the line instead of
+                            # dangling, and a drawn thread necks as 1/v.
+
+PRIME_ROW_PITCH = 3.0       # mm between serpentine rows. Wider than the ~2.4mm landed lead-in bead
+                            # ON PURPOSE: the rows stay separate strands, so the prime peels off the
+                            # sheet as loose lines rather than as a welded patch. A prime pressed to
+                            # 0.10 is genuinely hard to remove and that is its real cost.
+PRIME_MESH_INSET = 10.0     # mm inside the probed mesh. Half the fattest landed bead is 1.2mm; the
+                            # rest is so the bead is not sitting on the outermost probe point.
+PRIME_PART_CLEAR = 6.5      # mm from part material: 5.0 plus half the fattest landed prime bead.
+PRIME_DEPART_MM = 12.0      # runway reserved at the end of the last row so the break-off wipe has
+                            # proven-clear plate to finish on.
+# THE WITNESS IS A PATH LENGTH, NOT WHATEVER FITS. First version of this sized the prime to the
+# region it found, capped at a flat 200mm -- so zladder, whose prime is laid into a 0.25mm gap and
+# therefore takes 2.5x the filament per mm of path, emitted 39.3mm of filament (94.5 mm3) where the
+# buckets emitted 10 to 16. The region tells you what is POSSIBLE; the diagnostic value of a witness
+# line is how far you can watch it stay continuous and full width, and that is measured in mm of
+# line. Everything past it is material to peel off, not information.
+PRIME_WITNESS_MM = 80.0     # target witness run
+PRIME_WITNESS_MIN = 40.0    # below this there is nothing to read; prime_region refuses instead
+
+
+def _prime_blocked(shapes, along_y, fixed, clear):
+    """Intervals of the moving axis that `shapes` (dilated by `clear`) put material into.
+
+    Analytic, not sampled: a bounding box is the wrong frame for the parts this has to clear. The
+    biggest thing this project prints is a 341.5mm circle on a 350mm plate, whose bbox covers the
+    whole mesh and would leave no prime region at all, while its front-left corner is in fact wide
+    open. Shapes are ('rect', x0, y0, x1, y1) or ('circle', cx, cy, r)."""
+    out = []
+    for sh in shapes:
+        kind = sh[0]
+        if kind == "rect":
+            x0, y0, x1, y1 = sh[1:]
+            # `along_y` = the row runs along Y, so X is the FIXED axis. Getting this pair the wrong
+            # way round is invisible on a part centred on the plate (both coordinates are 175) and
+            # wrong everywhere else, which is exactly the shape of bug that ships.
+            lo_f, hi_f = (x0, x1) if along_y else (y0, y1)
+            lo_m, hi_m = (y0, y1) if along_y else (x0, x1)
+            if lo_f - clear <= fixed <= hi_f + clear:
+                out.append((lo_m - clear, hi_m + clear))
+        elif kind == "circle":
+            cx, cy, r = sh[1:]
+            c_f, c_m = (cx, cy) if along_y else (cy, cx)
+            rr = r + clear
+            dd = rr * rr - (fixed - c_f) ** 2
+            if dd > 0:
+                d = math.sqrt(dd)
+                out.append((c_m - d, c_m + d))
+        else:
+            raise ValueError(f"prime: unknown avoid shape {sh!r}")
+    return out
+
+
+def _prime_free(lo, hi, blocked):
+    """EVERY clear sub-interval of [lo, hi] once `blocked` is removed, in order.
+
+    Returning all of them rather than the longest is not tidiness. A part centred on the plate
+    leaves two mirror-image gaps of IDENTICAL length either side of it, so 'the longest' is decided
+    by float noise and picked the left gap on one row and the right gap on the next -- rows that
+    cannot be joined, and the search then reported no clear plate at all on a bed that is half
+    empty. The rows have to agree on a side, so the caller intersects the full sets."""
+    out = []
+    cur = lo
+    for b0, b1 in sorted(blocked) + [(hi, hi)]:
+        if b0 > cur:
+            a, b = cur, min(b0, hi)
+            if b - a > 1e-9:
+                out.append((a, b))
+        cur = max(cur, b1)
+        if cur >= hi:
+            break
+    return out
+
+
+def _prime_intersect(a, b):
+    """Intersection of two ordered interval lists."""
+    out, i, j = [], 0, 0
+    while i < len(a) and j < len(b):
+        lo, hi = max(a[i][0], b[j][0]), min(a[i][1], b[j][1])
+        if hi - lo > 1e-9:
+            out.append((lo, hi))
+        if a[i][1] < b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def prime_region(printer, avoid=(), want=None, floor=None, near=None):
+    """Pick the rectangle the prime is laid in, and the serpentine rows inside it.
+
+    Returns (rows, meta). `rows` is a list of ((x0,y0),(x1,y1)) segments in print order, already
+    joined end to end by construction; `meta` carries the numbers for the emitted comment.
+
+    THE RECTANGLE IS THE POINT. Every generator until today asserted a corner was free in a source
+    comment ("this corner is clear of it") and hardcoded px,py = 20,16. solid.py:684 is the one that
+    wrote down what that costs: "a blind x0-40, which on a packed plate lies INSIDE layer-1
+    material". A rectangle proven clear against the real footprints is a thing a gate can check; a
+    comment is not. REFUSES rather than falling back to a default -- a prime laid into the part is
+    worse than a job that does not start.
+
+    All N rows share ONE x-span (the intersection across rows), so every connector between rows is
+    a pure perpendicular hop of PRIME_ROW_PITCH that is inside the same proven-clear rectangle. The
+    obvious alternative -- give each row its own longest span -- makes the connector a chord between
+    two points on the part's dilated boundary, which for a circle lies INSIDE the part."""
+    if printer not in MESH:
+        raise ValueError(
+            f"prime: no mesh window recorded for '{printer}'. machine.MESH holds "
+            f"{sorted(MESH)}; add the machine's own [bed_mesh] mesh_min/mesh_max rather than "
+            f"letting the prime guess where the probed area ends.")
+    want = 150.0 if want is None else want
+    floor = want if floor is None else floor
+    mx0, my0, mx1, my1 = MESH[printer]
+    bx0, by0 = mx0 + PRIME_MESH_INSET, my0 + PRIME_MESH_INSET
+    bx1, by1 = mx1 - PRIME_MESH_INSET, my1 - PRIME_MESH_INSET
+
+    best = None
+    # Four edge strips. Rows run along the edge and step INWARD, so the fat lead-in is the row
+    # furthest from the part and the taper ends nearest it -- the head never has to cross its own
+    # prime to reach the body.
+    edges = (("front", False, by0, +1.0), ("back", False, by1, -1.0),
+             ("left", True, bx0, +1.0),  ("right", True, bx1, -1.0))
+    for name, along_y, edge0, step in edges:
+        mlo, mhi = (by0, by1) if along_y else (bx0, bx1)
+        for n in range(2, 7):
+            fixed = [edge0 + step * j * PRIME_ROW_PITCH for j in range(n)]
+            shared = [(mlo, mhi)]
+            for fx in fixed:
+                shared = _prime_intersect(
+                    shared, _prime_free(mlo, mhi,
+                                        _prime_blocked(avoid, along_y, fx, PRIME_PART_CLEAR)))
+                if not shared:
+                    break
+            if not shared:
+                continue
+            lo, hi = max(shared, key=lambda s: s[1] - s[0])
+            run = hi - lo - PRIME_DEPART_MM
+            if run <= 0:
+                continue
+            total = n * run + (n - 1) * PRIME_ROW_PITCH
+            if total < floor:
+                continue
+            # The region says what is possible; `want` says what is worth laying. Trim, never grow.
+            if total > want:
+                run = max(0.0, (want - (n - 1) * PRIME_ROW_PITCH) / n)
+                total = n * run + (n - 1) * PRIME_ROW_PITCH
+                if run <= 0:
+                    continue
+            cand = (name, along_y, fixed, lo, lo + run, total, n)
+            if best is None or n < best[6]:
+                best = cand
+            elif n == best[6] and near is not None:
+                # Tie on row count: take the strip whose LAST row ends nearest the body's first
+                # point, so the one travel between prime and part is the short one.
+                def endpt(c):
+                    return (c[4], c[2][-1]) if not c[1] else (c[2][-1], c[4])
+                if math.dist(endpt(cand), near) < math.dist(endpt(best), near):
+                    best = cand
+    if best is None:
+        raise ValueError(
+            f"prime: no clear {floor:.0f}mm of plate inside {printer}'s mesh window "
+            f"({mx0:g},{my0:g})-({mx1:g},{my1:g}) inset {PRIME_MESH_INSET:g}mm, keeping "
+            f"{PRIME_PART_CLEAR:g}mm off the part. Move the part or shrink it -- a prime laid into "
+            f"layer 1 is worse than a job that does not start.")
+
+    name, along_y, fixed, lo, hi, total, n = best
+    # Start end chosen so the LAST row finishes at `hi`, which is the end with PRIME_DEPART_MM of
+    # reserved, proven-clear runway behind it for the break-off wipe.
+    start_hi = (n % 2 == 0)
+    rows = []
+    for j, fx in enumerate(fixed):
+        rev = start_hi if j % 2 == 0 else not start_hi
+        a, b = (hi, lo) if rev else (lo, hi)
+        rows.append((((fx, a), (fx, b)) if along_y else (((a, fx), (b, fx)))))
+    meta = {"edge": name, "rows": n, "row_mm": hi - lo, "path_mm": total,
+            "runway": PRIME_DEPART_MM, "box": (bx0, by0, bx1, by1)}
+    return rows, meta
+
+
+def prime(w, *, printer, z, rate, feed, travel_feed, avoid=(), near=None, reset_e=True, e0=0.0):
+    """Emit the whole start-of-extrusion sequence. ONE implementation, for every generator.
+
+    `w`            the emit callable the generator already has
+    `printer`      for MESH -- replaces the hardcoded 6.0/20.0/16.0 corner in 32 files
+    `z`            the first-layer Z the BODY will use. There is no second Z, because there is no
+                   stationary purge to place; the whole lift/descend pair disappears with it.
+    `rate`         filament mm per path mm. Pass machine.layer1_rate(w1, h1) -- the SAME call the
+                   body's layer 1 makes -- so E stops being a hardcoded constant whose bead width is
+                   an accident of part position. One `E37` in hilbert-shaped generators produced
+                   THIRTEEN different mm2/mm across the emitted files, a 4.05x spread, because the
+                   length was computed and E was not.
+    `feed`         the part's own first-layer feedrate (mm/min). Kills F1200-vs-the-part's-own-f.
+    `travel_feed`  the file's own travel feedrate, for the break-off wipe.
+    `avoid`        ('rect',x0,y0,x1,y1) / ('circle',cx,cy,r) footprints of everything that will be
+                   printed. NOT optional in spirit: an empty tuple means "nothing is on this plate".
+    `near`         the body's first point, used only to break ties between equally good strips.
+
+    Returns (x, y, e) -- where the head is and what the E axis reads -- so no caller re-derives it.
+    Emits no '; BODY_START'; that stays the caller's, because the caller owns what follows."""
+    if rate <= 0:
+        raise ValueError(f"prime: rate {rate!r} is not a positive filament mm per path mm")
+    lead_rate = rate * PRIME_FAT
+    if PRIME_FAT > PRIME_FAT_MAX:
+        raise ValueError(f"prime: PRIME_FAT {PRIME_FAT} exceeds {PRIME_FAT_MAX}")
+    lead_mm = PRIME_PURGE_MM / lead_rate
+    taper_mm = PRIME_TAPER_SEG * len(PRIME_TAPER)
+    rows, meta = prime_region(printer, avoid=avoid,
+                              want=lead_mm + PRIME_WITNESS_MM + taper_mm,
+                              floor=lead_mm + PRIME_WITNESS_MIN + taper_mm, near=near)
+
+    # Flatten the serpentine into one polyline: row, perpendicular connector, row, ...
+    pts = [rows[0][0]]
+    for a, b in rows:
+        if pts[-1] != a:
+            pts.append(a)
+        pts.append(b)
+    path = sum(math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
+    if path < lead_mm + taper_mm:
+        raise ValueError(f"prime: region gives {path:.1f}mm but the lead-in and taper alone need "
+                         f"{lead_mm + taper_mm:.1f}mm")
+
+    w(f"; PRIME  {meta['rows']} rows x {meta['row_mm']:.1f}mm on the {meta['edge']} of the mesh, "
+      f"{path:.1f}mm of path, ALL OF IT PINNED -- no stationary extrusion at any Z (validate R10)")
+    w(f"; PRIME  purge {PRIME_PURGE_MM:g}mm of filament over the first {lead_mm:.1f}mm at "
+      f"{PRIME_FAT:g}x layer 1, then layer 1's own {rate:.5f}mm/mm as a first-layer WITNESS")
+    w(f"G0 F{travel_feed} Z{max(z + 1.0, 1.0):.3f}   ; PRIME-TRAVEL lift, nothing on the plate yet")
+    w(f"G0 F{travel_feed} X{pts[0][0]:.3f} Y{pts[0][1]:.3f}   ; PRIME-TRAVEL to the prime start")
+    w(f"G1 F600 Z{z:.3f}   ; PRIME descend to the press gap -- the prime prints at the PART's gap, "
+      f"so a thin or broken line here is the first layer failing in 8 seconds, not in 6 hours")
+
+    # Walk the polyline, changing rate at the lead-in/witness boundary and through the taper.
+    marks = [(0.0, lead_rate, "lead-in, purge"), (lead_mm, rate, "witness, layer 1's own rate")]
+    for k, mul in enumerate(PRIME_TAPER):
+        marks.append((path - taper_mm + k * PRIME_TAPER_SEG, rate * mul,
+                      f"taper {mul:.2f}x -- pressure decays while motion continues"))
+    cuts = sorted({0.0, path} | {m[0] for m in marks})
+
+    def rate_at(s):
+        r, lab = marks[0][1], marks[0][2]
+        for s0, rr, ll in marks:
+            if s >= s0 - 1e-9:
+                r, lab = rr, ll
+        return r, lab
+
+    e = e0
+    done = 0.0
+    cx, cy = pts[0]
+    for i in range(len(pts) - 1):
+        (ax, ay), (bx, by) = pts[i], pts[i + 1]
+        seg = math.dist((ax, ay), (bx, by))
+        if seg <= 1e-9:
+            continue
+        # Split this segment wherever the rate changes, so no emitted move averages two rates.
+        inner = [c for c in cuts if done + 1e-9 < c < done + seg - 1e-9]
+        prev = 0.0
+        for t in [c - done for c in inner] + [seg]:
+            r, lab = rate_at(done + (prev + t) / 2.0)
+            nx = ax + (bx - ax) * (t / seg)
+            ny = ay + (by - ay) * (t / seg)
+            e += r * (t - prev)
+            w(f"G1 F{feed} X{nx:.3f} Y{ny:.3f} E{e:.5f}   ; PRIME {lab}")
+            cx, cy = nx, ny
+            prev = t
+        done += seg
+
+    # BREAK-OFF. No retraction exists in this project, so the tail is dealt with geometrically:
+    # retrace the taper with E frozen at travel speed. The nozzle skims the 0.1mm-tall bead it just
+    # laid, so residue is ironed into sacrificial material rather than carried onto layer 1, and the
+    # thread necks as 1/v on the fast move.
+    ux, uy = pts[-1][0] - pts[-2][0], pts[-1][1] - pts[-2][1]
+    un = math.hypot(ux, uy) or 1.0
+    ux, uy = ux / un, uy / un
+    back = min(PRIME_WIPE_MM, math.dist(pts[-2], pts[-1]))
+    wx, wy = cx - ux * back, cy - uy * back
+    w(f"G0 F{travel_feed} X{wx:.3f} Y{wy:.3f}   ; PRIME break-off wipe -- {back:.0f}mm back over "
+      f"the taper, E frozen, ironing the tail into sacrificial material")
+    # ...and then OFF it, forward into the runway prime_region reserved and proved clear. The head
+    # must not finish the prime standing on the prime: the generator's own first travel starts from
+    # wherever this leaves it, and starting it on top of a fresh 0.10 bead drags the whole way out.
+    dx, dy = cx + ux * PRIME_DEPART_MM, cy + uy * PRIME_DEPART_MM
+    w(f"G0 F{travel_feed} X{dx:.3f} Y{dy:.3f}   ; PRIME break-off -- out onto the reserved "
+      f"{PRIME_DEPART_MM:g}mm of clear plate; a drawn thread necks as 1/v, so this runs at travel "
+      f"speed and not the F3000 the old break-off used")
+    if reset_e:
+        w("G92 E0")
+        e = 0.0
+    return dx, dy, e
+
+
 # THE Z CEILING, WHICH IS toolhead.axis_maximum AND NOT A PLATE FIGURE. It is here because a part
 # tall enough to matter finally got built: on 2026-08-06 the 359mm bucket ended with
 # "G0 Z378.90" -- top_z + a hardcoded 20mm retreat -- on a machine whose axis_maximum Z is 360.

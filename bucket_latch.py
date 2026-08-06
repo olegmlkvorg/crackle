@@ -463,24 +463,24 @@ def main():
         w(f"{_ln}                  ; no chamber draft across a 200mm first layer")
     w("G92 E0")
 
-    # prime, off the part, in the front-left corner. The part's own footprint starts at
-    # X{cx-r_w:.0f}, so this corner is clear of it.
-    px, py = 20.0, 16.0
-    w(f"G1 F{f} Z{press:.3f}")
-    w(f"G0 F{f} X{px:.3f} Y{py:.3f}")
-    w("G1 E12 F300                          ; PRIME stationary purge")
-    w(f"G1 F{f} X{px+40:.3f} Y{py:.3f} E20  ; PRIME line")
-    w(f"G0 F{f} X{px+52:.3f} Y{py+12:.3f}   ; PRIME break-off wipe")
-    w("G92 E0")
+    sx0, sy0 = layers[0][0]
+    # ONE SHARED PRIME, machine.prime(). Was a hand-rolled corner purge that extruded 12mm of
+    # filament (28.9 mm3) with the head STANDING STILL at the 0.10 press gap and then laid a line
+    # metered 2.43x layer 1's own rate -- two separate blob sources, in a corner asserted clear by
+    # the comment rather than computed. `e_mm` is this file's ONE rate, so the prime is the same
+    # bead the latch floor lays. The footprint is the wall's outermost material, as a CIRCLE: the
+    # bounding box of this bucket covers the plate and would leave nowhere to prime.
+    machine.prime(w, printer=a.printer, z=press, rate=e_mm, feed=f,
+                  travel_feed=round(machine.MACHINE_MAX_SPEED * 60),
+                  avoid=(("circle", cx, cy, r_w + bw / 2.0),), near=(sx0, sy0))
     w("; BODY_START")
 
     E = 0.0
-    sx0, sy0 = layers[0][0]
     # THE ONE TRAVEL IN THE BODY, and it happens before any of the part exists: flat at the press
-    # height, across bare plate, from the prime corner to the first latch line. No lift and no
-    # drop -- a lift-then-drop between features is exactly the shape validate.py refuses, and
-    # there is nothing here to lift over.
-    w(f"G0 F{f} X{sx0:.3f} Y{sy0:.3f} ; HOP prime corner -> first latch line, over bare plate")
+    # height, across bare plate, from the prime to the first latch line. No lift and no drop -- a
+    # lift-then-drop between features is exactly the shape validate.py refuses, and there is
+    # nothing here to lift over now that the prime stands 0.10 tall rather than 2.0.
+    w(f"G0 F{f} X{sx0:.3f} Y{sy0:.3f} ; HOP prime -> first latch line, over bare plate")
     fan_on = False
     for li, pts in enumerate(layers):
         z = press + li * lh
