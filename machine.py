@@ -723,7 +723,7 @@ PROVEN_LAYER1 = {
 # THE LAST FIELD OF EVERY TUPLE IS PROVENANCE and it is not decoration. A value with no story is a
 # value nobody can argue with, which is how an invented constant labelled MEASURED survived here
 # once already.
-SEND_LEDGER_VERSION = "2026-08-06.1"
+SEND_LEDGER_VERSION = "2026-08-06.2"
 
 # MOTION-ONLY MINUTES PAST WHICH A COUPON-BACKED VALUE IS NO LONGER ENOUGH ON ITS OWN.
 # A coupon proves a value AT COUPON SCALE. The stencil ran 5.7 min and the bore gauge 20.5 min;
@@ -760,6 +760,21 @@ PROVEN_SEND = {
              "clump dropped into a printing plate. So this entry is unreachable, and saying so is "
              "the point: the 5.0mm moving purge that replaced it in 32 generators has NO accepted "
              "print, and a file carrying it must cite the coupon that ran it."),
+            (5.0, 1.2, 0.0,
+             "the bore+lock gauge borelock_k2plus_pla_b3.6-4.6x6_w250-280_h18.gcode ran it as rule "
+             "6's first proof and COMPLETED: 12.52 min of motion, 1562.7mm of filament against "
+             "1550.66 emitted (100.8%), and 11 consecutive homing_origin samples at -0.150. The "
+             "charge worked -- 121mm of filament had moved by minute 1, and the watcher's "
+             "no-extrusion branch (under 5mm by minute 3) never fired. Oleg read the resulting "
+             "plate at the machine on 2026-08-06 and picked a cell off it, so the plate was "
+             "USABLE. "
+             "WHAT THIS ENTRY DOES NOT REST ON, stated because a ledger that overclaims is worse "
+             "than an empty one: nobody has separately reported how the PRIME WITNESS LINE itself "
+             "came out. He judged the twelve cells, not the line. So this admits 'the moving prime "
+             "produced a plate good enough to read', which is weaker than 'the witness line was "
+             "clean'. If that line turns out thin or broken, this row is the thing to retract, and "
+             "the fix it points at is a longer lead-in than 50mm at the same 5mm charge -- never a "
+             "bigger stationary dump, which is what R10 exists to refuse."),
         ],
         # (max tip-to-tip span of one unsubdivided BRIDGE / THIN CROSS move, mm, provenance)
         "span_mm": [
@@ -788,7 +803,24 @@ PROVEN_SEND = {
         # the gauge's answer has not been read back into this file. SHRINK=0.25 was calibrated on a
         # 4mm METAL hole, silently sized every 6.35mm BAMBOO bore, and condemned ~21 printed parts.
         # An empty list means every file that declares a bore must cite a gauge. That is correct.
-        "fit_bore": [],
+        # NO LONGER EMPTY as of 2026-08-06: the gauge was printed and READ.
+        "fit_bore": [
+            (4.20,
+             "Oleg read the gauge plate at the machine 2026-08-06 and said 'go with 4'. Cell 4 is "
+             "a 4.20mm modelled bore at a 250 degree wrap. "
+             "WHY THIS IS A REAL RESULT AND NOT A PREFERENCE: cell 4 was that plate's NEGATIVE "
+             "CONTROL. Its modelled mouth is 3.292mm against a 3.175mm stick, +0.117 WIDER, and the "
+             "file's own header predicted it would drop straight through with no capture. It was "
+             "printed precisely so that a plate which lied would be caught. He chose it, so the "
+             "PRINTED part is TIGHTER than the model, which means SHRINK=0.25 understates the real "
+             "shrink. That constant was calibrated on a 4mm METAL shaft hole, reused for bamboo, "
+             "and condemned ~21 parts. The gauge existed to falsify it and it did.\n"
+             "WHAT IS STILL UNMEASURED: 4.20 is the MODELLED bore, which is what a toolpath "
+             "measures and therefore what S7 compares against. The PHYSICAL printed bore is "
+             "smaller by the true shrink, and nobody has put calipers on a cell. So the shrink "
+             "CONSTANT is still unknown; what is known is which modelled bore lands right, and for "
+             "a part cut to fit a stick that is the number that matters."),
+        ],
     },
 }
 

@@ -798,7 +798,7 @@ def main():
                     help="mm/s for the gap crossings ONLY, which are in-air strands rather than "
                          "structure. Default is --speed, i.e. no second regime. THIS IS THE BIG "
                          "TIME LEVER: measured on the 320mm bucket, the crossings are 1121m of the "
-                         "1861m of motion, so 59% of the wall clock is the head going between "
+                         "1861m of motion, so 59%% of the wall clock is the head going between "
                          "towers. Raising it treats an in-air strand as a DIFFERENT regime from a "
                          "wall, which is what it is: the 50 north star exists for deposition onto "
                          "structure, and nothing is being deposited onto here. Declared in the "
