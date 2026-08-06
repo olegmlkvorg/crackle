@@ -286,26 +286,33 @@ def main():
         w(line)
     w("G92 E0")
 
-    px, py = 20.0, 16.0
-    w("G1 F600 Z2.000")
-    w(f"G0 F{travel_f} X{px:.3f} Y{py:.3f}")
-    w("G1 E20 F300                      ; PRIME purge, LIFTED to Z2 so it cannot collar the tip")
-    w(f"G1 F600 Z{press:.3f}")
-    w(f"G1 F1200 X{px+40:.3f} Y{py:.3f} E30   ; PRIME line, in the clear at the press gap")
-    w(f"G0 F3000 X{px+52:.3f} Y{py+12:.3f}  ; PRIME break-off — angled wipe, no extrusion")
-    w("G92 E0")
+    # ONE SHARED PRIME, machine.prime(). Was the Z2 lift + 20mm free-air stationary purge Oleg
+    # photographed on 2026-08-06; validate.py R10 refuses that shape on the emitted file now.
+    # THE RATE IS METERED FOR THE UNCORRECTED GAP ON PURPOSE. Every cell below sets its own
+    # SET_GCODE_OFFSET, and the prime runs BEFORE the first of them, so the gap the prime is
+    # actually laid into is the machine's own zero plus --zerr, not any cell's. Metering it for
+    # PRESS_HARD would have it land narrow for the same reason the first version of this file made
+    # the taller cells thin -- the material staying still while the gap moves. This is the one file
+    # in the fleet where the prime cannot be the part's own first layer, because the whole point of
+    # the part is that its first layer is six different things.
+    machine.prime(w, printer=a.printer, z=press,
+                  rate=machine.layer1_rate(a.w1, press + a.zerr), feed=f1, travel_feed=travel_f,
+                  avoid=(("rect", x0, y0, x0 + (n - 1) * stride + a.cell, dy + dh),),
+                  near=(x0, dy))
     w("; BODY_START")
 
     E = 0.0
 
-    # HOP HEIGHT IS DERIVED FROM THE TALLEST THING ON THE PLATE, NOT FROM THE PART. The part tops
-    # out at 0.34, so an obvious "lift one millimetre above the part" clears the part and ploughs
-    # straight through the PRIME purge, which stands at Z2 by design so it cannot collar the tip.
-    # validate.py caught exactly that: 39 travels at Z1.34 against material standing at Z2.0.
-    safe_z = max(press + lh, 2.0) + 1.0
+    # HOP HEIGHT IS THE PART'S AGAIN. It used to be max(press + lh, 2.0) + 1.0, and the 2.0 floor
+    # was not about the part -- the part tops out at 0.34. It was clearing the PRIME purge, which
+    # stood at Z2 by design so it could not collar the tip, and validate.py caught the version
+    # without the floor: 39 travels at Z1.34 against material standing at Z2.0. machine.prime()
+    # leaves nothing standing above the press gap, so the floor goes with the thing it protected
+    # against; keeping it would be guarding a wall that is not there.
+    safe_z = press + lh + 1.0
 
     def hop(tx, ty, note):
-        w(f"G0 Z{safe_z:.3f} F1800   ; HOP lift, clear of the part AND the Z2 prime purge")
+        w(f"G0 Z{safe_z:.3f} F1800   ; HOP lift, clear of the part")
         w(f"G0 X{tx:.3f} Y{ty:.3f} F{travel_f}   ; HOP {note}")
 
     for i, h in enumerate(hts):

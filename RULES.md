@@ -18,6 +18,47 @@ around them. `push.py` refuses to upload a file that fails.
 | **R5** | dry travel must not exceed extrusion | *"travel dry is ok, but avoid it at all costs"* | injected dry hops → 278.8m travel vs 227.1m extruded |
 | **R6** | file names a filament with a known flow figure | — | unknown material has no maintained figure |
 | **R9** | the first layer may not CHANGE without a coupon | *"why you keep messing up base layer every second print?"* | `tests/forced_layer1.py` — ten forced cases, every one of which the pre-R9 validator passed |
+| **R10** | nothing may extrude before the first bead is pinned | *"The beginning of extrusion need to be improved generically"* / *"Also few unacceptable artifacts"* | `tests/forced_prime.py` — five forced cases: it refuses both purge shapes, DECLINES the pinned one, and passes the prime now emitted |
+
+## R10, and why the answer was not a better Z
+
+Every generator opened by extruding 12 to 25 mm of filament — 28.9 to 60.1 mm³ — with the head
+**standing still**. Oleg photographed the result twice on 2026-08-06: a clump hanging off the
+nozzle, and that clump dropped into the middle of a printing plate.
+
+Only one thing had ever been varied, and this repo had already written down that **both ends of it
+fail**:
+
+- at the **press gap**, `presstest.py:168`: *"a 20mm stationary purge (~48mm³) at the 0.1 press gap
+  cannot spread — it balloons up and COLLARS the nozzle"*.
+- **lifted to Z2**, which was the fix for that, is the photograph. 4 seconds at F300 makes ~96 mm of
+  0.8 mm strand falling 2.0 mm into open air. Its entire weight is 0.56 mN against wetted adhesion
+  to hot brass over several mm². It cannot fall away, so it coils onto the tip.
+
+So the rule is not about Z at all — keying on Z would pass the 132 files that purged at 0.10 and
+catch only the 17 that purged at Z2. **The only force that separates melt from a 210 °C brass face
+is tension at the far end of the strand, and the only thing that supplies it is a bead already
+welded to the plate.** The plate is the tool. R10 refuses stationary extrusion at any Z before
+anything is pinned, and `machine.prime()` is the third option nobody had tried: move from the first
+millimetre.
+
+### What R10 does NOT refuse
+
+A stationary extrusion **after** material is down — about 20 `solid.py` files step Z while
+extruding at the spiral seam. There the previous layer holds the far end of the strand, so the
+mechanism does not apply. They are counted and printed, never hidden, but refusing them would be
+refusing files for a reason that is not the defect in the photograph. `forced_prime.py` asserts
+that decline, because a rule that fires on everything is not a measurement.
+
+### The second blob source, which fixing only the purge would have left
+
+The prime **line** was metered as a hardcoded `E`, over a path length that was computed — so its
+bead width was an accident of part position. One source line in the `hilbert.py` family produced
+**thirteen** different mm²/mm across the emitted files, a 4.05× spread. `borelock` ran its prime at
+0.601 mm²/mm five lines above its own header stating layer 1 as 0.200: a 0.8 mm orifice asked to
+spread a 6.01 mm bead at a 0.10 gap, which it cannot do, so the excess goes up and around the tip.
+`machine.prime()` takes a `rate` and callers pass `machine.layer1_rate(...)` — the same call layer 1
+makes — so the prime physically cannot be a different bead from the part's own first layer.
 
 ## R9, and why R1 was not enough
 

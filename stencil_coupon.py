@@ -214,18 +214,21 @@ def main():
         w(line)
     w("G92 E0")
 
-    px, py = 20.0, 16.0
-    w("G1 F600 Z2.000")
-    w(f"G0 F{travel_f} X{px:.3f} Y{py:.3f}")
-    w("G1 E20 F300                      ; PRIME purge, LIFTED to Z2 so it cannot collar the tip")
-    w(f"G1 F600 Z{press:.3f}")
-    w(f"G1 F1200 X{px+40:.3f} Y{py:.3f} E30   ; PRIME line, in the clear at the press gap")
-    w(f"G0 F3000 X{px+52:.3f} Y{py+12:.3f}  ; PRIME break-off — angled wipe, no extrusion")
-    w("G92 E0")
+    # ONE SHARED PRIME, machine.prime(). This was the Z2 lift + 20mm stationary purge in free air
+    # that Oleg photographed on 2026-08-06 as a clump on the nozzle and then as a lump dropped into
+    # a printing plate. validate.py R10 refuses it on the emitted file now. `e1` is this file's own
+    # layer-1 rate, so the prime lays the same bead the sheets do instead of the 3.01x line that
+    # used to follow the purge.
+    machine.prime(w, printer=a.printer, z=press, rate=e1, feed=f, travel_feed=travel_f,
+                  avoid=(("rect", x0, y0, x0 + total_x, y0 + a.sheet_y),), near=(x0, y0))
     w("; BODY_START")
 
     E = 0.0
-    safe_z = max(press + a.rib_h, 2.0) + 1.0
+    # SAFE Z IS THE PART'S, NOW THAT THE PRIME NO LONGER STANDS ON THE PLATE. The old
+    # max(press + rib_h, 2.0) + 1.0 carried a 2.0 floor that had nothing to do with the ribs: it was
+    # clearing the Z2 prime blob, and this file's own comment below said so. The prime now lays at
+    # the press gap, so the ribs are the tallest thing here and the floor goes with the blob.
+    safe_z = press + a.rib_h + 1.0
     n_lines = int(a.sheet_y / pitch) + 1
 
     for si, (sx, ribbed) in enumerate(((x0, False), (x0 + a.sheet_x + gap, True))):
@@ -233,7 +236,7 @@ def main():
         w(f"; ================ sheet {si+1}: {'RIBBED' if ribbed else 'PLAIN'} ================")
         for li in range(a.layers):
             z = press + li * lh
-            w(f"G0 Z{safe_z:.3f} F1800   ; HOP lift, clear of the part and the Z2 prime")
+            w(f"G0 Z{safe_z:.3f} F1800   ; HOP lift, clear of the part")
             w(f"G0 X{sx:.3f} Y{y0:.3f} F{travel_f}   ; HOP to sheet {si+1} layer {li+1}")
             w(f"G1 F600 Z{z:.3f}")
             w(f"; ---- sheet {si+1} layer {li+1} of {a.layers} at Z{z:.3f}, {n_lines} passes")
@@ -248,9 +251,10 @@ def main():
                     # deliberate strand across its gaps because a web between towers is wanted; a
                     # strand across a stencil's cut-out would partially block the hole, which is the
                     # one thing a stencil must not do. So these cross lifted and dry.
-                    # The lift clears the Z2 prime purge, not just the 0.1 sheet: validate.py
-                    # counts a travel at 0.1 as ploughing while anything stands at 2.0, and it is
-                    # right to -- the prime blob is real material on the same plate.
+                    # The lift now only has to clear the SHEET AND ITS RIBS. It used to have to
+                    # clear a Z2 prime blob as well -- validate.py counts a travel at 0.1 as
+                    # ploughing while anything stands at 2.0, and it was right to, because the blob
+                    # was real material on the same plate. machine.prime() leaves nothing standing.
                     w(f"G0 F1800 Z{safe_z:.3f}")
                     w(f"G0 F{travel_f} X{xa:.3f} Y{y:.3f}   ; HOP over a cut-out, lifted")
                     w(f"G1 F600 Z{z:.3f}")

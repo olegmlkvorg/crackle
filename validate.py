@@ -552,10 +552,15 @@ def check(path):
     _fa = math.pi * (1.75 / 2) ** 2
     _z2 = 0.0; _px2 = _py2 = None; _pe2 = 0.0; _starved = []
     _xall = []
-    # THE PRIME IS DELIBERATELY HEAVY AND MUST NOT SET THE YARDSTICK.
-    # Taking the nominal bead from the running maximum let the prime line (metered several times the
-    # body bead, on purpose) define it — so on a single-layer file every real move measured as
-    # starved. Only body moves define what normal looks like.
+    # THE PRIME MUST NOT SET THE YARDSTICK, WHATEVER IT IS METERED AT.
+    # Taking the nominal bead from the running maximum let the prime line define it — so on a
+    # single-layer file every real move measured as starved. Only body moves define what normal
+    # looks like, and the boundary is '; BODY_START' below.
+    # This comment used to say "THE PRIME IS DELIBERATELY HEAVY", which was true of the old
+    # hand-rolled primes (2.4x to 5.0x the body's own layer-1 rate) and stopped being true on
+    # 2026-08-06 when machine.prime() started metering from machine.layer1_rate at a bounded 1.2x.
+    # The CODE was right either way because it gates on _inbody; the sentence was a claim about the
+    # artifact that the artifact no longer supported, which is its own kind of stale.
     _inbody = False
     for _i, _l in enumerate(_lines):
         if '; BODY_START' in _l: _inbody = True
