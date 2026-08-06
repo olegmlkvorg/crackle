@@ -31,6 +31,184 @@ def bed_for(path):
 FIL_AREA = math.pi * (1.75 / 2) ** 2
 
 
+def first_layer_emitted(path, zerr, full=False):
+    """WHERE THE FIRST LAYER ACTUALLY LANDS AND HOW WIDE, read off the emitted moves.
+
+    R1 above asks where the first bead is COMMANDED, and on this machine that is not where it goes:
+    the K2's Z zero sits `zerr` high, so a commanded Z0.100 with no correction lands at 0.250. The
+    correction is a SET_GCODE_OFFSET line, and until 2026-08-06 nothing in this file had ever
+    looked at one -- `grep -c SET_GCODE_OFFSET validate.py` returned 0 while every first-layer
+    parameter in the project was being changed behind it.
+
+    So this returns the two numbers that decide whether a first layer welds, both MEASURED:
+
+      h1  = commanded Z of the body's first bead  +  the offset IN FORCE AT THAT BEAD  +  zerr
+      w1  = (mm2 per mm of the moves at that Z)  /  h1
+
+    THE OFFSET IN FORCE, NOT THE LAST ONE IN THE FILE. zladder.py sets its correction after G28 and
+    then hands the machine back with `SET_GCODE_OFFSET Z=0` at the end; reading the file's last
+    offset would report that ladder as printing at the machine's own uncorrected zero, which is the
+    one thing it exists to avoid.
+
+    `full=True` also returns every landed height in the file mapped to the width landed there,
+    which is what makes a coupon citation checkable: a ladder that never tested 0.15 cannot excuse
+    a part that prints at 0.15. It costs a full pass, so the default stops at the end of layer 1 --
+    the buckets reach 85MB and the cheap answer is the one asked for on every run.
+
+    Returns a dict; `z1` is None when there is no body bead to measure (R1 fails on that input, and
+    R9 defers to it rather than printing a second verdict about the same absence)."""
+    zoff = None                 # None means "the file never commanded one", which is not zero
+    zoff_at_bead = None
+    z = z1 = None
+    x = y = None
+    eabs, absE = 0.0, True
+    body = False
+    L1 = E1 = 0.0
+    by_h = {}                   # landed height -> [path mm, filament mm]
+    for ln in open(path):
+        # The marker is a COMMENT, so it has to be read before comments are stripped -- reading it
+        # off the stripped line found it in exactly zero of the 264 files in out/.
+        if not body:
+            body = 'BODY_START' in ln
+        c = ln.split(';')[0].strip()
+        if not c:
+            continue
+        if c.startswith('SET_GCODE_OFFSET'):
+            _mo = re.search(r'\bZ=\s*(-?\d+(?:\.\d+)?)', c)
+            if _mo:
+                zoff = float(_mo.group(1))
+            continue
+        if c.startswith('M82'):
+            absE = True
+        elif c.startswith('M83'):
+            absE = False
+        elif c.startswith('G92'):
+            _me = re.search(r'\bE(-?\d+(?:\.\d+)?)', c)
+            if _me:
+                eabs = float(_me.group(1))
+        if c[:2] not in ('G0', 'G1'):
+            continue
+        _g = dict(re.findall(r'\b([XYZE])(-?\d+(?:\.\d+)?)', c))
+        if 'Z' in _g:
+            z = float(_g['Z'])
+        nx = float(_g['X']) if 'X' in _g else x
+        ny = float(_g['Y']) if 'Y' in _g else y
+        de = 0.0
+        if 'E' in _g:
+            v = float(_g['E'])
+            de = (v - eabs) if absE else v
+            if absE:
+                eabs = v
+        # The prime is not the part -- R1 and R4 both draw this line, one definition reused.
+        if (body and 'PRIME' not in ln.upper() and de > 0
+                and None not in (x, y, nx, ny)):
+            d = math.hypot(nx - x, ny - y)
+            if d > 1e-9 and z is not None:
+                h = round(z + (zoff or 0.0) + zerr, 4)
+                if z1 is None:
+                    z1, zoff_at_bead = z, zoff
+                if abs(z - z1) < 1e-9:
+                    L1 += d
+                    E1 += de
+                elif not full:
+                    break
+                r = by_h.setdefault(h, [0.0, 0.0])
+                r[0] += d
+                r[1] += de
+        if 'X' in _g:
+            x = nx
+        if 'Y' in _g:
+            y = ny
+    out = {'zoff': zoff_at_bead, 'z1': z1, 'mm2': None, 'h1': None, 'w1': None, 'by_h': {}}
+    if z1 is not None and L1 > 1e-9:
+        out['mm2'] = E1 * FIL_AREA / L1
+        out['h1'] = round(z1 + (zoff_at_bead or 0.0) + zerr, 4)
+        if out['h1'] > 1e-9:
+            out['w1'] = out['mm2'] / out['h1']
+    out['by_h'] = {h: (v[1] * FIL_AREA / v[0]) / h
+                   for h, v in by_h.items() if v[0] > 1e-9 and h > 1e-9}
+    return out
+
+
+COUPON_RE = re.compile(
+    r'^;\s*COUPON=(\S+)\s+h1=([\d.]+)\s+w1=([\d.]+)\s+verdict=(\S+)\s+read=(\d{4}-\d{2}-\d{2})\s*$',
+    re.M)
+
+
+def layer1_excuse(path, txt, h1, w1, zerr, lh):
+    """May this file print an UNPROVEN first layer? Returns (excused, note).
+
+    Two ways, and neither is a flag that means "trust me".
+
+    1. '; COUPON=<file> h1=<mm> w1=<mm> verdict=welded read=<YYYY-MM-DD>' — a citation, checked
+       four ways against artifacts rather than read. The coupon file must EXIST; its verdict must
+       be `welded` (somebody thumb-peeled a corner and it fought back); the cited numbers must be
+       the numbers THIS file actually lands, so a citation cannot drift away from the part it
+       excuses; and those numbers must appear among the heights the COUPON ITSELF PRINTED, which is
+       the clause that matters -- the ladder on the plate today sweeps 0.10 to 0.35 at 2.00mm wide,
+       so it cannot excuse a 1.33mm weld at any height, and saying so is the whole point.
+
+    2. '; Z_LADDER=1' — the coupon itself, which must be allowed to visit gaps nothing has proven
+       because that is what it is for. FLOW_TEST=1 already sets this precedent for the flow cap.
+       DECLARED AND COUNTED, like every other exception in RULES.md: the file must actually press
+       at least three different heights at one width, measured off its own moves. A part presses
+       exactly one, so a bucket that declares Z_LADDER is refused and says why.
+
+    The count uses the file's OWN first-layer width and its OWN '; LAYER_H=' rather than constants:
+    a ladder cell lands the same width as every other cell (the material scales with the gap, which
+    is the correction that made zladder a ladder instead of a confound), and every cell sits inside
+    the first two layers of the plate."""
+    if re.search(r'^;\s*Z_LADDER=1\s*$', txt, re.M):
+        _band = 2 * lh if lh else 0.5
+        _all = first_layer_emitted(path, zerr, full=True)['by_h']
+        _cells = sorted(h for h, w in _all.items() if h <= _band + 1e-9 and abs(w - w1) <= 0.05 * w1)
+        if len(_cells) >= 3:
+            return True, (f"'; Z_LADDER=1' is declared AND counted — this file presses "
+                          f"{len(_cells)} different heights ({', '.join(f'{c:.2f}' for c in _cells)}"
+                          f") at {w1:.2f}mm wide. A coupon is allowed to visit unproven gaps.")
+        return False, (f"It declares '; Z_LADDER=1' but presses only {len(_cells)} height(s) at "
+                       f"{w1:.2f}mm wide — that is a part, not a ladder, and the declaration does "
+                       f"not survive being counted.")
+
+    _m = COUPON_RE.search(txt)
+    if not _m:
+        if re.search(r'^;\s*COUPON=', txt, re.M):
+            return False, ("It carries a '; COUPON=' line that does not parse — the stamp is "
+                           "'; COUPON=<file> h1=<mm> w1=<mm> verdict=<word> read=<YYYY-MM-DD>', "
+                           "and a citation nothing can check is not evidence.")
+        return False, "It cites no coupon."
+    _f, _ch1, _cw1, _verdict, _read = (_m.group(1), float(_m.group(2)), float(_m.group(3)),
+                                       _m.group(4), _m.group(5))
+    _cand = [os.path.join(os.path.dirname(os.path.abspath(path)), _f),
+             os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out', _f), _f]
+    _cp = next((c for c in _cand if os.path.isfile(c)), None)
+    if _cp is None:
+        return False, (f"It cites coupon '{_f}', and no such file exists next to it or in out/. A "
+                       f"citation to a file nobody can open is the cheapest thing in this system "
+                       f"to write and proves nothing.")
+    if _verdict != 'welded':
+        return False, (f"Its coupon citation reads verdict={_verdict}. Only 'welded' is evidence — "
+                       f"a cell that was printed but not read, or read and not welded, excuses "
+                       f"nothing.")
+    if abs(_ch1 - h1) > 0.005 or abs(_cw1 - w1) > 0.05:
+        return False, (f"Its coupon citation claims h1={_ch1:.3f} w1={_cw1:.2f}, but this file "
+                       f"lands {h1:.3f} x {w1:.2f}. The citation has drifted from the part it is "
+                       f"supposed to excuse.")
+    _ch = first_layer_emitted(_cp, zerr, full=True)['by_h']
+    _near = [(h, w) for h, w in _ch.items() if abs(h - _ch1) <= 0.005]
+    if not _near:
+        return False, (f"Coupon '{os.path.basename(_cp)}' never printed a {_ch1:.3f}mm layer at "
+                       f"all — it laid {', '.join(f'{h:.2f}' for h in sorted(_ch)[:8])}"
+                       f"{'...' if len(_ch) > 8 else ''}. A coupon can only excuse the gap it "
+                       f"tested.")
+    if not any(abs(w - _cw1) <= 0.05 for _, w in _near):
+        return False, (f"Coupon '{os.path.basename(_cp)}' printed {_ch1:.3f}mm, but at "
+                       f"{', '.join(f'{w:.2f}' for _, w in _near)}mm wide, not the {_cw1:.2f}mm "
+                       f"cited. Height and width are one weld, not two settings.")
+    return True, (f"coupon '{os.path.basename(_cp)}' printed {_ch1:.3f}mm x {_cw1:.2f}mm and was "
+                  f"read as welded on {_read}, and those are the numbers this file lands.")
+
+
 def check(path):
     # Parsed up front because several checks need it and one of them (OVERHANG) runs before the
     # Z-ladder block where it used to be read. A stamp read late is a stamp that is missing early.
@@ -1403,6 +1581,138 @@ def check(path):
             _why = "no Z is commanded anywhere before the body's first bead"
         problems.append(f"R1 cannot find the body's first bead — {_why}, so nothing in this file "
                         f"says whether layer 1 is pressed to {machine.PRESS_HARD:.2f}")
+
+    # R9  THE FIRST LAYER MAY NOT CHANGE WITHOUT A COUPON.
+    # Oleg, 2026-08-06, holding a bucket whose base came off as loose lifted strands: "why you keep
+    # messing up base layer every second print?" The answer is structural, not careless.
+    # R1 above checks the first layer is pressed, and it reads the COMMANDED Z, which is always
+    # 0.100. This machine's Z zero sits 0.15mm HIGH, so a commanded 0.100 with no correction lands
+    # at 0.250 -- a gap the bead never touches, which is why three max-bucket starts were cancelled
+    # while the width was raised 2.0 -> 3.0 -> 5.0 chasing it. More material cannot fix a gap.
+    # The correction is a SET_GCODE_OFFSET line, and until today `grep -c SET_GCODE_OFFSET
+    # validate.py` returned ZERO. Every first-layer parameter in this project was being changed
+    # behind a gate that examined none of it: a file emitting no offset at all passed exactly as
+    # green as a correct one, and two prints were lost to that on 2026-08-06 alone -- the 320mm
+    # bucket's five cancels, then the bamboo bucket's base printed as separated strands after --h1
+    # was raised to 0.15 and --w1 narrowed to 1.33, starving the weld.
+    # WHAT IS CHECKED IS WHERE THE BEAD LANDS, NOT WHAT THE HEADER SAYS. h1 is derived from the
+    # emitted offset in force at the body's first bead; w1 from the E and XY of the moves that ran.
+    # Header prose has drifted from the emitted moves twice on this project, so the header is
+    # cross-examined against the measurement rather than believed.
+    # THE ESCAPE HATCH IS EVIDENCE, NOT A FLAG, and it follows this file's own declared-and-counted
+    # pattern (';  THIN CROSS' + '; SPEED_CROSS=', which fails when the declared regime is not what
+    # the moves do). A '; COUPON=' citation must name a coupon file that EXISTS, must name the
+    # numbers THIS file actually lands, and those numbers must appear among the heights that coupon
+    # itself printed. A blanket exemption flag would be a way to opt out of the rule, which is what
+    # RULES.md says an exception must never be.
+    # A MACHINE WITH NO MEASURED ZERR IS NOT JUDGED AND SAYS SO. machine.ZERR has one entry, the
+    # K2, because that is the one that was measured. Treating a missing measurement as zero would
+    # hand every k1c file a first-layer tick earned by nothing.
+    _l1p = re.search(r'^; PRINTER=(\S+)', _rules_txt, re.M)
+    _l1machine = _l1p.group(1) if _l1p else None
+    _zerr = machine.ZERR.get(_l1machine)
+    if _zerr is None:
+        print(f"  R9 first layer NOT JUDGED: "
+              f"{'this file carries no ; PRINTER= stamp' if _l1machine is None else f'no measured Z-zero error exists for {_l1machine!r}'}"
+              f", and machine.ZERR has only {sorted(machine.ZERR)} — so nothing here can say where "
+              f"this file's first bead lands. Neither a pass nor a finding.")
+    elif not _r1found or _r1z is None:
+        print(f"  R9 first layer NOT JUDGED: R1 above already fails for want of a body bead to "
+              f"measure. One absence, one verdict.")
+    else:
+        _fl = first_layer_emitted(path, _zerr)
+        _h1, _w1, _zoff = _fl['h1'], _fl['w1'], _fl['zoff']
+        _proven = machine.PROVEN_LAYER1.get(_l1machine, [])
+        _hit = [p for p in _proven if abs(_h1 - p[0]) <= 0.005 and abs((_w1 or 0) - p[1]) <= 0.05] \
+            if _h1 is not None and _w1 is not None else []
+
+        # R1 AND THIS MEASUREMENT CAN DISAGREE ABOUT WHETHER THERE IS A BEAD, and the difference is
+        # deliberate: R1 accepts the first move carrying an E, while a WIDTH needs a move that
+        # actually deposits over a distance. Rather than crash on the difference -- a validator
+        # that raises gives no verdict at all, which is worse than a wrong one -- it is named.
+        if _h1 is None:
+            print(f"  R9 first layer NOT JUDGED: R1 found a bead at Z{_r1z:.3f} but no body move "
+                  f"deposits filament over a measurable distance, so there is no width to compare "
+                  f"with anything. Neither a pass nor a finding.")
+        # R9a  THE OFFSET MUST BE THERE. This is the specific hole, so it is its own finding with
+        # its own arithmetic printed -- "unproven parameters" would be true but would not tell the
+        # reader that the file simply never corrects the machine.
+        elif _zoff is None:
+            problems.append(
+                f"R9 no SET_GCODE_OFFSET: this file commands nothing before its first bead, so it "
+                f"prints at {_l1machine}'s own Z zero, which sits {_zerr:.3f}mm HIGH. Its layer 1 "
+                f"is commanded to Z{_r1z:.3f} and LANDS AT {_h1:.3f}mm — "
+                f"{(_h1 / max(_r1z, 1e-9)):.1f}x the gap it meters for, so it deposits "
+                f"{(_fl['mm2'] or 0):.4f}mm2/mm as a {(_w1 or 0):.2f}mm strand instead of the "
+                f"{(_fl['mm2'] or 0) / max(_r1z, 1e-9):.2f}mm pressed weld its own metering "
+                f"assumes. Emit SET_GCODE_OFFSET Z="
+                f"{machine.zoff_for(machine.PRESS_HARD, _zerr):.3f} (machine.zoff_for).")
+        elif _w1 is None:
+            problems.append(f"R9 cannot measure the first layer: the body's first bead is at "
+                            f"Z{_r1z:.3f} with offset {_zoff:+.3f}, which lands at {_h1:.3f}mm — "
+                            f"at or below the plate. Nothing can be metered into a gap that is not "
+                            f"open.")
+        else:
+            # R9b  THE HEADER MUST AGREE WITH THE MOVES. The '; LAYER1_WIDTH=' stamp names the gap
+            # it was metered for; a file whose offset says something else is a file whose author
+            # changed one of the two and not the other, which is precisely how --h1 0.15 shipped
+            # with a rate meant for 0.10. Both forms of the stamp in out/ carry "the <h> gap".
+            # ITS ABSENCE IS NOT A FAILURE, and that is deliberate. Everything R9 judges is
+            # measured off the moves, so a file landing the proven weld is proven whether or not
+            # its header says so -- failing it for missing prose would be the guard claiming
+            # something is impossible when it is only undeclared, which is how a guard earns a
+            # reputation for crying wolf and gets switched off. When the weld is NOT proven, R9c
+            # below fails on the weld itself, which is the honest finding.
+            _mw = re.search(r'^; LAYER1_WIDTH=([\d.]+)mm', _rules_txt, re.M)
+            _mg = re.search(r'^; LAYER1_WIDTH=.*?the ([\d.]+) gap', _rules_txt, re.M)
+            if not _mw or not _mg:
+                print(f"  R9 first layer lands {_h1:.3f}mm x {_w1:.2f}mm wide; the file carries no "
+                      f"'; LAYER1_WIDTH=<w>mm ... the <h> gap' stamp, so there is nothing to "
+                      f"cross-examine the measurement against.")
+            else:
+                _dw, _dg = float(_mw.group(1)), float(_mg.group(1))
+                if abs(_dg - _h1) > 0.005:
+                    # The remedy is only printed when it EXISTS. Above PRESS_HARD+zerr the machine
+                    # cannot reach the declared gap at all without raising the commanded Z, and
+                    # zoff_for refuses a positive offset rather than hand back a number that lifts
+                    # the nozzle off the plate -- so ask it the same question it would refuse only
+                    # when the answer is real.
+                    _fix = (f"the offset that would land {_dg:.3f} is "
+                            f"{machine.zoff_for(_dg, _zerr):+.3f}"
+                            if _dg <= machine.PRESS_HARD + _zerr + 1e-9 else
+                            f"no offset lands {_dg:.3f} from a commanded Z{_r1z:.3f} — the tallest "
+                            f"first layer this machine reaches that way is "
+                            f"{machine.PRESS_HARD + _zerr:.3f}")
+                    problems.append(
+                        f"R9 offset contradicts the file's own declaration: '; LAYER1_WIDTH=' says "
+                        f"the bead was metered for a {_dg:.3f}mm gap, but Z{_r1z:.3f} with the "
+                        f"emitted SET_GCODE_OFFSET Z={_zoff:+.3f} on a machine {_zerr:.3f} high "
+                        f"lands at {_h1:.3f}mm. One of the two was changed without the other; "
+                        f"{_fix}.")
+                if abs(_dw - _w1) > 0.05:
+                    problems.append(
+                        f"R9 declared width is not the width laid: the header claims {_dw:.2f}mm "
+                        f"landed, the moves deposit {_fl['mm2']:.4f}mm2/mm into a {_h1:.3f}mm gap "
+                        f"= {_w1:.2f}mm. The header is prose; this is the file.")
+
+            # R9c  UNPROVEN PARAMETERS NEED A COUPON THAT TESTED THEM.
+            if not _hit:
+                _ok9, _note9 = layer1_excuse(path, _rules_txt, _h1, _w1, _zerr, _lh)
+                if _ok9:
+                    print(f"  R9 first layer {_h1:.3f}mm x {_w1:.2f}mm wide — not in "
+                          f"{_l1machine}'s proven set, and EXCUSED: {_note9}")
+                else:
+                    problems.append(
+                        f"R9 first layer {_h1:.3f}mm x {_w1:.2f}mm wide is NOT proven on "
+                        f"{_l1machine}. What has printed and held: "
+                        f"{', '.join(f'{h:.2f}mm x {w:.2f}mm' for h, w in _proven) or 'nothing yet'}"
+                        f". {_note9} "
+                        f"Print zladder.py, read the plate, then cite the cell it welded on: "
+                        f"'; COUPON=<file> h1={_h1:.3f} w1={_w1:.2f} verdict=welded read=<date>'.")
+            else:
+                print(f"  R9 first layer lands {_h1:.3f}mm x {_w1:.2f}mm wide (Z{_r1z:.3f} + "
+                      f"offset {_zoff:+.3f} + {_zerr:.3f} machine error), which is "
+                      f"{_l1machine}'s proven weld.")
 
     # R2  NOTHING MAY FLOAT ABOVE THE FIRST LAYER.
     # Oleg's follow-on to the press rule: "play Z smartly we dont want floaring lines". Rebasing

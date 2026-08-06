@@ -17,6 +17,50 @@ around them. `push.py` refuses to upload a file that fails.
 | **R4** | one constant flow, layer 1 included | *"flow must be constant"* | synthesised starved layer 1 → 103 moves under 80% |
 | **R5** | dry travel must not exceed extrusion | *"travel dry is ok, but avoid it at all costs"* | injected dry hops → 278.8m travel vs 227.1m extruded |
 | **R6** | file names a filament with a known flow figure | — | unknown material has no maintained figure |
+| **R9** | the first layer may not CHANGE without a coupon | *"why you keep messing up base layer every second print?"* | `tests/forced_layer1.py` — ten forced cases, every one of which the pre-R9 validator passed |
+
+## R9, and why R1 was not enough
+
+R1 checks the first layer is **commanded** to 0.1. On the K2 that is not where it goes: the Z zero
+sits 0.15 mm high, so a commanded `Z0.100` with no correction lands at **0.250** — a gap the bead
+never reaches. The correction is a `SET_GCODE_OFFSET` line, and until 2026-08-06
+`grep -c SET_GCODE_OFFSET validate.py` returned **0**. Every first-layer parameter in this project
+was being changed behind a gate that examined none of it. It cost two prints in one day: the 320 mm
+bucket's five cancels, then a bamboo bucket whose base came off as separated lifted strands.
+
+R9 measures where the bead **lands**, off the emitted moves:
+
+    h1 = commanded Z of the body's first bead + the offset in force AT THAT BEAD + machine.ZERR
+    w1 = (mm² per mm of the moves at that Z) / h1
+
+and refuses any pair that is not in `machine.PROVEN_LAYER1` — pairs somebody watched come off the
+plate, not arithmetic. Height and width are **one weld**: 2.00 mm at 0.10 and 2.00 mm at 0.15 are
+different things, and checking them separately would have passed the bamboo base.
+
+A machine with no `machine.ZERR` entry is **not judged and says so**. A missing measurement is not
+a measurement of zero.
+
+### The two ways past it, both declared AND counted
+
+| exception | how it is declared | what is checked, on artifacts |
+|---|---|---|
+| coupon citation | `; COUPON=<file> h1=<mm> w1=<mm> verdict=welded read=<YYYY-MM-DD>` | the coupon file exists; the verdict is `welded`; the cited numbers are the ones this file **lands**; and those numbers appear among the heights **that coupon itself printed** |
+| the coupon itself | `; Z_LADDER=1` | the file really presses ≥3 different heights at one width, measured off its own moves. A part presses exactly one, so a bucket declaring `Z_LADDER` is refused |
+
+The last coupon clause is the one that matters. The ladder on the plate today sweeps 0.10 → 0.35
+all at 2.00 mm wide, so it **cannot** excuse a 1.33 mm weld at any height, and R9 says exactly that
+instead of accepting the citation. A flag that merely asserted "tested" would have waved the bamboo
+base through.
+
+### What R9 does NOT check
+
+**Floor pitch.** It is part of the proven set on paper (1.6 mm solid, 2.5 mm open grid) and it is
+deliberately left unguarded, because the instrument is not good enough to name it. The emitted
+first layer is drawn as ~1 mm micro-segments with no straight-line primitive to measure, so pitch
+has to be inferred as hull-area ÷ path-length. Measured that way it lands 1.586 against a declared
+1.6 and 2.476 against 2.5 on the large buckets — but 4.05 against 5 on a 100 mm bucket, and it is
+meaningless on any multi-cell plate, where the hull spans the gaps between cells. A check that
+cannot measure its own name must decline rather than approve.
 
 ## Why each guard had to be shown failing
 

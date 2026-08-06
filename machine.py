@@ -658,6 +658,41 @@ def zoff_for(h1, zerr):
             f"{PRESS_HARD + zerr:.3f}mm.")
     return off
 
+
+# HOW MUCH HIGHER THAN IT REPORTS EACH MACHINE'S Z ZERO SITS, mm -- the `zerr` above, as a fact
+# about a named machine rather than a number a caller passes in. It lives here because the gate
+# that reads it (validate.py R9) and the generators that write the offset must not hold two copies
+# of it; that is the same drift that put three different first-layer models in three files.
+#
+# A MACHINE WITH NO ENTRY IS NOT A MACHINE WITH ZERO ERROR. It is a machine nobody has measured,
+# and R9 says so and declines to judge its first layer rather than handing out a tick. Defaulting
+# a missing measurement to 0.0 would have every k1c file report a pressed 0.100 layer on the
+# strength of nothing at all -- which is exactly how the K2 shipped five cancelled starts.
+ZERR = {
+    "k2plus": 0.15,     # MEASURED 2026-08-06 off a printed ladder; see zoff_for's docstring
+}
+
+
+# THE FIRST-LAYER OPERATING POINTS THAT HAVE PRINTED AND HELD, per machine: (landed height mm,
+# landed width mm). NOT a range and NOT a default -- a list of pairs somebody watched come off the
+# plate. Anything else is unproven and R9 refuses it unless the file cites the coupon that tested
+# it.
+#
+# WHY A PAIR AND NOT TWO INDEPENDENT NUMBERS. Height and width are one setting: the same material
+# squashed into a thinner gap lands wider, so 2.00mm at 0.10 and 2.00mm at 0.15 are different
+# welds, and the second is the one that came off Oleg's bamboo bucket as separated lifted strands
+# on 2026-08-06. Checking them separately would have passed it.
+#
+# HOW AN ENTRY GETS ADDED: print the ladder, read the plate, and add the pair with the date and
+# what was seen. Not from arithmetic, and not from a print that merely finished.
+PROVEN_LAYER1 = {
+    # 0.10 x 2.00 -- the 320x300 bucket printed complete and stood (2026-08-06), and the 341.5mm
+    # bamboo bucket's base at these numbers was accepted by Oleg the same day. 2.00 landed into a
+    # 0.10 gap is 0.200 mm2/mm, which is the body's own 0.82x0.24 bead (0.197) pressed flat: layer
+    # 1 is not over-extruded here, it is the same material 2.4x thinner and so 2.4x wider.
+    "k2plus": [(0.10, 2.00)],
+}
+
 # ---------------------------------------------------------------------------------------------
 
 
