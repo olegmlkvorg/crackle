@@ -226,6 +226,15 @@ SEAM_SCAN_DEG = 0.25                  # resolution of the seam-window measuremen
 # its own span against rather than quietly assuming the span is fine.
 PROVEN_AIR_MM = 16.80
 
+# THE FIRST FLOOR LAYER'S PITCH AS A FRACTION OF ITS OWN LANDED BEAD. 1.6 / 2.00 = 0.80, taken from
+# the 320x300 bucket that printed complete and STOOD on 2026-08-06 -- the only floor this project
+# has ever seen weld. It is a RATIO and not a millimetre value on purpose: the thing that decides
+# whether two lines touch is pitch against BEAD WIDTH, so a fixed millimetre silently becomes wrong
+# the moment --w1 changes, while a ratio cannot. At 0.80 every line overlaps its neighbour by a
+# fifth of a bead, which still merges when the lines land narrower than commanded. That margin is
+# what the 2.5 default spent, and spending it is why the base failed on 08-06 and again on 08-07.
+FLOOR1_OVERLAP = 0.80
+
 
 # ------------------------------------------------------------------------------ small geometry
 def seam_point(c, phi, r_t, off):
@@ -615,7 +624,7 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg):
 
 
 def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_floor,
-          floor_pitch, r_h, bridges, merge_mm=0.0):
+          floor_pitch, r_h, bridges, merge_mm=0.0, floor_pitch_1=None):
     """Every layer as {pts, kind, label}. pts[0] is where the layer starts; kind[j] says how the
     head reaches pts[j+1] -- E extrude, T flat metered crossing, B bridge, R floor rim,
     M the lap that welds a crossing ONTO the post it leaves and the post it lands on.
@@ -653,7 +662,21 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
         pts, kind = [], []
         if is_floor:
             entry = layers[-1]["pts"][-1] if layers else None
-            first, fp, fk = floor_path(cx, cy, r_h, floor_pitch, (math.pi / 2.0) * (li % 2),
+            # THE LAYER THAT TOUCHES THE PLATE GETS ITS OWN PITCH, and it is the only layer that
+            # has to WELD rather than merely span. Oleg, 2026-08-07: "adhesion is must + not solid
+            # floor". Those two are not in conflict once the first layer stops sharing a pitch with
+            # the four above it: layer 1 overlaps into a sheet that grips the plate, layers 2..n
+            # stay open at --floor-pitch so the base is a lattice and not a slab.
+            #
+            # WHY ONE PITCH FOR ALL FIVE WAS THE RECURRING BUG. At --floor-pitch 2.5 with a 2.00mm
+            # landed bead there is 0.50mm of BARE PLATE between every line, so layer 1 only touches
+            # if it lands its full commanded width. Any shortfall and the lines never meet: Oleg
+            # measured 0.50mm strands, which is exactly what 0.200mm2/mm becomes when nothing
+            # presses it. The 320x300 bucket that STOOD ran 1.6 against the same 2.00 bead, a
+            # 0.40mm OVERLAP, which merges even when each line lands narrow. That margin is the
+            # whole difference and it was being spent on making the base look open.
+            pitch_here = floor_pitch_1 if (li == 0 and floor_pitch_1) else floor_pitch
+            first, fp, fk = floor_path(cx, cy, r_h, pitch_here, (math.pi / 2.0) * (li % 2),
                                        starts[0], entry, SEG)
             pts = [first] + fp
             kind = fk
@@ -719,22 +742,32 @@ def main():
                          "is a NOMINAL: Oleg's 1/4in bamboo measures 5.8-6.2 against a nominal 6.35 "
                          "(guides/fit-and-assembly-empirics.md), so callipers on the actual sticks "
                          "beat this default.")
-    ap.add_argument("--bore-allow", type=float, default=0.25,
+    ap.add_argument("--bore-allow", type=float, default=1.025,
                     help="mm added to --stick-d to get the MODELLED bore. THIS IS THE ONE NUMBER "
-                         "THAT DECIDES WHETHER THE CHANNEL GRIPS, and the house record says the 0.25 "
-                         "in the brief was measured on a 4mm METAL shaft and then condemned ~21 "
-                         "parts when it was reused for 6.35mm BAMBOO (the answer there was rod+0.70). "
-                         "Three K2 coupon rounds on this exact 1/8in stick landed on ~0.6mm/side for "
-                         "a socket in mass; a free single-bead loop bulges less and depth loosens, so "
-                         "the true value for THIS geometry is bracketed 0.25..1.725 and NOT measured. "
-                         "The file declares that rather than asserting a fit.")
-    ap.add_argument("--wrap-deg", type=float, default=210.0,
+                         "THAT DECIDES WHETHER THE CHANNEL GRIPS. Default 1.025 = the 4.20mm bore "
+                         "Oleg picked off the bore+lock gauge on 2026-08-06, minus the 3.175 stick. "
+                         "It is in machine.PROVEN_SEND['k2plus']['fit_bore'] with its evidence. "
+                         "THE OLD DEFAULT WAS 0.25 AND IT WAS RETRACTED: that figure was measured "
+                         "on a 4mm METAL shaft, reused for 6.35mm BAMBOO, and condemned ~21 parts. "
+                         "Cell 4 of the gauge was the NEGATIVE CONTROL, modelled 0.117mm wider than "
+                         "the stick and predicted to drop straight through; it gripped, which proves "
+                         "the printed part comes out TIGHTER than the model and 0.25 understated the "
+                         "shrink. Still unmeasured: nobody has put calipers on a cell, so the shrink "
+                         "CONSTANT is unknown. What is known is which MODELLED bore lands right, and "
+                         "that is the number a part cut to fit a stick needs.")
+    ap.add_argument("--wrap-deg", type=float, default=250.0,
                     help="how much of the circle each post covers. Oleg 2026-08-06: 'a bit more than "
                          "half circles, which hold one eight of inch bamboo sticks'. The opening "
                          "faces INWARD (toward the bucket axis), so the outer face stays continuous "
                          "and the sticks are hidden from outside. 360 reproduces the closed loop "
                          "point for point -- it is the degenerate case of the same parameterisation, "
-                         "not a special branch.")
+                         "not a special branch. "
+                         "DEFAULT WAS 210 AND THAT WAS GEOMETRICALLY INCAPABLE, not merely "
+                         "unproven: a C-channel grips only if its mouth closes past the stick's "
+                         "widest point, and at 210 the modelled mouth is WIDER than the 3.175 stick "
+                         "at every bore the gauge carried, so no bore could ever have made it hold. "
+                         "250 is the wrap Oleg picked off that gauge. A default that cannot work at "
+                         "any setting of the other knobs is a trap, not a starting point.")
     ap.add_argument("--pitch", type=float, default=25.0,
                     help="MAXIMUM arc spacing mm between tower centres; the count is derived from "
                          "it and stated in the header.")
@@ -772,6 +805,15 @@ def main():
                          "to the one below. 5 is Oleg's own 2026-07-27 'floor 5 layers ... strict', "
                          "restored 2026-08-05 after he held the 2-layer part: 'Base need to be way "
                          "stronger'. 0 stands the towers straight on the plate.")
+    ap.add_argument("--floor-pitch-1", type=float, default=None,
+                    help="mm between the lines of the FIRST floor layer, the one that has to grip "
+                         "the plate. Default is DERIVED as %g x --w1, the 320x300 bucket's own "
+                         "1.6-on-2.00 ratio, because pitch only means anything against the bead it "
+                         "is made of. Sharing one pitch with the open layers above is what left "
+                         "0.50mm of bare plate under the base and produced separated round "
+                         "strands twice. Kept separate so 'adhesion is must' and 'not solid floor' "
+                         "can both be true: this layer welds, the ones above stay open."
+                         % FLOOR1_OVERLAP)
     ap.add_argument("--floor-pitch", type=float, default=2.5,
                     help="mm between latch lines. MUST come down with --floor-layers and this is "
                          "measured, not taste: layers are perpendicular, so a layer lands on the "
@@ -1133,8 +1175,22 @@ def main():
     _used = set(bridges.values())
     capped = [t for t in _cap_all if t[2] < t[1] - 1e-9 and t[2] in _used]
 
+    # THE FIRST FLOOR LAYER'S PITCH IS DERIVED FROM THE BEAD IT IS MADE OF, not typed. A typed
+    # default is what put a 2.5 pitch under a 2.00mm bead on every regeneration that forgot the
+    # flag: 0.50mm of bare plate, and a base that cannot weld however hard it is pressed. Derived
+    # from w1 it CANNOT drift away from the bead width, which is the only relationship that decides
+    # whether two lines touch. FLOOR1_OVERLAP is the 320x300 bucket's own ratio, 1.6 / 2.00.
+    floor_pitch_1 = a.floor_pitch_1 if a.floor_pitch_1 else round(FLOOR1_OVERLAP * w1, 4)
+    if floor_pitch_1 >= w1:
+        sys.exit(
+            f"REFUSING TO EMIT: the first floor layer's pitch {floor_pitch_1:.3f}mm is not smaller "
+            f"than its own landed bead {w1:.3f}mm, so its lines leave "
+            f"{floor_pitch_1 - w1:+.3f}mm of BARE PLATE between them and the layer that has to grip "
+            f"the plate cannot weld to itself. This is the defect that produced round separated "
+            f"strands on 2026-08-06 and 08-07. Pass --floor-pitch-1 below {w1:.3f}, or raise --w1.")
+
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
-                   a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm)
+                   a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1)
     n_cross, n_merge, lap_measured = check_paths(layers, centres, r_t, (bedx, bedy), press, lh,
                                                  stag_deg, bw, w1, a.merge_mm)
 
@@ -1425,8 +1481,9 @@ def main():
     else:
         w(f";        Inside the {PROVEN_AIR_MM:g}mm that held tonight — which is a LOWER BOUND, "
           f"not a limit.")
-    w(f"; FLOOR  {a.floor_layers} cross-latch layer(s) at {a.floor_pitch:g}mm pitch on a "
-      f"{r_h:.1f}mm disc — bucket_latch.py's")
+    w(f"; FLOOR  {a.floor_layers} cross-latch layer(s) on a {r_h:.1f}mm disc, in TWO pitch regimes "
+      f"— layer 1 at {floor_pitch_1:g}mm,")
+    w(f";        layers 2-{a.floor_layers} at {a.floor_pitch:g}mm. bucket_latch.py's")
     w(f";        lattice, imported and called, so there is one implementation of it in this repo.")
     if a.floor_layers >= 2:
         w(f";        {a.floor_layers} x {lh:g} on the {press:g} press = {floor_h:.2f}mm of floor. "
@@ -1436,10 +1493,20 @@ def main():
         w(f";        from the layer ladder, not measured on a part, and it is a lattice so the real "
           f"figure is under")
         w(f";        a solid plate of the same thickness.")
-        w(f";        Layer 1 lands {land_w1:.2f}mm wide on a {a.floor_pitch:g}mm pitch = "
-          f"{land_w1/a.floor_pitch:.2f}x coverage, so what welds to the plate is")
-        w(f";        {'a SOLID disc' if land_w1 >= a.floor_pitch else 'a GRID'}"
-          f"{'' if land_w1 >= a.floor_pitch else f' leaving {a.floor_pitch-land_w1:.2f}mm of clear air between landings'}.")
+        w(f";        Layer 1 lands {land_w1:.2f}mm wide on its OWN {floor_pitch_1:g}mm pitch = "
+          f"{land_w1/floor_pitch_1:.2f}x coverage, so what welds to")
+        w(f";        the plate is "
+          f"{'a WELDED SHEET, neighbouring lines overlapping by %.2fmm' % (land_w1 - floor_pitch_1) if land_w1 > floor_pitch_1 else 'a GRID leaving %.2fmm of clear plate between landings, WHICH CANNOT WELD' % (floor_pitch_1 - land_w1)}.")
+        w(f";        THE FIRST LAYER HAS ITS OWN PITCH ON PURPOSE (Oleg 2026-08-07: 'adhesion is "
+          f"must + not solid floor').")
+        w(f";        Sharing one pitch with the open layers above is what put 0.50mm of bare plate "
+          f"under the base twice:")
+        w(f";        at a {a.floor_pitch:g}mm pitch a {land_w1:.2f}mm line only touches its neighbour "
+          f"if it lands its FULL commanded")
+        w(f";        width, and Oleg measured 0.50mm strands — which is exactly what "
+          f"{land_w1*press:.3f}mm2/mm becomes when")
+        w(f";        nothing presses it. Layer 1 keeps the 320x300 bucket's own ratio, the only "
+          f"floor that has ever welded.")
         w(f";        SUPPORT, the number that decides the pitch: layers are PERPENDICULAR, so a "
           f"latch rib touches the")
         w(f";        one below only where the rasters cross, every {a.floor_pitch:g}mm, and flies "
@@ -1815,9 +1882,17 @@ def main():
           f"{top_z:.2f}mm, {len(bridges)} bridge layers at z "
           f"{', '.join(f'{press+li*lh:.1f}' for li in sorted(bridges)[:4])}"
           f"{' ...' if len(bridges) > 4 else ''}")
-    print(f"  floor {a.floor_layers} latch layers at {a.floor_pitch:g}mm pitch = {floor_h:.2f}mm "
-          f"thick; layer 1 lands {land_w1:.2f}mm on {a.floor_pitch:g}mm "
-          f"({land_w1/a.floor_pitch:.2f}x, {'SOLID' if land_w1 >= a.floor_pitch else 'grid'}); "
+    # THE FLOOR IS TWO REGIMES AND THE LINE MUST SAY BOTH. It used to print --floor-pitch for
+    # layer 1 as well, which described a 2.5 grid under a first layer now emitted at 1.6 -- a
+    # header disagreeing with its own moves, which is the exact failure this project keeps paying
+    # for. Layer 1 is reported from the value that is actually passed to build().
+    _l1_cover = land_w1 / floor_pitch_1 if floor_pitch_1 else 0.0
+    print(f"  floor {a.floor_layers} latch layers = {floor_h:.2f}mm thick, in TWO regimes:")
+    print(f"    layer 1  lands {land_w1:.2f}mm on {floor_pitch_1:g}mm pitch ({_l1_cover:.2f}x, "
+          f"{'WELDED SHEET' if land_w1 > floor_pitch_1 else 'GRID -- CANNOT WELD'}, "
+          f"{max(0.0, land_w1 - floor_pitch_1):.2f}mm overlap) -- this is the layer that grips")
+    print(f"    layers 2-{a.floor_layers}  at {a.floor_pitch:g}mm pitch "
+          f"({land_w1/a.floor_pitch:.2f}x, {'SOLID' if land_w1 >= a.floor_pitch else 'open grid'}); "
           f"ribs cross every {a.floor_pitch:g}mm and bridge {max(0.0, a.floor_pitch-bw):.2f}mm")
     print(f"  bead {bw:g} x {lh:g} at {speed:g} mm/s -> {flow:.2f} mm3/s "
           f"({100*flow/r8cap:.1f}% of the {r8cap:g} figure, DECLARED)")

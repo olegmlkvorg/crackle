@@ -207,6 +207,14 @@ def _fit_circle(P):
     return cx, cy, r, res
 
 
+# FRACTION OF LAYER-1 GAPS THE MODAL GAP MUST COVER BEFORE IT COUNTS AS A MEASURED PITCH.
+# Not a taste: the two coverages actually in the ledger are 196 of 197 gaps (99.5%) and 132 of 134
+# (98.5%), while a plate carrying two offset pads splits its gaps roughly in half and lands near
+# 0.50. 0.70 sits in the empty middle with room on both sides. Below it the plate has more than one
+# lattice on it and the mode is measuring the offset BETWEEN pads, not the pitch within one.
+PITCH_DOMINANCE = 0.70
+
+
 def scan(path, arc_z_min=3.0):
     """ONE streaming pass over the emitted moves. Everything below is MEASURED, never parsed.
 
@@ -363,14 +371,39 @@ def scan(path, arc_z_min=3.0):
     if len(cur) >= 8 and len(runs) < 80:
         runs.append(cur)
 
-    def modal_gap(vals):
+    def gap_profile(vals):
+        """Modal gap between sorted coordinates -- and it DECLINES when the plate carries more than
+        one lattice.
+
+        WHY THE DECLINE HAD TO BE ADDED, 2026-08-06. `vals` is a set of coordinates with the extent
+        along the OTHER axis thrown away, so two pads whose rasters are offset from each other are
+        indistinguishable from one raster here. Sorted together they INTERLEAVE, and the modal gap
+        becomes the OFFSET BETWEEN PADS instead of the pitch within either. Pad A at 0, 1.6, 3.2 and
+        pad B at 0.4, 2.0, 3.6 sort to 0, 0.4, 1.6, 2.0, 3.2, 3.6, whose gaps are 0.4, 1.2, 0.4,
+        1.2, 0.4 -- mode 0.4, while BOTH rasters are 1.6.
+
+        That is not an imprecise measurement, it is a measurement of a different quantity, and it
+        was silently SPENDING rule 6's one-per-value grants on numbers no plate ever had: the span
+        ladder took a grant at (2, 0.4) and bucket_sector at (2, 10.481), both from this. Worse,
+        `accept` re-measures and offers the bogus number as a paste-ready ledger row.
+
+        A genuine single raster has one gap repeated. On the two coverages actually in the ledger
+        the mode covers 196/197 and 132/134 of the gaps. So dominance separates the cases cleanly,
+        and where it fails the honest answer is NOT MEASURED -- which S2 already turns into an
+        abstention that blocks the send. UNMEASURED is not UNPROVEN, and a gate that guesses here
+        is worse than one that declines.
+        """
         u = sorted(vals)
         if len(u) < 3:
-            return None, len(u)
+            return None, len(u), 0.0
         gaps = collections.Counter(round(b - a, 3) for a, b in zip(u, u[1:]))
-        return gaps.most_common(1)[0], len(u)
+        top, n_top = gaps.most_common(1)[0]
+        dom = n_top / float(sum(gaps.values()))
+        if dom < PITCH_DOMINANCE:
+            return None, len(u), dom
+        return (top, n_top), len(u), dom
 
-    (hg, hn), (vg, vn) = modal_gap(hor), modal_gap(ver)
+    (hg, hn, hdom), (vg, vn, vdom) = gap_profile(hor), gap_profile(ver)
     pitch = None
     if hg and vg:
         pitch = hg[0] if hg[1] >= vg[1] else vg[0]

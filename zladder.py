@@ -7,11 +7,22 @@ second layer on top built exactly the way the bucket's floor is built.
 
 WHY. Three max-bucket starts were cancelled over a first layer that laid ROUND strands instead of
 pressed ones, and the width was raised 2.0 -> 3.0 -> 5.0 mm chasing it. Width was never the
-problem. Measured on the machine on 2026-08-06, with the nozzle parked hot at bed centre and Oleg
-sliding paper under it: at a commanded Z0.100 the real gap took FOUR sheets, and it took one sheet
-only once the commanded Z reached -0.20. **Z zero homes about 0.30 mm high.** Every one of those
-three prints was extruding into open air, which is why more material only ever made a fatter round
-strand -- a bead cannot press against a plate it never reaches.
+problem. Every one of those three prints was extruding into open air, which is why more material
+only ever made a fatter round strand -- a bead cannot press against a plate it never reaches.
+
+**Z zero homes 0.15 mm high. NOT 0.30.** This file used to say 0.30 and that number is RETRACTED,
+left here rather than deleted because it is still quoted elsewhere and it nearly caused a correct
+constant to be "fixed" on 2026-08-07.
+
+  0.30 came from PAPER: nozzle hot at bed centre, Oleg sliding sheets, three slid free at a
+       commanded Z0.100 and one sheet gripped at Z-0.20.
+  0.15 came from a PRINTED LADDER, which is this tool's whole reason to exist: at offset -0.15 the
+       first layer was clean, and at -0.20 the nozzle DRAGGED through material it had just laid.
+
+The paper reading was wrong by 2x, and the mechanism is worth keeping because it will happen again:
+**the spring-steel sheet FLEXES under the shim and absorbs the very quantity being measured.** A
+feeler gauge on a flexible plate reads the plate, not the gap. `machine.ZERR['k2plus'] = 0.15` is
+the authority; this docstring is not.
 
 WHAT THIS SWEEPS, AND WHY IT IS THE OFFSET AND NOT THE COMMANDED Z. Each cell sets
 SET_GCODE_OFFSET, which moves where Z ZERO IS, and then prints at exactly the commanded heights the
@@ -239,9 +250,12 @@ def main():
     w("; Only the two cells that never printed would have been solid. A ladder whose rungs are not")
     w("; comparable is not a measurement.")
     w(";")
-    w("; MEASURED, NOT ASSUMED (2026-08-06, nozzle hot at bed centre, Oleg sliding paper):")
-    w(";   commanded Z0.100 -> 3 sheets slid free, 4 touched.  commanded Z-0.200 -> one sheet.")
-    w(";   So Z zero homes ~0.30mm HIGH and the whole first-layer problem was a gap, not a width.")
+    w("; Z ZERO HOMES 0.15mm HIGH, measured off a PRINTED LADDER: offset -0.15 laid a clean first")
+    w(";   layer, offset -0.20 dragged the nozzle through material it had just laid.")
+    w("; RETRACTED, and printed here so no plate carries the old number: this header used to say")
+    w(";   ~0.30mm, from paper sheets slid under a hot nozzle. That was wrong by 2x. The")
+    w(";   spring-steel sheet FLEXES under the shim and absorbs the very gap being measured, so a")
+    w(";   feeler on a flexible plate reads the plate. machine.ZERR['k2plus'] is the authority.")
     w(";")
     w("; READ IT: peel a corner of each cell. Welded fights back and leaves colour on the sheet;")
     w("; not welded lifts in one piece with a glossy underside. Then look at layer 2 — it should")
