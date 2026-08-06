@@ -35,7 +35,7 @@ Usage:  python3 spanladder.py
         python3 validate.py out/spanladder_*.gcode
         python3 send.py send out/spanladder_*.gcode          # DRY RUN. --live is Oleg's alone.
 """
-import argparse, collections, math, os, sys
+import argparse, collections, math, os, shlex, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
@@ -291,6 +291,14 @@ def main():
     w(f"; SPAN LADDER — {nrow} numbered bridges, {ladder[0]:g} to {ladder[-1]:g}mm plus a "
       f"{a.control:g}mm NEGATIVE CONTROL, on one plate")
     w(f"; PRINTER={a.printer}")
+    # THE INVOCATION, VERBATIM, SO THE PLATE CAN REGENERATE ITSELF. Without it a file can
+    # only be reproduced by GUESSING at its filename encoding, and any parameter not
+    # consciously retyped on the next run silently reverts to its DEFAULT -- the mechanism
+    # behind Oleg's "why we getting this bug back every second print" on 2026-08-07.
+    # sys.argv and NOT a reconstruction from the parsed args: a reconstruction prints what
+    # the parser DECIDED, which is the very layer that turns an omitted flag into a default
+    # and hides the omission. This records what a human actually typed.
+    w(f"; CMD={' '.join(shlex.quote(s) for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={lh:g}")
     w(f"; SPEED={a.speed:.4f}")

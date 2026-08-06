@@ -210,7 +210,7 @@ Usage:  python3 bucket_towers.py                  (the 100 mm bucket Oleg asked 
         python3 bucket_towers.py --fan 0.6        (more cooling for the towers; layer 1 unaffected)
         python3 validate.py out/bucket_towers_*.gcode      # must pass
 """
-import argparse, math, os, sys
+import argparse, math, os, shlex, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
@@ -1289,6 +1289,18 @@ def main():
       + f" on a {a.dia:g}mm circle, {len(bridges)} bridged layers of {n_lay}")
     w(f"; PRINTER={a.printer}")
     w(f"; MATERIAL={a.material}")
+    # THE INVOCATION, VERBATIM, SO THE PLATE CAN REGENERATE ITSELF. Without this a six-hour file
+    # can only be reproduced by GUESSING at its filename encoding, and on 2026-08-07 that is
+    # exactly what happened: the parameters had to be reverse-engineered out of the previous
+    # bucket's header and emitted moves one at a time. Every parameter that is not consciously
+    # carried across a regeneration silently reverts to its DEFAULT, which is the mechanism behind
+    # Oleg's "why we getting this bug back every second print" -- three defaults had outlived their
+    # evidence and each regeneration quietly restored them.
+    #
+    # sys.argv AND NOT A RECONSTRUCTION FROM `a`. A reconstruction prints what the parser decided,
+    # which is exactly the layer that turns an omitted flag into a default and hides the omission.
+    # This records what a human actually typed, so a later reader can see what was NOT said.
+    w(f"; CMD={' '.join(shlex.quote(s) for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])}")
     w(f"; LAYER_H={lh:g}")
     w(f"; SPEED={speed:.4f}")
     # R3 EXEMPTS A DECLARED LAYER-1 REGIME, AND ONLY A DECLARED ONE. Without this stamp a file

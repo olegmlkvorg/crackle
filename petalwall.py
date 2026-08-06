@@ -196,7 +196,7 @@ def main():
     ap.add_argument("--tab", type=float, default=6.0,
                     help="extra panel width so the ends OVERLAP the next panel (weld land)")
     ap.add_argument("--wall-layers", type=int, default=3,
-                    help="sheet layers (pressed + n-1); 3 = 1.3mm, 0.65% bend strain at r~101")
+                    help="sheet layers (pressed + n-1); 3 = 1.3mm, 0.65%% bend strain at r~101")
     ap.add_argument("--printer", default=machine.DEFAULT_PRINTER, choices=sorted(machine.BED))
     ap.add_argument("--material", default=None)
     ap.add_argument("--layer-h", type=float, default=0.6)

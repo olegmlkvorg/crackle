@@ -37,10 +37,11 @@ pressed 0.100 first layer and R2 reads a 0.24 ladder, and both are telling the t
 before this correction R1 was passing a file whose real first layer was 0.4 mm off the plate.
 
   cell 1   offset  0.00   the uncorrected machine — what the three cancelled prints did
-  cell 2   offset -0.15
-  cell 3   offset -0.20
+  cell 2   offset -0.15   the PRINTED-LADDER answer, and what machine.ZERR carries
+  cell 3   offset -0.20   the ladder saw the nozzle DRAG here, so this is the far edge
   cell 4   offset -0.25
-  cell 5   offset -0.30   where the paper says one sheet grips
+  cell 5   offset -0.30   where the RETRACTED paper reading pointed. Kept as a cell because a
+                          ladder should span past its answer on both sides, not stop at it.
   cell 6   offset -0.35
 
 THE NUMBERS ARE PRINTED, not captioned. Each cell draws its own digit in seven-segment strokes at
@@ -72,7 +73,7 @@ HOW TO READ THE PLATE
 Usage:  python3 zladder.py
         python3 tools/push.py out/zladder_*.gcode
 """
-import argparse, math, os, sys
+import argparse, math, os, shlex, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
@@ -212,6 +213,14 @@ def main():
     w(f"; Z LADDER — {n} numbered cells, real first-layer heights {a.heights}mm, reached by "
       f"offset against a measured Z-zero error of {a.zerr:+.3f}mm")
     w(f"; PRINTER={a.printer}")
+    # THE INVOCATION, VERBATIM, SO THE PLATE CAN REGENERATE ITSELF. Without it a file can
+    # only be reproduced by GUESSING at its filename encoding, and any parameter not
+    # consciously retyped on the next run silently reverts to its DEFAULT -- the mechanism
+    # behind Oleg's "why we getting this bug back every second print" on 2026-08-07.
+    # sys.argv and NOT a reconstruction from the parsed args: a reconstruction prints what
+    # the parser DECIDED, which is the very layer that turns an omitted flag into a default
+    # and hides the omission. This records what a human actually typed.
+    w(f"; CMD={' '.join(shlex.quote(s) for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={lh:g}")
     w(f"; SPEED={a.speed:.4f}")

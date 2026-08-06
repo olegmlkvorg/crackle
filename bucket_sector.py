@@ -63,7 +63,7 @@ a wrap angle instead would have cost the click answer, which is the one that has
 Usage:  python3 bucket_sector.py
         python3 validate.py out/bucket_sector_*.gcode
 """
-import argparse, math, os, sys
+import argparse, math, os, shlex, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine
@@ -512,6 +512,14 @@ def main():
     w(f"; BUCKET SECTOR COUPON — {len(sectors)} sectors x {a.n_post} posts of the REAL "
       f"{a.dia:g}mm ring, {a.height:g}mm tall")
     w(f"; PRINTER={a.printer}")
+    # THE INVOCATION, VERBATIM, SO THE PLATE CAN REGENERATE ITSELF. Without it a file can
+    # only be reproduced by GUESSING at its filename encoding, and any parameter not
+    # consciously retyped on the next run silently reverts to its DEFAULT -- the mechanism
+    # behind Oleg's "why we getting this bug back every second print" on 2026-08-07.
+    # sys.argv and NOT a reconstruction from the parsed args: a reconstruction prints what
+    # the parser DECIDED, which is the very layer that turns an omitted flag into a default
+    # and hides the omission. This records what a human actually typed.
+    w(f"; CMD={' '.join(shlex.quote(s) for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={lh:g}")
     w(f"; SPEED={a.speed:.4f}")
@@ -611,19 +619,31 @@ def main():
     w(f"SET_GCODE_OFFSET Z={zoff:.3f} MOVE=1   ; commanded Z{press:.3f} lands {a.h1:.3f}mm on a "
       f"machine whose zero sits {zerr:.3f} high")
 
-    px, py = 20.0, 16.0
-    w("G1 F600 Z2.000")
-    w(f"G0 F{travel_f} X{px:.3f} Y{py:.3f}")
-    w("G1 E20 F300                      ; PRIME purge, LIFTED to Z2 so it cannot collar the tip")
-    w(f"G1 F600 Z{press:.3f}")
-    w(f"G1 F1200 X{px+40:.3f} Y{py:.3f} E30   ; PRIME line, in the clear at the press gap")
-    w(f"G0 F3000 X{px+52:.3f} Y{py+12:.3f}  ; PRIME break-off — angled wipe, no extrusion")
-    w("G92 E0")
+    # ONE SHARED PRIME, machine.prime(). What was here lifted to Z2.000, extruded 20mm of filament
+    # (48.1 mm3) with the head STANDING STILL in free air, and then drove the nozzle 1.9mm DOWN into
+    # the pile it had just made. That is the exact sequence in Oleg's 2026-08-06 photograph -- the
+    # clump collars the tip, then drops into a printing plate -- and validate.py R10 now refuses it
+    # on the emitted file. The line that followed metered E20->30 over 40mm = 0.601 mm2/mm, asking a
+    # 0.8 orifice to spread a 6.01mm bead at the 0.10 gap, against this file's own layer 1 of
+    # 0.200 mm2/mm landing 2.00mm wide. `e_l1` is that same 0.200, so the prime is now the part's
+    # own first layer and a thin or broken line here is layer 1 failing in 8 seconds, not in 6 hours.
+    #
+    # EVERY SECTOR'S BED FOOTPRINT IS PASSED AS `avoid`, not just the first. The plate carries
+    # len(sectors) separate bands with a --gap-mm channel between them, and prime_region picks a
+    # strip off the mesh edge; handing it one band would let it reserve a runway straight through
+    # another. The rects are the SAME extents the bed-fit check above refuses to emit without,
+    # translated by each sector's own placement, so the prime cannot claim ground the layout owns.
+    _px, _py, _ = machine.prime(
+        w, printer=a.printer, z=press, rate=e_l1, feed=f_1, travel_feed=travel_f,
+        avoid=tuple(("rect", ext[i][0] + sectors[i]["ox"], ext[i][2] + sectors[i]["oy"],
+                     ext[i][1] + sectors[i]["ox"], ext[i][3] + sectors[i]["oy"])
+                    for i in range(len(sectors))),
+        near=sectors[0]["layers"][0]["pts"][0])
     w("; BODY_START")
 
     E = 0.0
     d_body = d_l1 = d_trav = d_z = 0.0
-    cur = [px + 52.0, py + 12.0, press]
+    cur = [_px, _py, press]
 
     def hop(tx, ty, z, note):
         """Lift, cross, come back down -- unless the head is ALREADY THERE.
@@ -641,8 +661,15 @@ def main():
             d_z += abs(cur[2] - z)
             cur[2] = z
             return
+        # THE 3.0 FLOOR OUTLIVED WHAT IT WAS FOR and is kept deliberately, not by oversight. It
+        # cleared the Z2.000 prime blob, which machine.prime() no longer creates -- its line is laid
+        # at the press gap, so the tallest thing on this plate is once again the part, and z + 1.0
+        # alone would clear it on every layer. It stays because a hop that lifts HIGHER than needed
+        # costs Z travel on the first eight layers and nothing else, while getting it wrong in the
+        # other direction ploughs the nozzle through a sector on the way to its neighbour. Not a
+        # behaviour this coupon's R10 fix has any business changing on the same pass.
         sz = max(z + 1.0, 3.0)
-        w(f"G0 Z{sz:.3f} F1800   ; HOP lift, clear of the wall AND the Z2 prime purge")
+        w(f"G0 Z{sz:.3f} F1800   ; HOP lift, clear of the wall and of the neighbouring sector")
         w(f"G0 X{tx:.3f} Y{ty:.3f} F{travel_f}   ; HOP {note}")
         w(f"G1 F1800 Z{z:.3f}")
         d_trav += math.hypot(tx - cur[0], ty - cur[1])
