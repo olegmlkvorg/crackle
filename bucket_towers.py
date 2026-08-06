@@ -47,6 +47,31 @@ Three features, and every one of them is a flag with a stated default, not a rew
    stays solid. The flow is HELD and --w1 comes down with it, which is what opens the base into a
    grid. Verify it in the emitted floor, not here.
 
+WHAT CHANGED ON 2026-08-06 (second pass), after Oleg looked at the printed bucket
+---------------------------------------------------------------------------------
+"you need to merge the net and outer wall print in many places, it cant be separate closly aligned
+pieces". That is a real defect and it was visible in the emitted file: the crossing left post k's
+LEADING TIP tangentially, at a single point, and arrived at post k+1's TRAILING TIP the same way.
+So the WALL was a vertical stack of arcs fusing to each other, the NET was a vertical stack of
+strands fusing to each other, and the two structures met along ONE BEAD-WIDE SEAM LINE running the
+full height. Two soundly built things touching, not interpenetrating.
+
+4  --merge-mm (default 2.0) LAPS THE NET ONTO THE WALL AT BOTH ENDS OF EVERY CROSSING. Before it
+   departs, the head runs BACK along the post's own arc for --merge-mm of ARC LENGTH and returns
+   to the tip; after it lands, it runs FORWARD along the next post's arc the same distance and
+   returns. The strand is then welded to the wall over a LENGTH at each end rather than at a point,
+   and the joint is a lap rather than a butt. Both ends, because a weld on one side only MOVES the
+   seam instead of removing it.
+   THE CROSSING ITSELF IS UNTOUCHED. Each excursion returns EXACTLY to the tip it started from, so
+   the chord that spans the air is the same chord: the fabric Oleg told us to keep is not in the
+   blast radius, gate 3 tests the same geometry it always did, and --merge-mm 0 reproduces the
+   pre-change file's motion BYTE FOR BYTE (proven by generating both and diffing every G0/G1, not
+   claimed).
+   WHAT IT COSTS, STATED: the excursion is out AND back, so each lap region receives 2 x
+   --merge-flow of bead ON TOP OF the wall's own 1.0 -- 1.50x at the default. That lands on the
+   two LIPS of the C-channel, which are also the bamboo mouth, so the modelled mouth NARROWS. Both
+   numbers are printed in the header. Neither is measured.
+
 WHAT THIS FILE REFUSES TO CLAIM: whether the C actually grips. The modelled mouth is WIDER than
 the stick, so capture depends wholly on a print shrink that has never been measured for a free
 single-bead loop of this size -- and the house record has that exact constant condemning ~21 parts
@@ -240,6 +265,34 @@ def tower_arc(c, r, a_start, wrap_rad, n, end_pt):
     return pts
 
 
+def merge_arc(c, r, a_tip, sign, merge_mm, step_rad):
+    """Points walking `merge_mm` of ARC LENGTH away from a post's tip, ALONG THE POST'S OWN PATH.
+
+    Excludes the tip itself, so it appends straight onto a path that is already sitting there.
+    `sign` is -1 to walk BACK from the leading tip (the departure lap) and +1 to walk FORWARD from
+    the trailing tip (the arrival lap).
+
+    IT FOLLOWS THE ARC, IT DOES NOT CHORD ACROSS IT. The whole point is that this material lands ON
+    the wall bead; a straight shortcut between the same two ends would sit up to r(1-cos) INSIDE the
+    post and weld to nothing. Same angular step as tower_arc(), so the lap lands on the same points
+    the wall itself was drawn through and the two beads share a centreline rather than crossing it.
+
+    The last step is TRUNCATED to land exactly at merge_mm rather than overshooting to the next
+    whole segment: the overlap length is a declared number that gate 6 measures off the emitted
+    points, so it has to be the number, not the number rounded up to the arc's segmentation.
+    """
+    if merge_mm <= 0 or r <= 1e-12:
+        return []
+    total = merge_mm / r                          # radians of arc = length / radius
+    step = max(step_rad, 1e-9)
+    out, walked = [], 0.0
+    while walked < total - 1e-12:
+        walked = min(total, walked + step)
+        a = a_tip + sign * walked
+        out.append((c[0] + r * math.cos(a), c[1] + r * math.sin(a)))
+    return out
+
+
 def dip(p, q, c, r):
     """How far (mm) segment p->q passes INSIDE the circle (c, r). 0.0 means it clears it.
 
@@ -375,7 +428,7 @@ def air_for_count(cx, cy, r_ring, r_t, bw, n, half_deg=180.0):
                     cs[0], cs[1], r_t, bw, arc=(phis[0], phis[1], hr))
 
 
-def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1):
+def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1, merge_mm=0.0):
     """Refuse to emit anything that breaks one of the properties this part is built on.
 
     Every one of these was a real failure, and none of them is checkable by reading the source:
@@ -387,7 +440,11 @@ def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1):
          hop. READ THE CAVEAT ON THIS ONE: for a C-channel it no longer discriminates (below).
       4  Z NEVER DESCENDS. Trivially true of a per-layer Z ladder -- and asserted anyway, because
          "the first bridge attempt" was also obviously fine until validate.py read the file.
+      6  EVERY MERGE LAP LIES ON A POST AND IS AS LONG AS DECLARED. Gate 3 exempts these moves
+         because they run ON a post BY DESIGN, and an exemption granted by a tag is worth nothing;
+         this earns it back by MEASURING that they do, off the emitted points.
     Gate 5 (the latch floor vs the bamboo channel) needs r_h and lives in main().
+    Returns (n_crossings, n_laps, measured_lap_mm).
     """
     for i in range(1, len(layers)):
         d = math.dist(layers[i]["pts"][0], layers[i - 1]["pts"][-1])
@@ -441,7 +498,62 @@ def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1):
     bad = [k for k in range(1, len(zs)) if zs[k] < zs[k - 1] - 1e-9]
     if bad:
         raise SystemExit(f"REFUSING TO EMIT: Z descends at layer(s) {bad[:5]}. Towers only go up.")
-    return n_cross
+    # GATE 6 — THE MERGE LAP. Gate 3 above skips kind "M" because a lap runs ON a post deliberately:
+    # feeding it to a check whose whole job is to refuse anything touching a post would refuse the
+    # feature for doing what it exists to do. That is stated rather than special-cased quietly, and
+    # the exemption is EARNED BACK HERE by measuring the property gate 3 can no longer see:
+    #   * every point of a lap sits on a post's toolpath circle to 1e-6 -- it is ON the wall, not
+    #     beside it, which is the entire difference between a weld and the seam it replaces;
+    #   * the lap returns EXACTLY to the tip it left, so the crossing chord is untouched;
+    #   * the arc length it reaches is --merge-mm. Declared-and-not-applied is the failure this
+    #     project has been bitten by five times, so the number is measured off the points, never
+    #     re-derived from the argument that produced them.
+    # And a merge asked for but ABSENT is refused too: a silently empty feature is the same defect
+    # wearing a pass.
+    n_merge, lap_lo, lap_hi = 0, None, None
+    for i, L in enumerate(layers):
+        K, P = L["kind"], L["pts"]
+        j = 0
+        while j < len(K):
+            if K[j] != "M":
+                j += 1
+                continue
+            j0 = j
+            while j < len(K) and K[j] == "M":
+                j += 1
+            tip = P[j0]
+            if math.dist(P[j], tip) > 1e-9:
+                raise SystemExit(
+                    f"REFUSING TO EMIT: a merge lap on layer {i+1} ends {math.dist(P[j], tip):.9f} "
+                    f"mm from the tip it started at. The lap must return to the tip exactly or the "
+                    f"crossing departs from somewhere the seam window was never measured for.")
+            c = min(centres, key=lambda cc: abs(math.dist(cc, tip) - r_t))
+            a_tip = math.atan2(tip[1] - c[1], tip[0] - c[0])
+            worst_r, reach = 0.0, 0.0
+            for p in P[j0:j + 1]:
+                worst_r = max(worst_r, abs(math.dist(p, c) - r_t))
+                da = math.atan2(p[1] - c[1], p[0] - c[0]) - a_tip
+                da = (da + math.pi) % (2 * math.pi) - math.pi
+                reach = max(reach, abs(da) * r_t)
+            if worst_r > 1e-6:
+                raise SystemExit(
+                    f"REFUSING TO EMIT: a merge lap on layer {i+1} strays {worst_r:.6f} mm off the "
+                    f"post's toolpath circle at ({c[0]:.2f},{c[1]:.2f}). A lap that is not ON the "
+                    f"wall welds nothing -- it lays a second bead beside the first, which is the "
+                    f"defect this feature exists to remove.")
+            n_merge += 1
+            lap_lo = reach if lap_lo is None else min(lap_lo, reach)
+            lap_hi = reach if lap_hi is None else max(lap_hi, reach)
+    if merge_mm > 0 and not n_merge:
+        raise SystemExit(
+            f"REFUSING TO EMIT: --merge-mm {merge_mm:g} was asked for and NOT ONE lap was built. "
+            f"Declared and never applied.")
+    if n_merge and max(abs(lap_lo - merge_mm), abs(lap_hi - merge_mm)) > 1e-6:
+        raise SystemExit(
+            f"REFUSING TO EMIT: the merge laps reach {lap_lo:.6f}..{lap_hi:.6f} mm of arc against "
+            f"the {merge_mm:g} mm declared. The header would state an overlap the file does not "
+            f"lay.")
+    return n_cross, n_merge, (lap_hi or 0.0)
 
 
 # ------------------------------------------------------------------------------------- the part
@@ -503,9 +615,10 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg):
 
 
 def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_floor,
-          floor_pitch, r_h, bridges):
+          floor_pitch, r_h, bridges, merge_mm=0.0):
     """Every layer as {pts, kind, label}. pts[0] is where the layer starts; kind[j] says how the
-    head reaches pts[j+1] -- E extrude, T flat metered crossing, B bridge, R floor rim.
+    head reaches pts[j+1] -- E extrude, T flat metered crossing, B bridge, R floor rim,
+    M the lap that welds a crossing ONTO the post it leaves and the post it lands on.
 
     THE ORDERING IS FORCED, there is no design freedom in it: the head arrives at post k's TRAILING
     tip (stagger - wrap/2), walks CCW through the post's OUTWARD face, and departs from the LEADING
@@ -515,6 +628,25 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
     starts = [seam_point(centres[k], phis[k], r_t, stagger - half_rad) for k in range(n)]
     ends = [seam_point(centres[k], phis[k], r_t, stagger + half_rad) for k in range(n)]
     a0 = [phis[k] + stagger - half_rad for k in range(n)]
+    step_rad = 2.0 * half_rad / narc          # the arc's OWN angular step; the lap reuses it
+
+    def weld(tip, c, a_tip, sign):
+        """The lap: out along the post from `tip`, and back to EXACTLY `tip`.
+
+        RETURNING TO THE TIP IS THE WHOLE DESIGN. It leaves the crossing chord, the seam window and
+        the one-stroke handoff untouched -- the lap is inserted BESIDE the crossing, never in place
+        of part of it -- which is what makes --merge-mm 0 a byte-identical superset instead of a
+        claim about one. It also costs a second pass over the lap, and that is where the 1.5x of
+        bead in the lip comes from; it is declared in the header rather than absorbed quietly.
+        `tip` is passed back by IDENTITY, not recomputed, so the chord's start point is the same
+        float it always was and gate 1's 1e-6 handoff can never open on a rounding difference.
+        """
+        out = merge_arc(c, r_t, a_tip, sign, merge_mm, step_rad)
+        if not out:
+            return [], []
+        path = out + out[-2::-1] + [tip]
+        return path, ["M"] * len(path)
+
     layers = []
     for li in range(n_lay):
         is_floor = li < n_floor
@@ -541,6 +673,13 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 pts += seg_pts
                 kind += ["R"] * len(seg_pts)
             else:
+                # THE LAP GOES ON BOTH SIDES OF THE CROSSING AND ONLY AROUND AN AIRBORNE ONE.
+                # A floor-layer rim ("R") is already a full-flow extruded line landing on a solid
+                # latch disc: there is no net there and nothing to weld, so lapping it would only
+                # double material on the feet. The T and B crossings are the net.
+                wp, wk = weld(ends[k], centres[k], a0[k] + 2.0 * half_rad, -1)
+                pts += wp
+                kind += wk
                 # ONE MOVE, NOT A SUBDIVIDED LINE, and that is not a shortcut. A bridge is a strand
                 # pulled taut across air; every intermediate point is a place the planner can slow
                 # down and let it sag. towercoupon.py laid its proven 16.8 mm spans as single moves.
@@ -549,6 +688,9 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 # different flow, never a second pass and never a wider post.
                 pts.append(starts[nxt])
                 kind.append(cross)
+                wp, wk = weld(starts[nxt], centres[nxt], a0[nxt], +1)
+                pts += wp
+                kind += wk
         _m = bridges.get(li)
         layers.append({"pts": pts, "kind": kind, "mult": _m,
                        "label": ("floor latch" if is_floor else
@@ -707,6 +849,24 @@ def main():
                          "travel exactly. NOT 1.0: at full flow the crossings cost more than the "
                          "posts and the part lands at 1.24x a solid single-bead wall; at 0.25 the "
                          "same part is 0.51x. Thin is the point.")
+    ap.add_argument("--merge-mm", type=float, default=2.0,
+                    help="mm of ARC LENGTH that each gap crossing laps ONTO the post, at BOTH ends. "
+                         "Oleg 2026-08-06, holding the printed bucket: 'you need to merge the net "
+                         "and outer wall print in many places, it cant be separate closly aligned "
+                         "pieces'. Before departing, the head runs back along the post's own arc "
+                         "this far and returns to the tip; after landing, it runs forward along the "
+                         "next post's arc the same distance and returns. The strand is then welded "
+                         "over a LENGTH at each end instead of at a point. 0 reproduces the old "
+                         "output byte for byte -- the crossing chord itself never changes.")
+    ap.add_argument("--merge-flow", type=float, default=None,
+                    help="fraction of the body's own extrusion rate laid on EACH PASS of the lap. "
+                         "Default follows --cross-flow, because the weld IS the strand pressed onto "
+                         "the wall rather than a new feature with its own volume. IT IS A SEPARATE "
+                         "KNOB ON PURPOSE: an in-air strand and a lap onto solid material are "
+                         "different physics, so a future change to the fabric must not silently "
+                         "change the weld. The lap is out AND back, so the region receives 2x this "
+                         "on top of the wall's own 1.0 -- see the header, which prints the packing "
+                         "and what it does to the modelled bamboo mouth.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
@@ -845,6 +1005,45 @@ def main():
     starts = [seam_point(centres[k], phis[k], r_t, stagger - half_rad) for k in range(n_tow)]
     ends = [seam_point(centres[k], phis[k], r_t, stagger + half_rad) for k in range(n_tow)]
 
+    # ------------------------------------------------------------------ THE MERGE LAP, VALIDATED
+    # Three ways --merge-mm can be wrong, and each is refused with the number that refused it
+    # rather than clamped silently -- a clamp would print a header describing a lap the operator
+    # did not ask for.
+    arc_len = r_t * 2.0 * half_rad                  # the whole post, tip to tip, in mm of path
+    merge_flow = a.cross_flow if a.merge_flow is None else a.merge_flow
+    if a.merge_mm < 0:
+        ap.error(f"--merge-mm {a.merge_mm:g} is negative")
+    if a.merge_flow is not None and a.merge_flow < 0:
+        ap.error(f"--merge-flow {a.merge_flow:g} is negative")
+    if a.merge_mm > 0:
+        # A ZERO-FLOW LAP IS A DRY DRAG ACROSS THE WALL, which is strictly worse than the point
+        # contact it was meant to fix: the nozzle ploughs the bead it just laid and welds nothing.
+        if merge_flow <= 0:
+            raise SystemExit(
+                f"REFUSING TO EMIT: --merge-mm {a.merge_mm:g} with a lap flow of 0 "
+                f"({'--merge-flow 0' if a.merge_flow is not None else '--cross-flow 0, which the lap follows'}). "
+                f"That drags the nozzle {a.merge_mm:g} mm back across the wall it just laid with "
+                f"nothing coming out -- a plough, not a weld. Pass --merge-flow, or --merge-mm 0.")
+        # THE TWO LAPS ARE AT OPPOSITE ENDS OF THE SAME ARC, so they collide at half the arc, not
+        # at the whole of it. Past that the post's middle takes both laps and the lip flow doubles
+        # again; at --wrap-deg 30 the whole arc is 1.11 mm and a 2 mm lap would wrap past the far
+        # tip into the mouth. Refused with the arc it measured, so the message states the ceiling.
+        if a.merge_mm > arc_len / 2.0 + 1e-9:
+            raise SystemExit(
+                f"REFUSING TO EMIT: --merge-mm {a.merge_mm:g} is more than half the "
+                f"{arc_len:.2f} mm arc of a {a.wrap_deg:g}-degree post ({a.tower_d:.3f} mm OD). The "
+                f"lap at each end would run past the middle and overlap the other one, so the post "
+                f"would carry {1.0 + 4.0*merge_flow:.2f}x of bead along its whole length instead of "
+                f"{1.0 + 2.0*merge_flow:.2f}x at its lips. Cap is {arc_len/2.0:.2f} mm here.")
+        if r8cap and merge_flow * flow > r8cap + 1e-9:
+            raise SystemExit(
+                f"REFUSING TO EMIT: a lap at --merge-flow {merge_flow:g} runs at "
+                f"{merge_flow*flow:.2f} mm3/s against the {r8cap:g} mm3/s maintained figure for "
+                f"{a.material} on this machine. The lap runs at the BODY speed ({speed:g} mm/s), "
+                f"not the crossing speed, so its flow is merge_flow x bead x body speed.")
+    merge_mm2 = merge_flow * bw * lh                # cross-section of ONE pass of the lap
+    lap_pack = 1.0 + 2.0 * merge_flow               # the wall's own bead + both passes of the lap
+
     # THE LATCH DISC STOPS ONE BEAD INSIDE THE RIM POLYGON, and that radius is MEASURED off the
     # emitted chords rather than computed from a cos(pi/n) that would silently be wrong the moment
     # the ends move off the radial. THE CHORD IS TIP TO TIP now, so it sits FURTHER OUT than the
@@ -868,6 +1067,17 @@ def main():
     mouth = tip_gap - bw
     SHRINK_METAL = 0.25          # guides/fit-and-assembly-empirics.md, ~6mm bore, METAL shaft
     mouth_shrunk = mouth - SHRINK_METAL
+    # THE LAP LANDS ON THE LIPS AND THE LIPS ARE THE MOUTH, so --merge-mm moves a number this file
+    # already declines to claim. MODELLED, and the model is stated: the nozzle sets the layer
+    # height, so extra material at a fixed Z spreads SIDEWAYS rather than stacking, and a lip
+    # carrying lap_pack of a bead lands lap_pack x {bw} wide. Half of each lip's width bulges into
+    # the opening, so the clear mouth is the tip chord minus one whole lip bead -- the same
+    # arithmetic as the line above it, with the lap's bead in place of the plain one.
+    # NOTHING HERE IS MEASURED. It is printed so the tradeoff is visible and tunable (--merge-flow),
+    # not so it can be claimed: this file already DECLINES to claim a fit, and narrowing the mouth
+    # toward the stick is exactly the direction that would flatter us into claiming one.
+    lip_w = lap_pack * bw if a.merge_mm > 0 else bw
+    mouth_lap = tip_gap - lip_w
 
     circ_t = 2 * math.pi * r_t
     nseg = max(MIN_TOWER_SEGS, int(math.ceil(circ_t / SEG)))     # PER FULL REVOLUTION
@@ -924,8 +1134,9 @@ def main():
     capped = [t for t in _cap_all if t[2] < t[1] - 1e-9 and t[2] in _used]
 
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
-                   a.floor_layers, a.floor_pitch, r_h, bridges)
-    n_cross = check_paths(layers, centres, r_t, (bedx, bedy), press, lh, stag_deg, bw, w1)
+                   a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm)
+    n_cross, n_merge, lap_measured = check_paths(layers, centres, r_t, (bedx, bedy), press, lh,
+                                                 stag_deg, bw, w1, a.merge_mm)
 
     # ------------------------------------------------------------------ measured off the built path
     def layer_mm(L):
@@ -963,6 +1174,12 @@ def main():
     ext_mm = path_mm + cross_mm                      # path with material coming out of the nozzle
     dry_mm = trav_mm - cross_mm                      # path flown dry
     n_moves = sum(len(L["kind"]) for L in layers)
+    # THE LAP'S OWN LENGTH AND CLOCK, measured off the built points. It is inside path_mm already
+    # (a lap extrudes), but it is the price of the feature and a price nobody states is a price
+    # nobody can decide about: it runs at the BODY speed, so it is minutes, not seconds.
+    lap_mm = sum(math.dist(Lz["pts"][j], Lz["pts"][j + 1])
+                 for Lz in layers for j, k in enumerate(Lz["kind"]) if k == "M")
+    lap_mins = lap_mm / speed / 60.0
     # WHAT LAYER 1 ACTUALLY LANDS AT — which is w1, by construction, because e_mm_l1 was DERIVED
     # from it (e = w1 * press / A_FIL). This used to be re-typed as bw*lh/press, the DEFAULT w1,
     # so every run with --w1 printed a floor description of a first layer it was not laying: the
@@ -1059,6 +1276,13 @@ def main():
     _mm2s = sorted({round(m * bw * lh, 4) for m in bridges.values()})
     w(f"; BRIDGE_FLOW={','.join(f'{m:.2f}' for m in sorted(set(bridges.values())))}")
     w(f"; BRIDGE_MM2={','.join(f'{v:.4f}' for v in _mm2s)}")
+    # THE LAP IS DECLARED AS A LENGTH AND A CROSS-SECTION, both measurable off the emitted moves.
+    # MERGE_MM is the arc length gate 6 measured on the built points, NOT the argument that asked
+    # for it, so a lap that silently came out short would contradict its own stamp.
+    if a.merge_mm > 0:
+        w(f"; MERGE_MM={lap_measured:.4f}")
+        w(f"; MERGE_MM2={merge_mm2:.4f}")
+        w(f"; MERGE_PASSES=2")
     w(";")
     w("; ---------------- WHAT THIS PART IS ----------------")
     if abs(a.wrap_deg - 360.0) < 1e-9:
@@ -1127,6 +1351,48 @@ def main():
     w(f";        {lh:g}mm layer pitch, so consecutive strands touch and FUSE into a continuous "
       f"membrane. Oleg,")
     w(f";        2026-08-06: \"Don't remove the fabric that has to stay\".")
+    if a.merge_mm > 0:
+        w(f"; MERGE  every crossing is LAPPED ONTO THE POST AT BOTH ENDS. Oleg 2026-08-06, holding "
+          f"the printed")
+        w(f";        bucket: \"you need to merge the net and outer wall print in many places, it "
+          f"cant be separate")
+        w(f";        closly aligned pieces\". Before departing, the head runs {a.merge_mm:g}mm BACK "
+          f"along the post's own")
+        w(f";        arc and returns to the tip; after landing, it runs {a.merge_mm:g}mm FORWARD "
+          f"along the next post's")
+        w(f";        arc and returns. The net is welded to the wall over a LENGTH at each end "
+          f"instead of at a")
+        w(f";        point -- a lap joint, not a butt joint against a bead-wide seam running the "
+          f"whole height.")
+        w(f";        MEASURED, not asserted: gate 6 read {n_merge} laps off the emitted points, "
+          f"every one reaching")
+        w(f";        {lap_measured:.4f}mm of arc and landing on a post's toolpath circle to within "
+          f"1e-6mm.")
+        w(f";        THE CROSSING CHORD IS UNCHANGED. Each lap returns EXACTLY to the tip it left, "
+          f"so the strand")
+        w(f";        across the air is the same move it always was and the fabric is untouched.")
+        w(f";          lap      {merge_flow:>5.2f}x  {merge_mm2:.4f}mm2  per pass, at the body's "
+          f"{speed:g}mm/s ({merge_flow*flow:.2f}mm3/s)")
+        w(f";                       NOT at --cross-speed: that regime is licensed for AIR, and a "
+          f"lap is deposition.")
+        w(f";        PACKING, NAMED: the lap is out AND back, so the lip carries 1.0 + 2 x "
+          f"{merge_flow:g} = {lap_pack:.2f}x of a bead.")
+        w(f";        The nozzle sets the height, so the excess spreads SIDEWAYS: the lip lands "
+          f"~{lip_w:.2f}mm wide")
+        w(f";        against {bw:g}mm elsewhere. MODELLED. Nothing here has been printed or "
+          f"measured.")
+        w(f";        AND THAT NARROWS THE BAMBOO MOUTH, which is the cost worth seeing rather than "
+          f"absorbing:")
+        w(f";        {mouth:.3f} -> {mouth_lap:.3f}mm against a {a.stick_d:.3f}mm stick "
+          f"({mouth-a.stick_d:+.3f} -> {mouth_lap-a.stick_d:+.3f}). This file")
+        w(f";        DECLINES to claim a fit either way -- see UNMEASURED below. Narrowing toward "
+          f"the stick is")
+        w(f";        exactly the direction that would flatter us into claiming one. --merge-flow "
+          f"tunes it,")
+        w(f";        --merge-mm 0 removes the feature and reproduces the old file's motion byte for "
+          f"byte.")
+        w(f";        COST: {lap_mm/1000:.1f}m of extra path at {speed:g}mm/s = {lap_mins:.0f} min "
+          f"of the {mins:.0f} min total.")
     if capped:
         for _nm, _req, _got in capped:
             w(f";        !! CAPPED: {_nm} requested {_req:g}x = {_req*flow:.2f}mm3/s, DELIVERED "
@@ -1305,6 +1571,17 @@ def main():
           f"{'SLIDES IN FREE, no capture' if mouth > a.stick_d else 'captures'}")
         w(f";   at the house 'printed = model - {SHRINK_METAL:g}' the mouth becomes "
           f"{mouth_shrunk:.3f}mm = {mouth_shrunk-a.stick_d:+.3f}mm")
+        if a.merge_mm > 0:
+            w(f";   AND THE MERGE LAP MOVES IT AGAIN: a {lap_pack:.2f}x lip bead spreading sideways "
+              f"reads {mouth_lap:.3f}mm = {mouth_lap-a.stick_d:+.3f}mm.")
+            w(f";   THAT IS THE DIRECTION THAT FLATTERS US -- a mouth that was too wide to capture "
+              f"is now modelled")
+            w(f";   narrower than the stick -- so it is the one to distrust hardest. It rests on a "
+              f"bead-spreading")
+            w(f";   model with NO measurement behind it, stacked on the shrink constant above that "
+              f"is already cited")
+            w(f";   outside its conditions. Two unmeasured models pointing the same way is not "
+              f"evidence.")
         w(f"; SO CAPTURE DEPENDS WHOLLY ON A SHRINK CONSTANT THAT IS CITED OUTSIDE ITS CONDITIONS. "
           f"That {SHRINK_METAL:g} was")
         w(f"; calibrated on a ~6mm bore around a METAL shaft. Reused for 6.35mm BAMBOO it was "
@@ -1436,6 +1713,24 @@ def main():
                 else:
                     w(f"G0 F{f} X{x:.3f} Y{y:.3f} ; HOP flat across open air, no lift (clears both "
                       f"tower walls)")
+            elif kind == "M":
+                # THE LAP RUNS AT THE BODY SPEED, NOT THE CROSSING SPEED, and that is the north
+                # star doing its job rather than being worked around. --cross-speed is licensed for
+                # AIR: "nothing is being deposited onto" a strand flung between two towers, so it
+                # has no adhesion to get wrong. This move IS deposition, onto the wall bead, so it
+                # belongs to the 50 mm/s regime that exists for exactly that. F is written on every
+                # lap move because F is sticky and a lap follows a crossing at f_x on one side and
+                # a body move at f on the other.
+                #
+                # TAGGED '; LINK', WHICH IS A DECLARATION AND NOT A LOOPHOLE. validate.py exempts
+                # LINK moves from R4 constant flow because they deliberately meter DOWN, and it
+                # counts and reports every one so an exemption cannot hide a growing problem. The
+                # tag deliberately avoids the words BRIDGE/POCKET/CORNER/THIN CROSS: each of those
+                # names a different declared regime with its own gate, and borrowing one would put
+                # these moves in front of a check built for something else.
+                E += seg * e_mm * merge_flow
+                w(f"G1 F{f_l1 if li == 0 else f} X{x:.3f} Y{y:.3f} E{E:.5f} ; LINK MERGE "
+                  f"{merge_flow*100:.0f}% -- net lapped onto the post, {a.merge_mm:g}mm of arc")
             else:
                 # LAYER 1 IS METERED SEPARATELY AND ON PURPOSE.
                 # Oleg, 2026-08-05, after the first ring printed: "first layer need to be full flow
@@ -1497,9 +1792,14 @@ def main():
     mf = ("" if set(bridges.values()) == {1.0} else
           "_m" + "-".join(f"{m:g}" for m in sorted(set(bridges.values()))))
     bb = f"_bb{a.bottom_brace_layers}x{a.bottom_bridge_every}" if a.bottom_brace_layers > 0 else ""
+    # THE LAP IS IN THE NAME FOR THE SAME REASON THE FLOOR AND THE CROSS FLOW ARE: a run with the
+    # net welded into the wall and a run with it touching are the same geometry carrying different
+    # material, and two different parts cannot share a name. Suffix only when it is on, so every
+    # filename written before --merge-mm existed still names the same file.
+    jf = f"_j{a.merge_mm:g}" if a.merge_mm > 0 else ""
     fn = os.path.join(a.out, f"bucket_towers_{a.printer}_{a.material}_d{a.dia:g}_h{a.height:g}_"
                              f"n{n_tow}t{a.tower_d:g}{wf}_b{a.bridge_every}{bb}{mf}_"
-                             f"f{a.floor_layers}x{a.floor_pitch:g}{xf}.gcode")
+                             f"f{a.floor_layers}x{a.floor_pitch:g}{xf}{jf}.gcode")
     open(fn, "w").write("\n".join(L) + "\n")
 
     print(fn)
@@ -1541,6 +1841,24 @@ def main():
           f"{SEAM_SCAN_DEG:g} deg steps (centre {win_c:.2f})")
     print(f"  {n_cross} gap crossings, every one re-checked against every post: none passes "
           f"inside a wall, so none lifts")
+    if a.merge_mm > 0:
+        # AGAINST THE AIRBORNE CROSSINGS, NOT n_cross. n_cross counts every T/B/R move and a floor
+        # rim is SUBDIVIDED, so dividing by it read "0 laps per crossing" on a file with two laps
+        # on every one of them -- a report about the artifact quoting the wrong denominator.
+        _n_air = sum(1 for Lz in layers for k in Lz["kind"] if k in ("T", "B"))
+        print(f"  MERGE: {n_merge} laps on {_n_air} airborne crossings "
+              f"({n_merge/max(1,_n_air):.1f} each — both ends), every one measured at "
+              f"{lap_measured:.4f}mm of arc ON the post's own circle to 1e-6")
+        print(f"     {merge_flow:g}x = {merge_mm2:.4f}mm2 per pass at the body {speed:g}mm/s, out "
+              f"and back, so the lip carries {lap_pack:.2f}x of a bead -> ~{lip_w:.2f}mm wide "
+              f"(MODELLED)")
+        print(f"     modelled mouth {mouth:.3f} -> {mouth_lap:.3f}mm vs the {a.stick_d:.3f}mm stick "
+              f"({mouth-a.stick_d:+.3f} -> {mouth_lap-a.stick_d:+.3f}) — DECLINED, not claimed")
+        print(f"     costs {lap_mm/1000:.1f}m and {lap_mins:.0f} min; the crossing chord itself is "
+              f"unchanged, so the fabric is untouched")
+    else:
+        print(f"  MERGE: OFF (--merge-mm 0) — the net meets the wall at a single tangent point at "
+              f"each end, which is what Oleg objected to on 2026-08-06")
     print(f"  bridge span {gap_chord:.2f}mm tip to tip, {bridge_air:.2f}mm of UNSUPPORTED AIR "
           f"measured on the chord")
     if bridge_air > PROVEN_AIR_MM:
@@ -1579,6 +1897,14 @@ def main():
           f"and the rim's hoop")
     print("     section are derived from the layer ladder; nothing about the new base has been "
           "printed or handled.")
+    if a.merge_mm > 0:
+        print(f"   - whether the lap actually WELDS. It puts {lap_pack:.2f}x of bead on the lips "
+              f"and the geometry is")
+        print(f"     measured, but fusion is a thermal question and nothing here has printed. It "
+              f"also loads the two")
+        print(f"     lips -- already the weakest feature, already being pried apart by the "
+              f"membrane -- with more")
+        print(f"     material and a second nozzle pass per layer.")
     print("   - how much it strings. There is no retraction in this project and the head crosses "
           "open air")
     print(f"     {n_tow} times on {n_lay-a.floor_layers-len(bridges)} layers. The coupon's web was "
