@@ -18,9 +18,23 @@ WHAT IS PROVEN vs PROVISIONAL (no overselling — read before trusting):
   * THE CROSS-BRACES are geometry-valid and collision/dive-safe BY CONSTRUCTION: every strut is a
     continuous strand that launches from, and lands on, a leg's CURRENT build top and only crosses
     open air in between — it never lands on the lower part of a taller wall, which is the collision
-    validate.py's dive check forbids. But each strut spans the full ~90mm leg gap, far longer than
-    the 28mm rungs towers.py has actually printed. Printability of the braces is UNPROVEN; this
-    generator renders them so the FORM can be judged. It does not claim they print.
+    validate.py's dive check forbids. But each strut spans the full ~90mm leg gap, and NOTHING
+    NEAR THAT HAS EVER HELD HERE. Printability of the braces is UNPROVEN; this generator renders
+    them so the FORM can be judged. It does not claim they print.
+
+    CORRECTED 2026-08-06, and the correction is left visible because it was load-bearing. This
+    paragraph used to read "far longer than the 28mm rungs towers.py has actually printed". No
+    28mm rung has ever printed. towers.py line 18 POSES it as an open question -- "do 28mm air
+    rungs anchored on d14 rims hold - or sag/drop?" -- in a file whose first line calls itself a
+    first probe. Somewhere between the two files a question became a result. Checked four ways
+    before rewriting: towers.py itself only asks; guides/print-empirics.md records no such span;
+    no towers.py file has ever passed the send gate; and the only towers gcode on disk is the
+    T230 era, which machine.py's own temps ledger records as the period when "a tower coiled into
+    a rope" because every K2 file commanded 230 on filament rated 210.
+
+    THE ONLY SPAN THIS PROJECT HAS EVER SEEN HOLD IS 17.85mm tip-to-tip (16.8mm of unsupported
+    air), from the 320x300 bucket that stood. That is what machine.PROVEN_SEND['k2plus']['span_mm']
+    says, and the ledger was right while this comment was wrong.
 
 WHY DIAGONAL BRACES, NOT LITERAL CROSSING "X"s. A vase-mode wall only ever rises, and validate.py
 (correctly) refuses any strand that descends onto material already standing higher — that is a
