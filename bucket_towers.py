@@ -720,6 +720,20 @@ def main():
     # regime (pressed to the plate), not a wobble inside the body's one.
     w(f"; SPEED_LAYER1={speed1:.4f}")
     w(f"; SPEED_CROSS={speed_x:.4f}")
+    if speed_x > machine.MAX_SPEED + 1e-9:
+        # THE CEILING IS RAISED OUT LOUD OR NOT AT ALL. validate.py honours '; SPEED_OVERRIDE=' and
+        # PRINTS that the north star was raised, so this can never be a quiet change. It applies to
+        # the CROSSINGS only in practice, because the body's own --speed is separately refused above
+        # if it exceeds the north star -- the override cannot be used to smuggle a faster wall.
+        #
+        # Why an in-air strand is a different regime from a wall: the 50 north star exists for
+        # DEPOSITION -- bead width, cooling, the weld to what is underneath. A strand flung between
+        # two towers is laid onto nothing. It has no adhesion to get wrong and no width to hold, and
+        # crossing faster gives it LESS time to sag, not more.
+        w(f"; SPEED_OVERRIDE={speed_x:.4f}")
+        w(f";   raised from the {machine.MAX_SPEED:g} mm/s north star for the gap crossings ONLY. "
+          f"Oleg 2026-08-06: \"I asked you to speed it up not slow it down\". The crossings are "
+          f"{speed_x/speed:.1f}x the body speed and they are 59% of this print's motion.")
     w(f"; FLOW={flow:.4f}")
     w(f"; PRESSED_LAYER1={press:g}")
     w(f"; LAYER1_WIDTH={w1:.2f}mm landed ({w1/(bw*lh/press):.2f}x the body's own flow pressed into the {press:g} gap)")

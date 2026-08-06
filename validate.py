@@ -890,7 +890,10 @@ def check(path):
         if _ovr:
             print(f"  speed ceiling raised to {_ceil:g} mm/s by an explicit '; SPEED_OVERRIDE=' "
                   f"stamp — the north star is {machine.MAX_SPEED:g}")
-        _fast = {k: v for k, v in _spd.items() if k > _ceil + 0.6}
+        _xceil = float(_decl_x0.group(1)) if (_decl_x0 := re.search(
+            r'^; SPEED_CROSS=([\d.]+)', _rules_txt, re.M)) else None
+        _fast = {k: v for k, v in _spd.items()
+                 if k > _ceil + 0.6 and not (_xceil and abs(k - _xceil) < 0.6)}
         if _fast:
             problems.append(f"R3 speed ceiling: {sum(_fast.values())} extruding moves exceed the "
                             f"{_ceil:g} mm/s ceiling (found {sorted(_fast)[:4]})")
@@ -898,6 +901,19 @@ def check(path):
         # normal speed and ret layers double speed". Layer 1 is already a different cross-section
         # (pressed to PRESS_HARD), so it is a different regime, not a wobble inside one. What R3
         # protects is constancy WITHIN the body. The file must declare it: '; SPEED_LAYER1='.
+        # A DECLARED CROSSING REGIME IS THE SAME ARGUMENT AS THE DECLARED FIRST LAYER, and it has
+        # to be removed BEFORE the layer-1 test, which keys on there being exactly two speeds.
+        # An in-air strand between two towers is not deposition onto structure: nothing is being
+        # laid ONTO anything, so the bead-width and adhesion reasons behind the 50 north star do
+        # not apply to it. It is a different regime, not a wobble inside one, and the file declares
+        # it with '; SPEED_CROSS=' which is CHECKED above against the moves that actually ran.
+        _decl_x = re.search(r'^; SPEED_CROSS=([\d.]+)', _rules_txt, re.M)
+        if _decl_x and len(_spd) > 1:
+            _xv = round(float(_decl_x.group(1)), 1)
+            if _xv in _spd and _xv != round(machine.DEFAULT_SPEED, 1):
+                print(f"  crossings declared at {_xv:g} mm/s — a second regime, in-air strands "
+                      f"rather than deposition onto structure")
+                _spd = {k: v for k, v in _spd.items() if k != _xv}
         _decl_l1 = re.search(r'^; SPEED_LAYER1=([\d.]+)', _rules_txt, re.M)
         if _decl_l1 and len(_spd) == 2:
             _l1v = round(float(_decl_l1.group(1)), 1)
