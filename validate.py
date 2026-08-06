@@ -791,8 +791,15 @@ def check(path):
     _pkt_decl = float(_m_pkt.group(1)) if _m_pkt else None
     _m_cnr = re.search(r'^; SPEED_CORNER=([\d.]+)', _rules_txt, re.M)
     _cnr_decl = float(_m_cnr.group(1)) if _m_cnr else None
+    # R4e's declaration. A BRIDGE IS A DECLARED SECOND FLOW REGIME, so it is stamped as the
+    # CROSS-SECTIONS the file intends to lay, not as multipliers: mm2 per mm of path is measurable
+    # straight off the emitted E and the emitted distance, while a multiplier can only be checked
+    # by re-running the arithmetic that produced it, which is not an independent check.
+    _m_bmm2 = re.search(r'^; BRIDGE_MM2=([\d.,]+)', _rules_txt, re.M)
+    _bdecl = sorted(float(v) for v in _m_bmm2.group(1).split(',')) if _m_bmm2 else None
     _spd, _flw, _nlink, _pspd, _cspd = {}, [], 0, {}, {}
     _nthin = 0
+    _bvals = []
     _xspd = {}
     _area = math.pi * (1.75 / 2) ** 2
     for _raw in _rules_txt.splitlines():
@@ -844,6 +851,14 @@ def check(path):
         if _iscorner and 'X' in _g and 'E' in _g and _fr:
             _csp = round(_fr / 60.0, 1)
             _cspd[_csp] = _cspd.get(_csp, 0) + 1
+        # A BRIDGE IS A FOURTH DECLARED REGIME, and it is the only one that meters flow UP.
+        # Oleg, 2026-08-06: "the features are all bridges", "Just different extrusion volume" —
+        # a solid line, an accent band and the top rim are ONE move across the gap at 2x/4x/8x the
+        # body's bead, which in air makes a thicker rod. R4 refuses that on sight and it is RIGHT
+        # to: an unexplained 8x is an over-extrusion bug. So it is declared as '; BRIDGE_MM2=' and
+        # each move stamped '; BRIDGE <n>x <mm2>mm2', and R4e below MEASURES the emitted moves
+        # against the declaration. Exempt from R4 ONLY when declared, never blanket, and COUNTED.
+        _isbridge = 'BRIDGE' in _raw.upper() and 'X' in _g and 'E' in _g
         _isl1 = bool(_l1v_decl) and _fr is not None and abs(_fr/60.0 - _l1v_decl) < 0.6
         if _pv_decl is not None and abs(_zr - _pv_decl) < 1e-6:
             _isl1 = True
@@ -866,8 +881,14 @@ def check(path):
                 # second speed on them now fails R3.
                 if not _ispocket and not _iscorner:
                     _spd[_sp] = _spd.get(_sp, 0) + 1
-                # FLOW: all LINK stay exempt — they legitimately meter flow down.
-                if not _islink:
+                # A BRIDGE STAYS IN THE SPEED HISTOGRAM ON PURPOSE. It runs at the body speed and
+                # is meant to; only its FLOW is a second regime. If a generator ever slowed one to
+                # buy volume, R3 must see it rather than a bridge exemption swallowing it.
+                if _isbridge:
+                    _bvals.append((_de * _area) / _d)          # mm2 per mm of path
+                # FLOW: all LINK stay exempt — they legitimately meter flow down. A declared
+                # bridge is exempt too; an UNDECLARED one is not, and R4 fails it as before.
+                if not _islink and not (_isbridge and _bdecl):
                     _flw.append((_de * _area) / (_d / (_fr / 60.0)))
         if 'E' in _g:
             _er = float(_g['E'])
@@ -1002,6 +1023,74 @@ def check(path):
                       f"mm/s" + (f" ({_ratio:.1f}x slower than the {_body_sp:g} mm/s body)"
                                  if _ratio else "") + " — corner slowdown applied")
 
+    # R4e — THE BRIDGE FLOW SCHEDULE MUST BE DECLARED, AND EVERY BRIDGE MOVE MUST LAY ONE OF THE
+    # DECLARED CROSS-SECTIONS. The exact mirror of R3b/R3c, for the one regime that meters flow UP.
+    # Oleg, 2026-08-06: "half the tower number, double the number of layers between solid lines.
+    # Double the thickness of solid lines, add 4x line width of new line types every 100 lines plus
+    # x8 for the final 4 layers on top of the bucket", and then, asked what the features were:
+    # "yes you understand correctly the features are all bridges" / "Just different extrusion
+    # volume". So the feature IS a flow schedule, and a flow schedule that is stamped but not
+    # applied is the exact failure mode the flow guard hit five times.
+    #
+    # THREE WAYS IT FAILS, and each one is a real defect rather than a formality:
+    #   * bridge moves at a non-body flow with NO stamp -> an undeclared regime; R4 would have to
+    #     be blanket-exempted to pass it, which is what this rule exists instead of.
+    #   * a stamp with no move at it -> declared and never applied.
+    #   * a move whose measured mm2 matches no declared value -> the schedule is not what the file
+    #     says it is (e.g. a precedence bug putting an accent where the top rim belongs).
+    # MEASURED off the emitted E and the emitted distance, never re-derived from the multiplier.
+    #
+    # A 1x BRIDGE IS NOT A SECOND REGIME, and this is where an over-strict version of this rule
+    # would have become a false claim. Every bucket generated before the flow schedule existed
+    # spans its gaps at the body's own bead and stamps '; BRIDGE' on the move; failing those for
+    # having no schedule would refuse ~a dozen correct files in out/ and teach the next reader to
+    # ignore R4e. So the undeclared branch keys on the move DEVIATING from the file's own bead,
+    # measured off the '; bead WxH' header line, using the same 20% band R4 uses.
+    _mbb = re.search(r'^; bead ([\d.]+)x([\d.]+)', _rules_txt, re.M)
+    _bbead = float(_mbb.group(1)) * float(_mbb.group(2)) if _mbb else None
+    _bodd = ([v for v in _bvals if abs(v - _bbead) > 0.20 * _bbead] if (_bvals and _bbead)
+             else list(_bvals))
+    if _bvals or _bdecl:
+        _btol = lambda d: max(0.002, 0.01 * d)
+        if _bvals and not _bdecl and not _bodd:
+            print(f"  R4e: {len(_bvals)} '; BRIDGE' move(s), all within 20% of this file's own "
+                  f"{_bbead:.4f}mm2 bead — one flow, so there is no schedule to declare.")
+        elif _bvals and not _bdecl:
+            _rng = f"{min(_bodd):.4f}..{max(_bodd):.4f}"
+            problems.append(
+                f"R4e: {len(_bodd)} '; BRIDGE' move(s) lay {_rng} mm2/mm against this file's own "
+                f"{_bbead:.4f}mm2 bead, but it declares no '; BRIDGE_MM2=' — an undeclared flow "
+                f"regime. Declare the schedule, or the multipliers are unverifiable and R4 cannot "
+                f"tell them from over-extrusion.")
+        elif _bdecl and not _bvals:
+            problems.append(
+                f"R4e: '; BRIDGE_MM2={','.join(f'{d:g}' for d in _bdecl)}' is declared but NO "
+                f"bridge move was found. The schedule was stamped and never applied — the "
+                f"silent-non-application failure the stamp exists to catch.")
+        else:
+            _off = [v for v in _bvals if min(abs(v - d) for d in _bdecl) > _btol(v)]
+            _unused = [d for d in _bdecl
+                       if not any(abs(v - d) <= _btol(d) for v in _bvals)]
+            if _off:
+                _w2 = max(_off, key=lambda v: min(abs(v - d) for d in _bdecl))
+                problems.append(
+                    f"R4e: {len(_off)} bridge move(s) lay a cross-section the file never declared. "
+                    f"Worst {_w2:.4f} mm2/mm against declared "
+                    f"{','.join(f'{d:.4f}' for d in _bdecl)} — the emitted flow schedule is not "
+                    f"the one the header states.")
+            elif _unused:
+                problems.append(
+                    f"R4e: '; BRIDGE_MM2' declares {','.join(f'{d:.4f}' for d in _unused)} mm2/mm "
+                    f"but no bridge move lays it. Declared and never applied.")
+            else:
+                _hist = {}
+                for _v in _bvals:
+                    _k = min(_bdecl, key=lambda d: abs(_v - d))
+                    _hist[_k] = _hist.get(_k, 0) + 1
+                print("  R4e: " + ", ".join(
+                    f"{_hist[_k]} bridge move(s) at {_k:.4f}mm2/mm" for _k in sorted(_hist))
+                    + " — every one matches the declared schedule, and they are exempt from R4 "
+                      "BECAUSE they are declared and counted here, not because they are bridges.")
     if _flw and not _decl_flow:
         problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "
                         "is unverifiable. Regenerate with a current generator.")

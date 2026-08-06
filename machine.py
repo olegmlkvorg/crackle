@@ -675,6 +675,35 @@ BED = {
 }
 
 
+# THE Z CEILING, WHICH IS toolhead.axis_maximum AND NOT A PLATE FIGURE. It is here because a part
+# tall enough to matter finally got built: on 2026-08-06 the 359mm bucket ended with
+# "G0 Z378.90" -- top_z + a hardcoded 20mm retreat -- on a machine whose axis_maximum Z is 360.
+# Klipper refuses a move out of range, so the last line of a six-hour print would have aborted the
+# job. Nothing caught it because no generator had ever asked for a height near the ceiling and the
+# retreat was a constant nobody had reason to bound.
+# READ off the K2's own Klipper axis_maximum. None means UNKNOWN for that machine, and a caller
+# must then leave its behaviour alone rather than invent a bound -- an unmeasured clamp that
+# silently shortens a retreat is a different bug, not a fix.
+Z_MAX = {
+    "k1c":    None,
+    "k2plus": 360.0,      # toolhead.axis_maximum Z, read 2026-08-06
+    "f022":   None,
+}
+
+
+def z_retreat(printer, top_z, want=20.0):
+    """Where to park Z after a print: `want` above the part, but never above the machine's ceiling.
+
+    Returns (z, capped) so the caller can DECLARE a shortened retreat instead of quietly making
+    one. A retreat of zero is still returned rather than refused: the part is finished, and
+    parking level with its top is worse than aborting the job on an out-of-range move."""
+    ceil = Z_MAX.get(printer)
+    z = top_z + want
+    if ceil is None or z <= ceil:
+        return z, False
+    return max(top_z, ceil), True
+
+
 # THE HEAD IS NOT THE NOZZLE. Oleg, 2026-07-26, after the second collision on the K2:
 # "you need to make sure you taking into account diameter of entire head + safety gap".
 #
