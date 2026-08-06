@@ -448,6 +448,15 @@ def main():
     ap.add_argument("--speed", type=float, default=machine.DEFAULT_SPEED,
                     help=f"mm/s for every move. Default is the {machine.DEFAULT_SPEED:g} north "
                          f"star, which is a ceiling: slower is allowed, faster is refused.")
+    ap.add_argument("--cross-speed", type=float, default=None,
+                    help="mm/s for the gap crossings ONLY, which are in-air strands rather than "
+                         "structure. Default is --speed, i.e. no second regime. THIS IS THE BIG "
+                         "TIME LEVER: measured on the 320mm bucket, the crossings are 1121m of the "
+                         "1861m of motion, so 59% of the wall clock is the head going between "
+                         "towers. Raising it treats an in-air strand as a DIFFERENT regime from a "
+                         "wall, which is what it is: the 50 north star exists for deposition onto "
+                         "structure, and nothing is being deposited onto here. Declared in the "
+                         "header as SPEED_CROSS so the gate checks it rather than ignoring it.")
     ap.add_argument("--speed1", type=float, default=25.0,
                     help="mm/s for LAYER 1 only. Half the north star by default, because that is "
                          "the speed zladder.py measured the winning offset at and a bucket run at "
@@ -538,6 +547,10 @@ def main():
     # would otherwise snap layer 1 back to the body speed halfway through the floor.
     speed1 = a.speed1
     f_l1 = round(speed1 * 60)
+    # THE CROSSING REGIME. Same sticky-F rule as layer 1: the crossing branch writes its own F, and
+    # the next body move writes F back, so the two never bleed into each other.
+    speed_x = a.cross_speed if a.cross_speed else speed
+    f_x = round(speed_x * 60)
     temp = machine.MATERIAL_TEMP[a.material]        # READ, never typed: 210 for the pla loaded now
     bed = machine.bed_for(a.material, a.printer)
     # BODY FAN. machine.FAN_MAX is Oleg's 20% PLA ceiling (2026-07-26), right for a flat part where
@@ -706,6 +719,7 @@ def main():
     # running two feedrates fails constant-speed, which is correct: layer 1 is a different
     # regime (pressed to the plate), not a wobble inside the body's one.
     w(f"; SPEED_LAYER1={speed1:.4f}")
+    w(f"; SPEED_CROSS={speed_x:.4f}")
     w(f"; FLOW={flow:.4f}")
     w(f"; PRESSED_LAYER1={press:g}")
     w(f"; LAYER1_WIDTH={w1:.2f}mm landed ({w1/(bw*lh/press):.2f}x the body's own flow pressed into the {press:g} gap)")
@@ -911,7 +925,7 @@ def main():
                     # and the web in the printed part IS that ooze. Metering it at a stated fraction
                     # of the body's own rate turns an uncontrolled leak into a strand we chose.
                     E += seg * e_mm * a.cross_flow
-                    w(f"G1 F{f_l1 if li == 0 else f} X{x:.3f} Y{y:.3f} E{E:.5f} ; THIN CROSS "
+                    w(f"G1 F{f_l1 if li == 0 else f_x} X{x:.3f} Y{y:.3f} E{E:.5f} ; THIN CROSS "
                       f"{a.cross_flow*100:.0f}% "
                       f"-- deliberate strand, not ooze (clears both tower walls)")
                 else:
@@ -926,6 +940,10 @@ def main():
                 # gets its own rate, derived from a TARGET LANDED WIDTH rather than from a
                 # multiplier nobody can check: e = w1 * press / A_FIL. The width is the adhesion.
                 E += seg * (e_mm_l1 if li == 0 else e_mm)
+                # F IS STICKY, so a body move following a crossing must restore the body feedrate or
+                # the whole tower would silently print at the crossing speed.
+                if a.cross_flow > 0 and speed_x != speed and li != 0:
+                    w(f"G1 F{f}")
                 if kind == "B":
                     w(f"G1 X{x:.3f} Y{y:.3f} E{E:.5f} ; BRIDGE {seg:.2f}mm seam to seam, "
                       f"{bridge_air:.2f}mm unsupported air")

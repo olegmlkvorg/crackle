@@ -434,7 +434,8 @@ def check(path):
     # starved is a bug. Tagging beats loosening the threshold — a looser threshold would have let
     # the 18mm prime thread through, which is the exact defect this guard exists to catch.
     _starved = [t for t in _starved
-                if '; LINK' not in _lines[t[0] - 1] and '; RETRACE' not in _lines[t[0] - 1]]
+                if '; LINK' not in _lines[t[0] - 1] and '; RETRACE' not in _lines[t[0] - 1]
+                and '; THIN CROSS' not in _lines[t[0] - 1]]
     if _starved:
         _w = max(_starved, key=lambda t: t[1])
         problems.append(
@@ -791,6 +792,8 @@ def check(path):
     _m_cnr = re.search(r'^; SPEED_CORNER=([\d.]+)', _rules_txt, re.M)
     _cnr_decl = float(_m_cnr.group(1)) if _m_cnr else None
     _spd, _flw, _nlink, _pspd, _cspd = {}, [], 0, {}, {}
+    _nthin = 0
+    _xspd = {}
     _area = math.pi * (1.75 / 2) ** 2
     for _raw in _rules_txt.splitlines():
         _code = _raw.split(';')[0].strip()
@@ -808,8 +811,22 @@ def check(path):
         # nozzle drags through it on the next layer. That is a real reason, and the generator
         # states it in the file rather than relying on the checker to guess. They are exempt from
         # R4 but COUNTED and reported, so an exemption can never hide a growing problem.
-        _islink = 'LINK' in _raw.upper()
-        if _islink:
+        # THIN CROSS IS THE SAME SHAPE AS LINK AND EARNS THE SAME TREATMENT.
+        # Oleg, 2026-08-05: "why we ever want to fly without anything coming out? Are not we
+        # releasing tiny all the time at least". There is no retraction in this project, so a "dry"
+        # travel was never dry: it oozed, and the web in the printed coupon IS that ooze. bucket
+        # crossings now meter it at a stated fraction of the body rate, turning an uncontrolled leak
+        # into a strand that was chosen. The generator STAMPS each one '; THIN CROSS <n>%'.
+        # R4 cannot tell a chosen strand from a starved extruder by arithmetic alone, which is the
+        # whole reason it refused these. It does not have to: the file declares them, and they are
+        # COUNTED and reported below, so an exemption can never hide a growing problem.
+        _isthin = 'THIN CROSS' in _raw.upper()
+        if _isthin:
+            _nthin += 1
+            if 'F' in _g:
+                _xspd[float(_g['F']) / 60.0] = _xspd.get(float(_g['F']) / 60.0, 0) + 1
+        _islink = 'LINK' in _raw.upper() or _isthin
+        if _islink and not _isthin:
             _nlink += 1
         # THE BORE SLOWDOWN IS A DECLARED REGIME, SO IT MUST BE CHECKED, NOT IGNORED. Pocket moves
         # (Oleg's "4x slow down rthere") are LINK-tagged, so the body-speed histogram below skips
@@ -1179,6 +1196,28 @@ def check(path):
 
     if _nlink:
         print(f"  {_nlink} declared LINK move(s) exempt from R4 (contour connectors, metered thin)")
+    if _xspd:
+        # THE STAMP IS THE CONTRACT. A crossing regime that silently fails to apply is the exact
+        # shape of the flow-guard failures this file has been bitten by five times: the file says
+        # one thing, the moves do another, and nothing compares them.
+        _mx = re.search(r'^; SPEED_CROSS=([\d.]+)', _rules_txt, re.M)
+        if not _mx:
+            problems.append(f"'; THIN CROSS' moves run at {sorted(_xspd)} mm/s but the file carries "
+                            f"no '; SPEED_CROSS=' stamp, so nothing says what they were meant to be")
+        else:
+            _want = float(_mx.group(1))
+            _bad = {v: n for v, n in _xspd.items() if abs(v - _want) > 1e-6}
+            if _bad:
+                problems.append(f"'; SPEED_CROSS' declares {_want:g} mm/s but {sum(_bad.values())} "
+                                f"crossing move(s) run at {sorted(_bad)} — the declared regime is "
+                                f"not what the file does")
+            else:
+                print(f"  crossings run at the declared SPEED_CROSS={_want:g} mm/s "
+                      f"({sum(_xspd.values())} moves), a second regime from the body's own speed")
+    if _nthin:
+        print(f"  {_nthin} declared '; THIN CROSS' move(s) exempt from R4 and STARVED — deliberate "
+              f"metered strands across open air, not dry travels. There is no retraction here, so "
+              f"the alternative is the SAME ooze uncontrolled.")
     if _flw and _decl_flow:
         _lo = [f for f in _flw if f < _decl_flow * 0.80]
         _hi = [f for f in _flw if f > _decl_flow * 1.20]
