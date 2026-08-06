@@ -985,6 +985,16 @@ def cmd_send(args):
         print(f"\n  REFUSED: validate.py refuses this file. The send gate does not overrule the "
               f"file gate.")
 
+    # --live WITH NO HOST IS DECIDED HERE, ABOVE THE GRANT, and the order is the whole point. It
+    # used to be settled after the row was built, which meant a typed `--live` with no host spent
+    # the one first-proof grant for a value and printed "GRANTED, and SPENT" directly above a
+    # REFUSED verdict. Nothing was uploaded and nothing was judged differently, so nothing should
+    # have been spent: a usage error must not cost the gauge its one pass.
+    if ok and args.live and not args.printer_host:
+        print("\n  REFUSED: --live needs an explicit --printer-host. There is no default host "
+              "in this file, on purpose — nothing can reach a printer by accident.")
+        ok = False
+
     # LOUD, because a grant that reads like a tick is a grant nobody will notice being spent. This
     # block says what has never been tested, that this file is the one about to test it, and that
     # nothing else gets to carry the same number afterwards.
@@ -1032,22 +1042,21 @@ def cmd_send(args):
     }
 
     if ok and args.live:
-        if not args.printer_host:
-            print("\n  REFUSED: --live needs an explicit --printer-host. There is no default host "
-                  "in this file, on purpose — nothing can reach a printer by accident.")
-            row['verdict'] = 'REFUSED'
+        # The missing-host case is already settled above, so reaching here means a host was named.
+        row['live'] = True
+        row['host'] = args.printer_host
+        try:
+            row['moonraker'] = upload_and_start(args.printer_host, path)
+            print(f"\n  SENT to {args.printer_host}: {row['moonraker']}")
+        except Exception as e:                              # noqa: BLE001
+            row['moonraker_error'] = f"{type(e).__name__}: {e}"
+            row['verdict'] = 'SEND-FAILED'
             ok = False
-        else:
-            row['live'] = True
-            row['host'] = args.printer_host
-            try:
-                row['moonraker'] = upload_and_start(args.printer_host, path)
-                print(f"\n  SENT to {args.printer_host}: {row['moonraker']}")
-            except Exception as e:                          # noqa: BLE001
-                row['moonraker_error'] = f"{type(e).__name__}: {e}"
-                row['verdict'] = 'SEND-FAILED'
-                ok = False
-                print(f"\n  SEND FAILED: {row['moonraker_error']}")
+            # THE GRANT STAYS SPENT ON A FAILED UPLOAD, deliberately, and it is the one case where
+            # a REFUSED-looking row keeps one. The gate said yes and this file is the one that was
+            # allowed to establish the value; a broken socket does not hand the pass to a different
+            # artifact. Re-running these same bytes still holds it, because the holder is the sha.
+            print(f"\n  SEND FAILED: {row['moonraker_error']}")
 
     record(args.log, row)
     print(f"\n  {'ALLOWED' if ok else 'REFUSED'}"
@@ -1164,15 +1173,29 @@ def cmd_ledger(args):
     print(f"\nFIRST PROOF (rule 6) — values that went to a plate UNPROVEN, one file each.")
     print(f"  NOT evidence. A grant means 'nothing has ever tested this and one file was allowed "
           f"to'. It becomes evidence only when a plate is read and `send.py accept` puts it above.")
-    spent = first_proof_grants(args.log)
+    # ONE GRANT PER HOLDER, NOT ONE PER ROW. A file holds its own grant across re-runs, so every
+    # dry run of the holder appends another identical row; listing them all would report ONE value
+    # as having been granted four times, which is the opposite of what the register is for.
+    seen, spent = {}, []
+    for r, g in first_proof_grants(args.log):
+        k = (r.get('printer'), g.get('param'), r.get('sha256'))
+        if k in seen:
+            seen[k][2] += 1
+            if r.get('live'):
+                seen[k][0] = r            # a live send is the row worth naming, whenever it happened
+            continue
+        seen[k] = [r, g, 1]
+        spent.append(k)
     if not spent:
         print(f"\n  nothing yet — no first-proof grant appears in {args.log}.")
-    for r, g in spent:
+    for k in spent:
+        r, g, runs = seen[k]
         print(f"\n  {r.get('printer')}  {g.get('param')}: {fmt(tuple(g.get('value') or ()))}")
         print(f"      GRANTED TO  {os.path.basename(r.get('file') or '?')}  "
               f"sha256 {(r.get('sha256') or '')[:12]}")
         print(f"      {r.get('ts')}   {g.get('est_min')} min of motion   "
-              f"{'SENT LIVE to ' + str(r.get('host')) if r.get('live') else 'dry run, not sent'}")
+              f"{'SENT LIVE to ' + str(r.get('host')) if r.get('live') else 'dry run, NOT SENT'}"
+              f"{f'   ({runs} runs of these bytes)' if runs > 1 else ''}")
         print(f"      at the time, accepted here was: {g.get('known')}")
         print(f"      SPENT. No other file may carry these numbers under first proof.")
     return 0
