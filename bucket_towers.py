@@ -742,10 +742,14 @@ def main():
                          "is a NOMINAL: Oleg's 1/4in bamboo measures 5.8-6.2 against a nominal 6.35 "
                          "(guides/fit-and-assembly-empirics.md), so callipers on the actual sticks "
                          "beat this default.")
-    ap.add_argument("--bore-allow", type=float, default=1.025,
+    ap.add_argument("--bore-allow", type=float, default=1.225,
                     help="mm added to --stick-d to get the MODELLED bore. THIS IS THE ONE NUMBER "
-                         "THAT DECIDES WHETHER THE CHANNEL GRIPS. Default 1.025 = the 4.20mm bore "
-                         "Oleg picked off the bore+lock gauge on 2026-08-06, minus the 3.175 stick. "
+                         "THAT DECIDES WHETHER THE CHANNEL GRIPS. Default 1.225 = the 4.40mm bore "
+                         "(gauge cell 5) minus the 3.175 stick. IT WAS 1.025 (cell 4, bore 4.20) "
+                         "until 2026-08-07, when Oleg found that fit near impossible to insert over "
+                         "the bucket's 359mm: the gauge's channels are 18mm tall, the part's are "
+                         "359mm, and a coupon that reproduced the bore, wrap, bead and flow did not "
+                         "reproduce the INSERTION LENGTH. Longer needs looser. "
                          "It is in machine.PROVEN_SEND['k2plus']['fit_bore'] with its evidence. "
                          "THE OLD DEFAULT WAS 0.25 AND IT WAS RETRACTED: that figure was measured "
                          "on a 4mm METAL shaft, reused for 6.35mm BAMBOO, and condemned ~21 parts. "
@@ -964,6 +968,23 @@ def main():
                          "change the weld. The lap is out AND back, so the region receives 2x this "
                          "on top of the wall's own 1.0 -- see the header, which prints the packing "
                          "and what it does to the modelled bamboo mouth.")
+    ap.add_argument("--cite-coupon", metavar="FILE",
+                    help="the zladder plate that PROVED this file's first layer, cited so R9 can "
+                         "check it instead of refusing. Emits "
+                         "'; COUPON=<file> h1=<mm> w1=<mm> verdict=welded read=<date>', and "
+                         "validate.py verifies it FOUR ways rather than trusting it: the coupon "
+                         "file must exist, its verdict must be `welded` (somebody thumb-peeled a "
+                         "corner and it fought back), the cited numbers must be the ones THIS file "
+                         "actually lands, and those numbers must appear among the heights the "
+                         "COUPON ITSELF PRINTED. That last clause is the one that matters -- a "
+                         "ladder sweeping 0.10..0.35 cannot excuse a weld at 0.45. "
+                         "THIS IS THE HONEST ROUTE AND AN OVERRIDE IS NOT: Oleg read two ladders on "
+                         "2026-08-07 and picked 0.250mm at 3.94mm wide, so the evidence exists and "
+                         "should be cited rather than waived.")
+    ap.add_argument("--coupon-read", metavar="YYYY-MM-DD",
+                    help="the date the coupon plate was READ, which is not the date it was printed "
+                         "and not today by default. A citation carrying an invented date is a "
+                         "citation nobody can check.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
@@ -1055,19 +1076,7 @@ def main():
     # pressed flat". The pair is meaningless without the layer height it was measured at, and that
     # dependency lived in a comment. So it is checked here, as a ratio, where it cannot be typed
     # around.
-    _l1_ratio = (w1 * press) / (bw * lh)
-    if _l1_ratio < 1.0 - 1e-9:
-        raise SystemExit(
-            f"REFUSING TO EMIT: layer 1 would carry {w1*press:.4f}mm2/mm against the body's own "
-            f"{bw*lh:.4f}mm2/mm bead = {_l1_ratio:.2f}x. THE FIRST LAYER MUST BE FULL FLOW (Oleg, "
-            f"2026-08-05: \"first layer need to be full flow, a lot of fillament glued to base max "
-            f"width\"), and the prime is metered at this same rate, so a starved layer 1 lays thin "
-            f"unwelded strands before the part even starts.\n"
-            f"  --w1 is a WIDTH and the body bead moved under it: at --layer-h {lh:g} the width that "
-            f"carries full flow is {bw*lh/press:.2f}mm, not {w1:g}.\n"
-            f"  Pass --w1 {bw*lh/press:.2f} or higher, or omit --w1 and let it derive. "
-            f"machine.PROVEN_LAYER1's (0.10, 2.00) pair was measured at layer 0.24 and does NOT "
-            f"transfer to another height on its own.")
+    # (the ratio check itself lives below, once h1_real exists -- see THE GAP IT IS LAID INTO)
     # LAYER 1'S RATE IS METERED AGAINST THE HEIGHT IT ACTUALLY LANDS AT, not against PRESS_HARD.
     # Those are the same number only when the machine's Z zero is honest, and on this K2 it is not:
     # it homes ~0.15mm high, so a file commanding Z0.100 lays its first layer into whatever gap
@@ -1076,6 +1085,30 @@ def main():
     # stayed still while the gap moved. h1_real is the gap the bead is actually laid into.
     h1_real = a.h1 if a.h1 is not None else press
     e_mm_l1 = machine.layer1_rate(w1, h1_real)   # ONE implementation, machine.py
+    # ---- LAYER 1 MUST NOT LAY LESS THAN THE BODY'S OWN BEAD, AND THE GAP IT IS LAID INTO DECIDES
+    # THAT. This check was placed beside --w1 when it was written, where h1_real does not exist yet,
+    # so it compared w1 x PRESS_HARD -- a gap the file may not be using at all. At --h1 0.25 the
+    # material actually laid is 2.50x the body bead while the check was computing 1.00x. It happened
+    # to pass either way here, and a check that measures a quantity the file does not use is exactly
+    # the failure this project has spent the week on: it would have been wrong the moment --h1 moved
+    # in the other direction.
+    #
+    # THE REAL NUMBER IS w1 x h1_real, which is what machine.layer1_rate() above just metered.
+    # Oleg 2026-08-05: "first layer need to be full flow ( a lot of fillament glued to base max
+    # width". The prime is metered at this same rate, so a starved layer 1 shows up as thin unwelded
+    # strands before the part even begins -- that is what cost a print on 2026-08-07.
+    _l1_ratio = (w1 * h1_real) / (bw * lh)
+    if _l1_ratio < 0.99:
+        raise SystemExit(
+            f"REFUSING TO EMIT: layer 1 would carry {w1*h1_real:.4f}mm2/mm into its {h1_real:g}mm "
+            f"gap, against the body's own {bw*lh:.4f}mm2/mm bead = {_l1_ratio:.3f}x. THE FIRST LAYER "
+            f"MUST BE FULL FLOW and the prime is metered at this same rate, so a starved layer 1 "
+            f"lays thin unwelded strands before the part starts.\n"
+            f"  --w1 is a WIDTH, so it goes stale whenever --layer-h or --h1 moves under it. At "
+            f"--layer-h {lh:g} into a {h1_real:g} gap the width that carries full flow is "
+            f"{bw*lh/h1_real:.3f}mm, and --w1 is {w1:.3f}mm.\n"
+            f"  machine.PROVEN_LAYER1's (0.10, 2.00) pair was measured at layer 0.24 and does NOT "
+            f"transfer to another height on its own.")
     flow = bw * lh * speed
     r8cap = machine.flow_cap(a.material, a.printer)
 
@@ -1498,6 +1531,23 @@ def main():
     # different layer from the one being printed.
     w(f"; LAYER1_WIDTH={w1:.2f}mm landed into the {h1_real:g} gap = {w1*h1_real:.4f}mm2/mm "
       f"({w1*h1_real/(bw*lh):.2f}x the body's own {bw*lh:.4f}mm2 bead)")
+    # THE COUPON CITATION, which is how an unproven first layer goes to a plate WITHOUT an override.
+    # validate.py's layer1_excuse() checks it four ways against artifacts; nothing here is trusted.
+    # The numbers come from what this file MEASURES itself laying (h1_real, w1), never from the
+    # flag, so a citation cannot drift away from the part it excuses.
+    if a.cite_coupon:
+        if not a.coupon_read:
+            raise SystemExit(
+                "REFUSING TO EMIT: --cite-coupon needs --coupon-read YYYY-MM-DD, the date the plate "
+                "was READ. A citation with an invented date is a citation nobody can check, and "
+                "defaulting it to today would invent one on every regeneration.")
+        if not os.path.isfile(a.cite_coupon):
+            raise SystemExit(
+                f"REFUSING TO EMIT: --cite-coupon {a.cite_coupon} does not exist. A citation whose "
+                f"coupon is missing is worse than no citation: validate.py would refuse it and the "
+                f"header would still claim a proof.")
+        w(f"; COUPON={a.cite_coupon} h1={h1_real:g} w1={w1:.2f} verdict=welded "
+          f"read={a.coupon_read}")
     w(f"; PRINT_TEMP={temp}")
     w(f"; bead {bw:g}x{lh:g}   nozzle {machine.NOZZLE:g}   (Oleg 2026-08-04; Klipper's "
       f"nozzle_diameter field reads 0.4 on this machine and lies)")

@@ -805,7 +805,33 @@ PROVEN_SEND = {
         # An empty list means every file that declares a bore must cite a gauge. That is correct.
         # NO LONGER EMPTY as of 2026-08-06: the gauge was printed and READ.
         "fit_bore": [
+            # 4.40 SUPERSEDES 4.20, AND THE REASON IS A LENGTH NOBODY RECORDED.
+            # Oleg, 2026-08-07: "when you printed coupons it was correctly picked but its near to
+            # impossible to inserve on longer span, so we need to selected the one next to one i
+            # selected but bigger". Cell 5 of the same gauge, one step up.
+            #
+            # THE GAUGE'S CHANNELS ARE 18mm TALL. THE BUCKET'S ARE 359mm. A stick that clicks into
+            # 18mm of channel has to slide through TWENTY TIMES that, and every per-layer wobble,
+            # twist and taper accumulates over the length. The coupon reproduced the bucket's bore,
+            # its wrap, its bead and its flow -- and not its INSERTION LENGTH, which is the one
+            # dimension that decides whether a stick goes in.
+            #
+            # So 4.20 was not wrong: it was proven at 18mm and cited at 359mm, and the entry never
+            # carried the length that made it true. Same shape as PROVEN_LAYER1's (0.10, 2.00),
+            # which was proven at layer 0.24 and silently reused at 0.48.
+            (4.40,
+             "cell 5 of the bore+lock gauge, taken 2026-08-07 after 4.20 (cell 4) proved "
+             "IMPOSSIBLE TO INSERT over the bucket's full 359mm. Oleg: 'near to impossible to "
+             "inserve on longer span, so we need to selected the one next to one i selected but "
+             "bigger'. Modelled mouth 3.456mm against a 3.175mm stick, +0.281 wider than the stick "
+             "on the model, and the gauge's own header predicted 'DROPS IN, no capture' for it -- "
+             "which cell 4 also carried and did NOT do, so the printed part runs tighter than the "
+             "model by more than 0.117mm and this entry is the second point on that line. "
+             "STILL UNMEASURED: nobody has put calipers on a printed channel, and this is a fit "
+             "read by hand over 18mm of coupon, now chosen FOR 359mm on the argument that longer "
+             "needs looser. That argument is sound and it is not a measurement."),
             (4.20,
+             "SUPERSEDED 2026-08-07 by the 4.40 entry above, and kept because it is the FIRST point on the shrink line and because the reason it failed is the lesson. It was read on 18mm-tall coupon channels and then cited for a 359mm part; it grips at coupon length and is near impossible to insert at part length. LEFT HERE so nobody re-derives it. "
              "Oleg read the gauge plate at the machine 2026-08-06 and said 'go with 4'. Cell 4 is "
              "a 4.20mm modelled bore at a 250 degree wrap. "
              "WHY THIS IS A REAL RESULT AND NOT A PREFERENCE: cell 4 was that plate's NEGATIVE "
