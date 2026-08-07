@@ -850,6 +850,35 @@ PROVEN_SEND = {
     },
 }
 
+# THE HEAVIEST LIP THAT HAS EVER BEEN INSERTED, per machine: mm3 of deposit per mm2 of wall in the
+# WORST per-layer regime at the C-channel's mouth lips. The lips are where every crossing, every
+# merge lap and every bridge rod-end lands, so this is the quantity that decides whether a stick
+# still goes in -- and it was UNGUARDED until 2026-08-07, when doubling the layer height doubled
+# the flows that feed it and Oleg's 1/8in stick stopped entering a bucket whose BORE had just been
+# made 0.2mm looser. The bore never changed on the plate; the lips grew inward.
+#
+# THE NUMBER IS lh-INVARIANT BY CONSTRUCTION, which is why it survives a layer-height change when
+# every mm-spacing rule silently does not: one crossing per layer spans one lh of wall height, so
+# per-area deposit = flow_fraction x bead_width, and a mult-m bridge every N LAYERS contributes
+# m x bead / N -- the lh cancels in both. Preserving mm-spacing across a layer change (bb50x2 at
+# 0.48 to imitate bb100x5's 1.2mm) is exactly the mistake this constant exists to refuse: rod ends
+# thicken WITH the layer, so the layer-COUNT cadence is the thing to hold, not the millimetres.
+#
+# MEASURED, not derived: the 2026-08-07 00:53 bucket (d339.5 n28t5.84 w250 b20 bb100x5 x25 j2,
+# layer 0.24, bore 4.20) is the only part whose insertion over the full 359mm was ever physically
+# attempted. Its emitted bytes read fabric 0.0492mm2/mm (0.25x), laps 0.0492mm2/mm per pass
+# (MERGE_MM2=0.0492, follows cross), band bridges 2.00x every 5 layers. Worst regime (the band):
+#   bead x (wall 1 + laps 2x0.25 + fabric 0.25 + band 2/5) = 0.82 x 2.15 = 1.7630 mm3/mm2
+# AND IT IS A MARGINAL CEILING, NOT A COMFORTABLE PASS: Oleg, 2026-08-07, of that part at bore
+# 4.20: "its near to impossible to inserve on longer span". At this lip density insertion works
+# only barely -- so a file may match it, never exceed it, and the margin is bought with BORE
+# (4.40 supersedes 4.20 in fit_bore above), never by piling more onto the lips.
+# The 2026-08-07 15:44 file that Oleg cancelled ran 0.82 x 3.50 = 2.87 = 1.63x this, and did not
+# accept the stick at all: that file is this constant's red proof.
+PROVEN_LIP = {
+    "k2plus": 1.7630,
+}
+
 # ---------------------------------------------------------------------------------------------
 
 

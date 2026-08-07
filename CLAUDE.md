@@ -28,7 +28,7 @@ was measured at and silently wrong everywhere else**:
 | | was | is |
 |---|---|---|
 | first floor layer pitch | typed `2.5` | `FLOOR1_OVERLAP × w1` — a RATIO to the bead |
-| the fabric membrane | a sentence asserting it fuses | `cross_flow ≥ π·lh / (4·bead)` |
+| the fabric membrane | a sentence asserting it fuses | `--fabric {fused,open}` declared; a state the numbers contradict is refused |
 | layer 1 full flow | the stored pair `(0.10, 2.00)` | `w1·press / (bead·lh) ≥ 1.0` |
 
 **THE TEST: does this constant's correctness depend on another parameter?** If yes, the constant is
@@ -159,16 +159,26 @@ still measures a true property; **it must not be quoted as the reason the arc fo
 WIDTH — a fixed millimetre goes silently wrong the moment `--w1` changes. Same reason `--tower-d`
 derives from `--stick-d + --bore-allow`.
 
-**THE MEMBRANE IS A GATE, NOT A SENTENCE.** The fabric fuses into a sheet only when its rod reaches
-the layer pitch:
+**THE FABRIC'S STATE IS DECLARED (`--fabric {fused,open}`), AND THE GATE HAS NOW BEEN WRONG IN
+BOTH DIRECTIONS — the second cost a print.** Fusion is physics:
 
     area = bead_w × layer_h × cross_flow ;  rod = sqrt(4·area/π) ;  fuses when rod ≥ layer_h
-    ⇒  cross_flow ≥ π·layer_h / (4·bead_w)
+    ⇒  fusion needs cross_flow ≥ π·layer_h / (4·bead_w)   (0.230 at 0.24 ; 0.460 at 0.48)
 
-At the shipped 0.24/0.82 the threshold is 0.230 against a 0.25 default — **8.8% margin nobody
-chose.** The generator printed *"its rod exceeds the layer pitch, so strands FUSE into a membrane"*
-UNCONDITIONALLY, computed from two numbers it never compared, and that sentence is FALSE at layer
-0.48 with the fabric left at 0.25. It refuses now.
+First the header claimed fusion UNCONDITIONALLY — false at 0.48/0.25. Then the gate **required**
+fusion unconditionally, so the 0.48 regen went out at `--cross-flow 0.50` to satisfy it: the walls
+came out SOLID and, because every crossing and lap lands on the mouth lips, the stick stopped
+entering (2026-08-07, cancelled at 37.8%). **Fused-and-light is impossible at a doubled pitch** —
+fusion at 0.48 is 2× the 0.24 membrane's material by construction. So neither state is "correct":
+they are different parts, the file must SAY which (`; FABRIC=`), a declaration the numbers
+contradict is refused as a lie, and an undeclared open net is refused as an accident.
+
+**THE LIP BUDGET IS THE GATE THAT CAME OUT OF IT** (`machine.PROVEN_LIP`): mm³ per mm² of wall
+landing on the C-channel's mouth lips, per regime — `bead × (1 + 2·merge_flow + cross_flow +
+mult/N_layers)`, lh-invariant, so it survives layer-height changes that every mm-spacing rule
+silently does not. No file may exceed the 1.763 of the only part whose 359mm insertion was ever
+attempted (bore 4.20, "near to impossible"), and insertion margin is bought with `--bore-allow`,
+never with lip headroom. The cancelled 15:44 file (1.63×) is its red proof.
 
 ---
 

@@ -37,9 +37,13 @@ Three features, and every one of them is a flag with a stated default, not a rew
    band and the top rim are ONE move across the gap at more flow, which in air makes a thicker
    ROD -- never a second pass, never a fatter post. Declared as '; BRIDGE_MM2=' and MEASURED
    against the emitted moves by validate.py R4e.
-   THE FABRIC IS UNTOUCHED: --cross-flow 0.25 on every non-bridge layer. "Don't remove the fabric
-   that has to stay." Its 0.250mm rod exceeds the 0.24mm layer pitch, which is why the strands
-   fuse into a continuous membrane instead of sitting as separate threads.
+   THE FABRIC STAYS: --cross-flow 0.25 on every non-bridge layer. "Don't remove the fabric
+   that has to stay." WHETHER IT FUSES DEPENDS ON THE LAYER PITCH and the file must say which:
+   at layer 0.24 the 0.250mm rod reaches the pitch and the strands fuse into a membrane; at 0.48
+   the same flow's 0.354mm rod does NOT, and the net is separate floating threads -- a different
+   character that must be CHOSEN with --fabric open, never landed in silently. Fusing at 0.48
+   requires >=0.46x flow, which is 2x the material and is how the walls came out solid on
+   2026-08-07 ("Why we got to solid walls?"): fused-and-light is impossible at a doubled pitch.
 
 3  A BRACED BOTTOM AND AN OPEN BASE (--bottom-brace-layers, --bottom-bridge-every, and --h1/--w1).
    "press on base plate a half less, I don't want to have solid base" is NOT --h1 alone: the rate
@@ -847,9 +851,12 @@ def main():
                          "10-hour plate lost 3 good hours to a power-off on 2026-08-07, and the "
                          "cheapest fix for that exposure is a shorter print. "
                          "WHAT MOVES WITH IT, and both are handled rather than left to bite: the "
-                         "fabric's rod must still reach the layer pitch or the membrane stops "
-                         "fusing (--cross-flow derives from this now), and the bridge multipliers "
-                         "hit the flow cap sooner (--cap-mode decides what gives)."
+                         "fabric's rod may stop reaching the layer pitch, at which point the net "
+                         "is OPEN threads, not a fused membrane -- --fabric must declare which, "
+                         "and raising --cross-flow to keep fusion DOUBLES the lip deposit, which "
+                         "is what made a stick uninsertable on 2026-08-07 (see the lip gate). The "
+                         "bridge multipliers also hit the flow cap sooner (--cap-mode decides "
+                         "what gives)."
                          % (machine.SLICER_LAYER_H,
                             ", ".join(f"{h:g}" for h in machine.SLICER_LAYER_HEIGHTS)))
     ap.add_argument("--cap-mode", choices=("width", "slow"), default="slow",
@@ -950,6 +957,19 @@ def main():
                          "travel exactly. NOT 1.0: at full flow the crossings cost more than the "
                          "posts and the part lands at 1.24x a solid single-bead wall; at 0.25 the "
                          "same part is 0.51x. Thin is the point.")
+    ap.add_argument("--fabric", choices=("fused", "open"), default=None,
+                    help="what the fabric IS at this layer height, declared rather than implied. "
+                         "'fused': consecutive strands touch (rod >= layer pitch) and the net is a "
+                         "continuous membrane -- the character of every 0.24 bucket. 'open': the "
+                         "strands float apart and the net is separate threads -- the only light "
+                         "fabric possible at 0.48, where fusing costs >=0.46x flow (2x the "
+                         "material; it made the walls solid and the lips uninsertable on "
+                         "2026-08-07). The default REFUSES a mismatch instead of picking: a file "
+                         "whose fabric does not fuse must say --fabric open out loud, and a file "
+                         "declaring a state its own numbers contradict is refused as a lie. "
+                         "OPEN AT 0.48 IS UNMEASURED: a 0.354mm rod floating 0.126mm above its "
+                         "neighbour has never been printed -- it may sag onto the strand below "
+                         "and read as a lighter membrane. The plate decides; the header says so.")
     ap.add_argument("--merge-mm", type=float, default=2.0,
                     help="mm of ARC LENGTH that each gap crossing laps ONTO the post, at BOTH ends. "
                          "Oleg 2026-08-06, holding the printed bucket: 'you need to merge the net "
@@ -1213,30 +1233,48 @@ def main():
                 f"{merge_flow*flow:.2f} mm3/s against the {r8cap:g} mm3/s maintained figure for "
                 f"{a.material} on this machine. The lap runs at the BODY speed ({speed:g} mm/s), "
                 f"not the crossing speed, so its flow is merge_flow x bead x body speed.")
-    # ---- THE MEMBRANE IS A GATE NOW, NOT A SENTENCE IN THE REPORT. -------------------------------
-    # This file printed "its rod exceeds the layer pitch, so consecutive strands touch and FUSE into
-    # a continuous membrane" UNCONDITIONALLY. That is a claim about physics computed from two
-    # numbers it never compared, and at --layer-h 0.48 with --cross-flow 0.25 it is FALSE while
-    # still being printed: the rod is 0.354mm against a 0.48 pitch, so the strands float 0.126mm
-    # apart and the fabric Oleg told us to keep becomes separate threads.
+    # ---- THE FABRIC'S STATE IS DECLARED, NOT IMPLIED. --------------------------------------------
+    # HISTORY, because this gate has now been wrong in BOTH directions. First the header claimed
+    # "strands touch and FUSE into a continuous membrane" unconditionally -- false at 0.48/0.25,
+    # where the rod floats 0.126mm short. Then this gate REQUIRED fusion unconditionally, so the
+    # 0.48 regen went out at --cross-flow 0.50 to satisfy it -- and that doubled every flow landing
+    # on the mouth lips: the walls came out SOLID ("Why we got to solid walls?") and the 1/8in
+    # stick stopped entering a bucket whose bore had just been made 0.2mm looser. Enforcing the
+    # LETTER of "the fabric has to stay" (fusion) destroyed its spirit (light).
     #
-    # The relation falls straight out of the two definitions and is worth writing once:
+    # The relation, worth writing once:
     #     area = bw * lh * cross_flow ;  rod = sqrt(4*area/pi) ;  fuses when rod >= lh
-    #     =>  cross_flow >= pi * lh / (4 * bw)
-    # At the shipped 0.24/0.82 that threshold is 0.230 and the default is 0.25 -- an 8.8% margin
-    # nobody chose. Any change to layer height or bead width spends it silently, which is precisely
-    # the class of failure that cost four base layers this week.
+    #     =>  fusion needs cross_flow >= pi * lh / (4 * bw)   (0.230 at 0.24; 0.460 at 0.48)
+    # FUSED-AND-LIGHT IS IMPOSSIBLE AT A DOUBLED PITCH -- fusion at 0.48 costs 2x the material of
+    # the 0.24 membrane by construction. So neither state is "correct": they are different parts,
+    # and the one thing this gate refuses is a file that does not SAY which one it is.
     cross_min = math.pi * lh / (4.0 * bw)
     fabric_rod = 2.0 * math.sqrt(a.cross_flow * bw * lh / math.pi)
-    if a.cross_flow > 0 and fabric_rod < lh - 1e-9:
-        raise SystemExit(
-            f"REFUSING TO EMIT: the fabric's rod is {fabric_rod:.3f}mm against a {lh:g}mm layer "
-            f"pitch, so consecutive strands would NOT touch -- they float {lh-fabric_rod:.3f}mm "
-            f"apart and the net comes off as separate threads instead of the membrane Oleg said to "
-            f"keep (\"Don't remove the fabric that has to stay\", 2026-08-06). "
-            f"A strand fuses to the one below only when its rod reaches the layer pitch: "
-            f"cross_flow >= pi*lh/(4*bead) = {cross_min:.3f} at this height. "
-            f"Pass --cross-flow {math.ceil(cross_min*100)/100:g} or higher, or drop --layer-h.")
+    fabric_fused = fabric_rod >= lh - 1e-9
+    if a.cross_flow > 0:
+        if a.fabric == "open" and fabric_fused:
+            raise SystemExit(
+                f"REFUSING TO EMIT: --fabric open, but the {fabric_rod:.3f}mm rod REACHES the "
+                f"{lh:g}mm layer pitch, so consecutive strands touch and fuse. The header would "
+                f"declare an open net the file does not lay. Drop --cross-flow below "
+                f"{cross_min:.3f}, or declare --fabric fused.")
+        if a.fabric == "fused" and not fabric_fused:
+            raise SystemExit(
+                f"REFUSING TO EMIT: --fabric fused, but the {fabric_rod:.3f}mm rod is short of the "
+                f"{lh:g}mm layer pitch -- the strands float {lh-fabric_rod:.3f}mm apart. The "
+                f"header would declare a membrane the file does not lay. Raise --cross-flow to "
+                f"{math.ceil(cross_min*100)/100:g} or higher, or declare --fabric open.")
+        if a.fabric is None and not fabric_fused:
+            raise SystemExit(
+                f"REFUSING TO EMIT: the fabric's rod is {fabric_rod:.3f}mm against a {lh:g}mm "
+                f"layer pitch, so consecutive strands do NOT touch -- they float "
+                f"{lh-fabric_rod:.3f}mm apart as separate threads, which is a DIFFERENT PART from "
+                f"the fused membrane every 0.24 bucket carried, and nothing declared the choice. "
+                f"Pass --fabric open to choose the light net (UNMEASURED at this pitch -- the "
+                f"strand may sag onto the one below), or raise --cross-flow to {cross_min:.3f}+ "
+                f"for a fused membrane -- KNOWING that fusion at {lh:g} costs "
+                f"{cross_min/0.25:.1f}x the 0.24 membrane's material and is what made the walls "
+                f"solid and the lips uninsertable on 2026-08-07.")
 
     merge_mm2 = merge_flow * bw * lh                # cross-section of ONE pass of the lap
     lap_pack = 1.0 + 2.0 * merge_flow               # the wall's own bead + both passes of the lap
@@ -1357,6 +1395,65 @@ def main():
     # move the file does not contain.
     _used = set(bridges.values())
     capped = [t for t in _cap_all if t[2] < t[1] - 1e-9 and t[2] in _used]
+
+    # ---- THE LIP BUDGET GATE: the mouth may not carry more than has ever been inserted. ----------
+    # Every crossing's endpoint, every merge lap and every bridge rod-end lands ON the two lips of
+    # the C-channel -- the tips ARE the mouth. So the stick's entry is decided not by the modelled
+    # bore alone but by how much material per mm2 of wall piles onto the lips, and that quantity
+    # was UNGUARDED: on 2026-08-07 the bore went 4.20 -> 4.40 (looser) while cross-flow 0.50 and a
+    # bottom band at every-2 put 1.63x the proven deposit on the lips, and Oleg's stick stopped
+    # entering entirely. "you started extruding way more fillament on certain laers without
+    # correcting the inner volume space for the stick to sit in" -- his diagnosis, correct.
+    #
+    # PER-AREA, WHICH IS lh-INVARIANT: one crossing per layer spans one lh of height, so a flow
+    # fraction contributes fraction x bead, and a mult-m bridge every N LAYERS contributes
+    # m x bead / N. The lh cancels -- which is why holding the layer-COUNT cadence across a layer
+    # change is right and holding the mm spacing (bb50x2 imitating 1.2mm) silently doubles the lip.
+    # CONVENTION, shared with machine.PROVEN_LIP's derivation so the comparison is exact: the
+    # fabric term is counted on every layer of a regime including its bridge layers (a <=
+    # cross_flow x bead / N overcount on both sides of the comparison).
+    #
+    # THE TOP RIM IS DECLARED, NOT GATED: every top layer is a bridge at m_top with no fabric, so
+    # its lip carries bead x (1 + 2 x merge_flow + m_top) over --top-layers of height. At 8x that
+    # EXCEEDS anything ever inserted, it sits exactly where the stick enters, and it is Oleg's
+    # explicit hierarchy ("x8 for the final 4 layers") -- so it is stated in the header as
+    # UNPROVEN for insertion rather than silently refused or silently passed.
+    lip_regimes = []
+    if abs(a.wrap_deg - 360.0) > 1e-9 and a.cross_flow > 0:
+        _lap_term = 2.0 * merge_flow if a.merge_mm > 0 else 0.0
+        if a.bridge_every > 0:
+            lip_regimes.append(("body", bw * (1.0 + _lap_term + a.cross_flow
+                                              + m_ord / a.bridge_every)))
+            if a.bottom_brace_layers > 0 and a.bottom_bridge_every > 0:
+                lip_regimes.append(("band", bw * (1.0 + _lap_term + a.cross_flow
+                                                  + m_ord / a.bottom_bridge_every)))
+        if a.accent_every > 0:
+            lip_regimes.append(("accent", bw * (1.0 + _lap_term + a.cross_flow
+                                                + m_acc / a.accent_every)))
+        if not lip_regimes:
+            lip_regimes.append(("fabric-only", bw * (1.0 + _lap_term + a.cross_flow)))
+    lip_top = (bw * (1.0 + (2.0 * merge_flow if a.merge_mm > 0 else 0.0) + m_top)
+               if (abs(a.wrap_deg - 360.0) > 1e-9 and a.top_layers > 0) else None)
+    lip_proven = machine.PROVEN_LIP.get(a.printer)
+    if lip_regimes and lip_proven:
+        _worst_nm, _worst = max(lip_regimes, key=lambda t: t[1])
+        if _worst > lip_proven * 1.01:
+            raise SystemExit(
+                f"REFUSING TO EMIT: the {_worst_nm} regime puts {_worst:.3f} mm3/mm2 on the "
+                f"C-channel's mouth lips, {_worst/lip_proven:.2f}x the {lip_proven:.3f} that has "
+                f"ever been physically inserted (machine.PROVEN_LIP: the 4.20 bucket of "
+                f"2026-08-07, itself only MARGINALLY insertable -- 'near to impossible to inserve "
+                f"on longer span'). More material on the lips narrows the mouth the stick enters, "
+                f"and that is the defect that made the 2026-08-07 15:44 bucket refuse the stick "
+                f"outright at a LOOSER bore. Regimes here: "
+                + ", ".join(f"{nm} {v:.3f}" for nm, v in lip_regimes)
+                + ". Cut --cross-flow / --merge-flow, or space the bridges out in LAYERS "
+                f"(mult/N is the term; holding mm-spacing across a layer change is how the band "
+                f"doubled). Buy insertion margin with --bore-allow, never with lip headroom.")
+    elif lip_regimes and lip_proven is None:
+        print(f"  ~ no PROVEN_LIP for {a.printer}: the mouth-lip deposit "
+              f"({max(v for _, v in lip_regimes):.3f} mm3/mm2 worst) is UNGUARDED on this machine. "
+              f"Nothing has ever been inserted here; read a printed part before trusting a fit.")
 
     # THE FIRST FLOOR LAYER'S PITCH IS DERIVED FROM THE BEAD IT IS MADE OF, not typed. A typed
     # default is what put a 2.5 pitch under a 2.00mm bead on every regeneration that forgot the
@@ -1569,6 +1666,19 @@ def main():
         w(f"; MERGE_MM={lap_measured:.4f}")
         w(f"; MERGE_MM2={merge_mm2:.4f}")
         w(f"; MERGE_PASSES=2")
+    if a.cross_flow > 0:
+        w(f"; FABRIC={'fused' if fabric_fused else 'open'} rod={fabric_rod:.3f}mm "
+          + (f"overlap={fabric_rod-lh:.3f}mm" if fabric_fused else f"gap={lh-fabric_rod:.3f}mm")
+          + f" (pitch {lh:g})")
+    if lip_regimes:
+        w(f"; LIP_BUDGET=" + ", ".join(f"{nm} {v:.3f}" for nm, v in lip_regimes)
+          + (f" vs {lip_proven:.3f} proven (machine.PROVEN_LIP)" if lip_proven
+             else " UNGUARDED -- no PROVEN_LIP for this machine")
+          + " mm3/mm2 on the mouth lips")
+        if lip_top is not None:
+            w(f";   top rim {lip_top:.3f} over the top {a.top_layers} layer(s) -- PAST anything "
+              f"ever inserted, exactly where the stick enters, and Oleg's explicit 8x hierarchy: "
+              f"DECLARED, not gated. If a stick stops at the very top, this is the suspect.")
     w(";")
     w("; ---------------- WHAT THIS PART IS ----------------")
     if abs(a.wrap_deg - 360.0) < 1e-9:
@@ -1632,11 +1742,22 @@ def main():
     w(f";          fabric   {a.cross_flow:>5.2f}x  {a.cross_flow*bw*lh:.4f}mm2  "
       f"rod {2*math.sqrt(a.cross_flow*bw*lh/math.pi):.3f}mm  "
       f"{a.cross_flow*bw*lh*speed_x:5.2f}mm3/s   on every non-bridge layer")
-    w(f";        THE FABRIC IS THE PART'S CHARACTER AND IT IS UNCHANGED. Its "
-      f"{2*math.sqrt(a.cross_flow*bw*lh/math.pi):.3f}mm rod exceeds the")
-    w(f";        {lh:g}mm layer pitch, so consecutive strands touch and FUSE into a continuous "
-      f"membrane. Oleg,")
-    w(f";        2026-08-06: \"Don't remove the fabric that has to stay\".")
+    w(f";        THE FABRIC STAYS (Oleg 2026-08-06: \"Don't remove the fabric that has to stay\") "
+      f"and its STATE is")
+    if fabric_fused:
+        w(f";        FUSED: the {fabric_rod:.3f}mm rod reaches the {lh:g}mm layer pitch, so "
+          f"consecutive strands touch")
+        w(f";        and fuse into a continuous membrane -- the character of every 0.24 bucket.")
+    else:
+        w(f";        OPEN, declared with --fabric open: the {fabric_rod:.3f}mm rod is "
+          f"{lh-fabric_rod:.3f}mm short of the {lh:g}mm")
+        w(f";        pitch, so the strands float apart as separate threads -- a NET, not a "
+          f"membrane. UNMEASURED")
+        w(f";        at this pitch: the strand may sag onto the one below and read as a lighter "
+          f"membrane. The")
+        w(f";        plate decides. Fusing at {lh:g} would cost >={cross_min:.2f}x flow = "
+          f"{cross_min/0.25:.1f}x the 0.24 membrane's material,")
+        w(f";        which made the walls solid and the lips uninsertable on 2026-08-07.")
     if a.merge_mm > 0:
         w(f"; MERGE  every crossing is LAPPED ONTO THE POST AT BOTH ENDS. Oleg 2026-08-06, holding "
           f"the printed")
@@ -2169,9 +2290,17 @@ def main():
         f"{m:g}x {m*bw*lh:.4f}mm2 rod {2*math.sqrt(m*bw*lh/math.pi):.3f}mm on "
         f"{sum(1 for v in bridges.values() if v == m)} layers"
         for m in sorted(set(bridges.values()))))
-    print(f"     fabric UNCHANGED at {a.cross_flow:g}x = {a.cross_flow*bw*lh:.4f}mm2, rod "
-          f"{2*math.sqrt(a.cross_flow*bw*lh/math.pi):.3f}mm > the {lh:g} layer pitch, so it fuses "
-          f"into a membrane")
+    if a.cross_flow > 0:
+        print(f"     fabric {a.cross_flow:g}x = {a.cross_flow*bw*lh:.4f}mm2, rod "
+              f"{2*math.sqrt(a.cross_flow*bw*lh/math.pi):.3f}mm vs the {lh:g} pitch: "
+              + ("FUSED into a membrane" if fabric_fused else
+                 f"OPEN net, strands float {lh-fabric_rod:.3f}mm apart (--fabric open, "
+                 f"UNMEASURED at this pitch)"))
+    if lip_regimes and lip_proven:
+        print(f"     lip budget: " + ", ".join(f"{nm} {v:.3f}" for nm, v in lip_regimes)
+              + f" mm3/mm2 vs {lip_proven:.3f} proven-insertable (worst regime "
+              f"{max(v for _, v in lip_regimes)/lip_proven:.2f}x)"
+              + (f"; top rim {lip_top:.3f} DECLARED unproven" if lip_top is not None else ""))
     for _nm, _req, _got in capped:
         print(f"  !! CAPPED {_nm}: requested {_req:g}x = {_req*flow:.2f}mm3/s, delivered {_got:g}x "
               f"= {_got*flow:.2f}mm3/s — {r8cap:g}mm3/s is the maintained figure for {a.material}")
