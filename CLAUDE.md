@@ -40,10 +40,26 @@ S1 on a file laying half the required flow, because both numbers matched and nei
 LAYER HEIGHT they were measured at. `machine.py` said so in prose — *"the body's own 0.82x0.24 bead
 pressed flat"* — and prose does not fail a build. **It cost a print on 2026-08-07.**
 
-**KNOWN, UNFIXED, AND THE NEXT ONE TO BITE:** `PROVEN_SEND['k2plus']['coverage']` stores
-`(2.00, 1.6)`, whose ratio `pitch/w1 = 0.80` is **the same number as `FLOOR1_OVERLAP`** — one fact
-in two places, which is the footgun `machine.py`'s own `--tower-d` comment warns about. It is stored
-as absolutes, so it goes stale at any other layer height exactly as `PROVEN_LAYER1` did.
+**A CLAIM I MADE HERE AND THEN DISPROVED, kept because the correction is the more useful half.** I
+wrote that `PROVEN_SEND['k2plus']['coverage']` `(2.00, 1.6)` was "the next one to bite", because its
+ratio `pitch/w1 = 0.80` is the same number as `FLOOR1_OVERLAP` and it is stored as absolutes. **The
+first half is true and the conclusion was wrong.** Storing coverage as absolutes means a file at
+another layer height measures `(3.94, 3.15)`, which is simply NOT in the accepted set, and S2 says
+so:
+
+    FIRST-PROOF  S2 floor coverage (3.94, 3.15) is NOT proven on k2plus (accepted: (2, 1.6) | (2, 2.5))
+
+**That is the gate working, not failing.** `PROVEN_LAYER1` bit us precisely because the pair
+`(0.10, 2.00)` stayed IDENTICAL across layer heights while its meaning changed; coverage's pair
+MOVES with the height, so the mismatch is visible. **Same-looking storage, opposite behaviour, and
+the difference is whether the stored numbers change when the operating point does.**
+
+**The real exposure is at ACCEPT time, not gate time:** if someone accepts `(3.94, 3.15)` without
+recording the layer height it was measured at, the ledger then holds two coverage pairs whose
+meanings differ and nothing says which is which. **Do not make coverage ratio-equivalent to "fix"
+this** — a 3.94mm line overlapping 0.79mm is not the same physical thing as a 2.00mm line
+overlapping 0.40mm, and treating equal ratios as equal evidence is the exact mistake that made
+`(0.10, 2.00)` look proven at 0.48.
 
 **What is genuinely ABSOLUTE, so the rule is not applied blindly:** `temps (210, 60)` is a property
 of the filament. `cross_mms` is a speed — though the quantity that matters is `span / speed`, i.e.
