@@ -1622,7 +1622,10 @@ def main():
     _mcap = math.pi * machine.PROVEN_ROD_MM ** 2 / (4.0 * bw * lh)   # max mult one pass may carry
     bpass = {}
     for _m9 in set(bridges.values()):
-        _n9 = max(3, int(math.ceil(_m9 / _mcap)))
+        # Floor raised 3 -> 5 on Oleg's read of the v8 plate, 2026-08-08: "As of solid
+        # bridges we are in around 90% perfect ration and having some sags. Lets try 10% less
+        # filament and split into 5 sub layers instead of 3."
+        _n9 = max(5, int(math.ceil(_m9 / _mcap)))
         if _n9 % 2 == 0:
             _n9 += 1
         bpass[_m9] = _n9
@@ -2348,6 +2351,14 @@ def main():
                     w(f"G1 F{round(_bs9*60)} X{x:.3f} Y{y:.3f} Z{_tz:.3f} E{E:.5f} ; BRIDGE "
                       f"{_bm9:g}x {_a29:.4f}mm2 pass {_p9}/{_n9} rod "
                       f"{2*math.sqrt(_a29/math.pi):.3f}mm, {seg:.2f}mm tip to tip")
+                if _p9 % 2 == 0 and _p9 < _n9:
+                    # LET THE LIP SETTLE. Oleg, reading the v8 plate 2026-08-08: "the right lip
+                    # still is [less defined] then left one meaning you dont let it settle and
+                    # rush into wall". The even return lands on the leading lip and the mini-lap
+                    # used to charge straight along the wall, dragging the still-molten strand
+                    # with it. 400ms of G4 (no extrusion -- R10 is about stationary EXTRUSION,
+                    # this is a pause) lets the strand freeze to the lip before the lap moves.
+                    w("G4 P400 ; SETTLE -- let the strand freeze to the lip before the lap runs")
             elif kind in ("T", "t"):
                 # FLAT, OVER AIR, NO LIFT. Licensed by geometry, not by a tag: the chord provably
                 # clears both posts' MATERIAL (check_paths gate 3, arc-aware). Lowercase "t" is
