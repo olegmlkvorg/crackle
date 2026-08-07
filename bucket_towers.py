@@ -1037,6 +1037,37 @@ def main():
     # needs is w1 * press / A_FIL. Stating it as a width rather than a flow multiplier means the
     # number in the header is the thing you can measure on the plate with callipers.
     w1 = a.w1 if a.w1 else bw * lh / press          # default reproduces the old behaviour exactly
+    # ---- LAYER 1 MUST CARRY THE BODY'S OWN FLOW, AND A STALE --w1 SILENTLY HALVES IT. -------------
+    # Oleg, 2026-08-05: "first layer need to be full flow ( a lot of fillament glued to base max
+    # width". That is a RATIO to the body bead, not an absolute width -- but --w1 is a width, so it
+    # goes silently wrong the moment --layer-h changes underneath it.
+    #
+    # THIS COST A PRINT ON 2026-08-07. `--w1 2` was carried from a 0.24 command into a 0.48 one:
+    #   layer 0.24   2.00 x 0.10 = 0.2000 mm2/mm against a 0.1968 body bead = 1.02x   FULL FLOW
+    #   layer 0.48   2.00 x 0.10 = 0.2000 mm2/mm against a 0.3936 body bead = 0.51x   STARVED
+    # The prime is metered at layer 1's own rate, so it came off as thin unwelded strands in the
+    # first eight seconds and Oleg cancelled. He asked whether the machine's calibration was
+    # interfering; it was not, and this arithmetic is why.
+    #
+    # NOTHING CAUGHT IT, AND THAT IS THE REAL DEFECT. machine.PROVEN_LAYER1 holds the PAIR
+    # (0.10, 2.00) and both R9 and send.py's S1 passed, because that pair genuinely is proven -- AT
+    # LAYER 0.24, where machine.py's own comment says it equals "the body's own 0.82x0.24 bead
+    # pressed flat". The pair is meaningless without the layer height it was measured at, and that
+    # dependency lived in a comment. So it is checked here, as a ratio, where it cannot be typed
+    # around.
+    _l1_ratio = (w1 * press) / (bw * lh)
+    if _l1_ratio < 1.0 - 1e-9:
+        raise SystemExit(
+            f"REFUSING TO EMIT: layer 1 would carry {w1*press:.4f}mm2/mm against the body's own "
+            f"{bw*lh:.4f}mm2/mm bead = {_l1_ratio:.2f}x. THE FIRST LAYER MUST BE FULL FLOW (Oleg, "
+            f"2026-08-05: \"first layer need to be full flow, a lot of fillament glued to base max "
+            f"width\"), and the prime is metered at this same rate, so a starved layer 1 lays thin "
+            f"unwelded strands before the part even starts.\n"
+            f"  --w1 is a WIDTH and the body bead moved under it: at --layer-h {lh:g} the width that "
+            f"carries full flow is {bw*lh/press:.2f}mm, not {w1:g}.\n"
+            f"  Pass --w1 {bw*lh/press:.2f} or higher, or omit --w1 and let it derive. "
+            f"machine.PROVEN_LAYER1's (0.10, 2.00) pair was measured at layer 0.24 and does NOT "
+            f"transfer to another height on its own.")
     # LAYER 1'S RATE IS METERED AGAINST THE HEIGHT IT ACTUALLY LANDS AT, not against PRESS_HARD.
     # Those are the same number only when the machine's Z zero is honest, and on this K2 it is not:
     # it homes ~0.15mm high, so a file commanding Z0.100 lays its first layer into whatever gap
