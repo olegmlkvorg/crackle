@@ -2091,8 +2091,16 @@ def main():
     print(f"    layer 1  lands {land_w1:.2f}mm on {floor_pitch_1:g}mm pitch ({_l1_cover:.2f}x, "
           f"{'WELDED SHEET' if land_w1 > floor_pitch_1 else 'GRID -- CANNOT WELD'}, "
           f"{max(0.0, land_w1 - floor_pitch_1):.2f}mm overlap) -- this is the layer that grips")
-    print(f"    layers 2-{a.floor_layers}  at {a.floor_pitch:g}mm pitch "
-          f"({land_w1/a.floor_pitch:.2f}x, {'SOLID' if land_w1 >= a.floor_pitch else 'open grid'}); "
+    # LAYERS 2-n LAY THE BODY BEAD, NOT --w1, and dividing by w1 here was a false claim I introduced
+    # on 2026-08-07 when the floor was split into two regimes. Only layer 1 is metered to a landed
+    # width; every layer above it is the ordinary bw x lh bead. At --w1 3.94 the wrong arithmetic
+    # reported "1.58x, SOLID" for an open grid actually running 0.82/2.5 = 0.33x -- and SOLID versus
+    # OPEN is the exact distinction Oleg asked for ("adhesion is must + not solid floor"), so the
+    # line was wrong about the one thing it exists to say.
+    _upper_cover = bw / a.floor_pitch
+    print(f"    layers 2-{a.floor_layers}  at {a.floor_pitch:g}mm pitch, laying the BODY bead "
+          f"{bw:g}mm ({_upper_cover:.2f}x, "
+          f"{'SOLID' if bw >= a.floor_pitch else 'open grid'}); "
           f"ribs cross every {a.floor_pitch:g}mm and bridge {max(0.0, a.floor_pitch-bw):.2f}mm")
     print(f"  bead {bw:g} x {lh:g} at {speed:g} mm/s -> {flow:.2f} mm3/s "
           f"({100*flow/r8cap:.1f}% of the {r8cap:g} figure, DECLARED)")

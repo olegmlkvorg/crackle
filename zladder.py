@@ -197,14 +197,23 @@ def main():
     # A POSITIVE OFFSET LIFTS THE NOZZLE ABOVE THE MACHINE'S OWN ZERO. That is the state the three
     # cancelled bucket starts printed in, and validate.py is blind to it — R1 reads the commanded
     # Z0.100 and passes whatever the plate is actually doing. Refused at the source instead.
+    # A POSITIVE OFFSET USED TO BE REFUSED HERE. IT IS NOW ALLOWED, IN THIS FILE ONLY, AND THE
+    # REASON IS EVIDENCE RATHER THAN CONVENIENCE.
+    #
+    # The refusal's premise was that positive lifts the nozzle away from the plate, "which is the
+    # defect, not a test of it" -- true of a PART, and it is still refused in machine.zoff_for()
+    # where parts get their offset. But on 2026-08-07 Oleg read a ladder and said "5 is closest to
+    # truth": cell 5 is the 0.250mm first layer at offset +0.000, the machine's own UNCORRECTED
+    # zero, and he then asked to go higher still. That is a request this file existed to serve and
+    # could not.
+    #
+    # A LADDER IS A TEST BY DEFINITION -- it already declares '; Z_LADDER=1' and validate.py's
+    # layer1_excuse() lets it visit gaps nothing has proven. Gaps LARGER than the press are gaps
+    # nothing has proven. Refusing them made this tool unable to explore the half of the axis the
+    # plate had just pointed at.
+    #
+    # It is announced rather than silent, and only the cells that need it are named.
     hi = [(h, o) for h, o in zip(hts, offs) if o > 1e-9]
-    if hi:
-        sys.exit("REFUSING TO EMIT: these heights need a POSITIVE offset, which lifts the nozzle "
-                 "above the machine's own zero:\n  " +
-                 "\n  ".join(f"height {h:g} -> offset {o:+.3f}" for h, o in hi) +
-                 f"\nWith --zerr {a.zerr:g} the tallest reachable first layer is "
-                 f"{press + a.zerr:.3f}mm. Drop the taller cells, or raise --zerr if the plate "
-                 f"says the reference error really is bigger.")
 
     # THE TWO FAN REGIMES, NAMED. fan1 protects the weld to the plate; fan2 is whatever the bucket's
     # body runs at, because a second layer laid without the bucket's cooling is not the bucket's
@@ -331,6 +340,20 @@ def main():
     # so a part that stamps this is refused and told why. FLOW_TEST=1 sets the same precedent for
     # the flow cap.
     w("; Z_LADDER=1")
+    # POSITIVE OFFSETS ANNOUNCED, NEVER SILENT. A part is refused one by machine.zoff_for(); a
+    # ladder may visit them because a gap larger than the press is still a gap nothing has proven,
+    # and on 2026-08-07 the plate pointed at exactly that half of the axis.
+    if hi:
+        w(f"; ABOVE THE MACHINE'S OWN ZERO: {len(hi)} of {n} cells lift the nozzle rather than press "
+          f"it, which a PART may never do.")
+        for _h, _o in hi:
+            w(f";   height {_h:.3f}mm -> offset {_o:+.3f}  ({_o:+.3f}mm ABOVE the uncorrected zero)")
+        w(f";   Oleg 2026-08-07, having read the previous ladder: \"5 is closest to truth\" (cell 5 "
+          f"was 0.250mm at offset +0.000, the")
+        w(f";   uncorrected machine) and \"keep the nozel slighly height for first layer\". The "
+          f"refusal that used to sit here")
+        w(f";   assumed positive was always the defect. His plate falsified that, so this file "
+          f"explores it and says so.")
     w(f"; SEQUENTIAL={n} numbered cells, lifted hops between, nothing stacked across cells")
     w(";")
 

@@ -211,6 +211,35 @@ from the name until 2026-08-07.
 
 ---
 
+## The K2's 20-minute calibration is NOT in our gcode
+
+Oleg, 2026-08-07: *"why you executing clibration again?"* on a 3-minute coupon. Traced, because the
+obvious answer (our `G28`) is wrong and three pieces of evidence say so:
+
+1. **`grep -cE "BED_MESH|G29|CALIBRATE|LEVEL|PROBE"` on the emitted file returns 0.** The only thing
+   any generator here asks for is `G28`.
+2. **The probe temperatures are not ours.** During that block the nozzle holds **140** and the bed
+   **50**; our files command `M104 S210` / `M140 S60`. So the routine runs BEFORE our first line
+   takes effect — it is the machine's print-start handler, outside the file.
+3. **`homing_override` contains `BED_MESH_CLEAR` and no calibrate.** `G28` WIPES the active mesh;
+   the firmware then rebuilds it.
+
+**The cost:** `bed_mesh` is `probe_count [9, 9]` over `mesh_min [5,5]` to `mesh_max [345,345]` — 81
+points, and on a large footprint that is ~20 minutes, six times the runtime of a 3-minute coupon.
+
+**A saved profile called `default` ALREADY EXISTS on the machine and goes unused**, because `G28`
+clears the active mesh every print.
+
+**IF AUTO-LEVEL IS EVER TURNED OFF MACHINE-SIDE, ADD `BED_MESH_PROFILE LOAD=default` AFTER `G28`.**
+Without that line, disabling the calibration leaves the part printing on NO mesh at all, on a bed
+measured to vary 0.652mm — much worse than the delay it saves. `gcode_macro
+bed_mesh_calibrate_start_print` also accepts a `PROBE_COUNT` parameter, so a coarser mesh is a
+middle option nobody has tried.
+
+**The general point, and it is why this belongs here:** when the machine does something the file did
+not ask for, prove which one owns it before changing either. The temperatures settled this in one
+reading — 140/50 appear nowhere in our code.
+
 ## Testing these files from a shell
 
 **zsh does not word-split an unquoted parameter.** `python3 $CMD` sends the whole string as one
