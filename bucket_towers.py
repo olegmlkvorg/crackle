@@ -650,7 +650,94 @@ def floor_check(r_h, bw, r_ring, bore_r, wrap_deg, mouth="in", r_t_wall=None):
     return edge, inner
 
 
-def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg):
+def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
+    """Closed loops hugging the floor's border: chord-parallel segments welded to arcs around
+    every post foot, stepped inward by ~0.9 bead until they overlap the lattice disc.
+
+    Oleg, 2026-08-08 ~03:30, off the v11 plate: "fix floor geometry it has to touch wals
+    eveywhere". The raster lattice fills an inscribed CIRCLE, so it meets the border only where
+    raster lines happen to end: scalloped gaps up to half a pitch along the rim chords, and bays
+    at every post where neither raster nor rim reaches the wall. These rings ARE the border:
+    the outermost runs 0.55 bead inside the chords and 0.55 bead off every post wall (beads
+    touching = welded), the innermost overlaps the lattice disc, and every layer of the floor
+    lays them, so the floor touches walls and rim EVERYWHERE by construction, not where the
+    raster luck lands. Measured and reported, ring by ring.
+    """
+    n = len(centres)
+    rings = []
+    i = 0
+    while True:
+        d = (0.55 + 0.9 * i) * bw
+        rho = r_t + d
+        segs = []                     # per gap: (A, B) endpoints of the inset chord segment
+        ok = True
+        for k in range(n):
+            p, q = ends[k], starts[(k + 1) % n]
+            ux, uy = q[0] - p[0], q[1] - p[1]
+            L = math.hypot(ux, uy)
+            ux, uy = ux / L, uy / L
+            nx, ny = -uy, ux
+            mx, my = (p[0] + q[0]) / 2 - cx, (p[1] + q[1]) / 2 - cy
+            if nx * mx + ny * my > 0:            # normal must point INWARD (toward the centre)
+                nx, ny = -nx, -ny
+            P0 = (p[0] + nx * d, p[1] + ny * d)  # the chord, shifted inward by d
+            AB = []
+            for c in (centres[k], centres[(k + 1) % n]):
+                # line P0 + t*u vs circle (c, rho)
+                fx, fy = P0[0] - c[0], P0[1] - c[1]
+                b = 2 * (fx * ux + fy * uy)
+                cc = fx * fx + fy * fy - rho * rho
+                disc = b * b - 4 * cc
+                if disc < 0:
+                    ok = False
+                    break
+                r1 = (-b - math.sqrt(disc)) / 2
+                r2 = (-b + math.sqrt(disc)) / 2
+                AB.append((r1, r2))
+            if not ok:
+                break
+            tA = AB[0][1]                        # leave post k on the far intersection
+            tB = AB[1][0]                        # reach post k+1 on the near one
+            if tB - tA < seg:
+                ok = False
+                break
+            segs.append(((P0[0] + ux * tA, P0[1] + uy * tA),
+                         (P0[0] + ux * tB, P0[1] + uy * tB)))
+        if not ok:
+            break
+        loop = []
+        for k in range(n):
+            A, B = segs[k]
+            m = max(2, int(math.ceil(math.dist(A, B) / seg)))
+            loop += [(A[0] + (B[0] - A[0]) * t / m, A[1] + (B[1] - A[1]) * t / m)
+                     for t in range(m + 1)]
+            c1 = centres[(k + 1) % n]
+            a1 = math.atan2(B[1] - c1[1], B[0] - c1[0])
+            A2 = segs[(k + 1) % n][0]
+            a2 = math.atan2(A2[1] - c1[1], A2[0] - c1[0])
+            # walk the arc on the post's INNER face: of the two directions, take the one whose
+            # midpoint lies nearer the bucket centre
+            def mid_r(a_from, a_to, sign):
+                sweep = (a_to - a_from) % (2 * math.pi) if sign > 0 else -((a_from - a_to) % (2 * math.pi))
+                am = a_from + sweep / 2
+                return math.hypot(c1[0] + rho * math.cos(am) - cx, c1[1] + rho * math.sin(am) - cy), sweep
+            rP, sP = mid_r(a1, a2, +1)
+            rN, sN = mid_r(a1, a2, -1)
+            sweep = sP if rP < rN else sN
+            steps = max(2, int(math.ceil(abs(sweep) * rho / seg)))
+            loop += [(c1[0] + rho * math.cos(a1 + sweep * t / steps),
+                      c1[1] + rho * math.sin(a1 + sweep * t / steps)) for t in range(1, steps + 1)]
+        rings.append(loop)
+        # stop once this ring dips into the lattice disc (overlap achieved)
+        if min(math.hypot(px - cx, py - cy) for px, py in loop) <= r_h - 0.25 * bw:
+            break
+        i += 1
+        if i > 8:
+            break
+    return rings
+
+
+def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg, rings=None):
     """One cross-latch floor layer: [entry] -> lattice -> back out to tower 0's seam.
 
     The lattice itself is bucket_latch.latch_pts, imported. What is added here is the handoff at
@@ -678,6 +765,13 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg):
         out += latch.arc_to(cx, cy, r_h, th, latch.ang(cx, cy, cand[0]), seg)
         out += cand[1:]
     out += latch.arc_to(cx, cy, r_h, latch.ang(cx, cy, out[-1]), th, seg)
+    # THE BORDER RINGS, inner to outer: enter each at its nearest point to the head, walk the
+    # full loop, step outward across the empty bay to the next. The links cross only unlaid bay,
+    # never the lattice, and the last ring ends a bead from the rim, one short rib from seam0.
+    for ring in reversed(rings or []):
+        j0 = min(range(len(ring)), key=lambda j: math.dist(ring[j], out[-1]))
+        out += latch.line_pts(out[-1], ring[j0], seg)
+        out += ring[j0 + 1:] + ring[:j0 + 1]
     out += latch.line_pts(out[-1], rim, seg)
     out += latch.line_pts(rim, seam0, seg)              # radial rib back out to the tower ring
     return first, out, ["E"] * len(out)
@@ -685,7 +779,7 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg):
 
 def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_floor,
           floor_pitch, r_h, bridges, merge_mm=0.0, floor_pitch_1=None, wdir=1,
-          fabric_passes=1, bpass=None):
+          fabric_passes=1, bpass=None, rings=None):
     """Every layer as {pts, kind, label}. pts[0] is where the layer starts; kind[j] says how the
     head reaches pts[j+1] -- E extrude, T flat metered crossing, B bridge, R floor rim,
     M the lap that welds a crossing ONTO the post it leaves and the post it lands on.
@@ -754,7 +848,7 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 # Layer 1 keeps its own derived pitch: the plate weld. See floor_pitch_1.
                 pitch_here = floor_pitch_1 if (li == 0 and floor_pitch_1) else floor_pitch
                 first, fp, fk = floor_path(cx, cy, r_h, pitch_here, (math.pi / 2.0) * (li % 2),
-                                           starts[0], entry, SEG)
+                                           starts[0], entry, SEG, rings=rings)
                 pts = [first] + fp
                 kind = fk
             elif is_floor:
@@ -763,7 +857,7 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 # alternates per layer, not per circuit, so the C thin passes stack into the one
                 # full-height rib the lattice was proven with).
                 first, fp, fk = floor_path(cx, cy, r_h, floor_pitch, (math.pi / 2.0) * (li % 2),
-                                           starts[0], entry, SEG)
+                                           starts[0], entry, SEG, rings=rings)
                 pts = [first] + fp
                 kind = fk
             else:
@@ -1655,9 +1749,11 @@ def main():
                 f"REFUSING TO EMIT: bridge mult {_m9:g}x cannot get under the proven rod "
                 f"({machine.PROVEN_ROD_MM:g}mm) at any odd pass count -- arithmetic is broken.")
     _fab_np = a.fabric_passes
+    _rings = (boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG)
+              if a.floor_layers else [])
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
                    a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1,
-                   wdir=wdir, fabric_passes=_fab_np, bpass=bpass)
+                   wdir=wdir, fabric_passes=_fab_np, bpass=bpass, rings=_rings)
     _zlist = [press if L.get("li", 0) == 0 else
               z_of(L["li"] - 1) + L.get("zf", 1.0) * (z_of(L["li"]) - z_of(L["li"] - 1))
               for L in layers]
@@ -2115,6 +2211,18 @@ def main():
     w(f";        what resists a tower splaying outward at its foot. That is why the rim needed no "
       f"second knob.")
     if a.floor_layers:
+        if _rings:
+            _rmins = [min(math.hypot(px - cx, py - cy) for px, py in r9) for r9 in _rings]
+            _rmaxs = [max(math.hypot(px - cx, py - cy) for px, py in r9) for r9 in _rings]
+            w(f"; FLOOR_RINGS={len(_rings)} border loops per floor layer, radii "
+              f"{min(_rmins):.1f}..{max(_rmaxs):.1f}mm: chord-parallels 0.55 bead inside the rim "
+              f"+ arcs 0.55 bead")
+            w(f";   off every post wall, stepping 0.9 bead inward until overlapping the lattice "
+              f"disc (edge {r_h + bw/2:.1f}).")
+            w(f";   Oleg 2026-08-08: 'fix floor geometry it has to touch wals eveywhere' -- the "
+              f"border is now DRAWN,")
+            w(f";   every floor layer, so floor-to-wall and floor-to-rim contact is by "
+              f"construction, not raster luck.")
         w(f"; GATE 5 the latch disc's outer bead reaches radius {floor_edge:.3f}mm and the bamboo "
           f"channel's bore")
         w(f";        starts at {bore_inner:.3f}mm: {bore_inner-floor_edge:+.3f}mm of clearance. "
@@ -2512,7 +2620,8 @@ def main():
     lz = "" if abs(lh - machine.SLICER_LAYER_H) < 1e-9 else f"_z{lh:g}"
     fn = os.path.join(a.out, f"bucket_towers_{a.printer}_{a.material}_d{a.dia:g}_h{a.height:g}_"
                              f"n{n_tow}t{a.tower_d:g}{wf}_b{a.bridge_every}{bb}{mf}_"
-                             f"f{a.floor_layers}x{a.floor_pitch:g}{xf}{jf}{lz}.gcode")
+                             f"f{a.floor_layers}x{a.floor_pitch:g}"
+                             f"{'r' + str(len(_rings)) if _rings else ''}{xf}{jf}{lz}.gcode")
     open(fn, "w").write("\n".join(L) + "\n")
 
     print(fn)
