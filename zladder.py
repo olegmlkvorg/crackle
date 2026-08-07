@@ -161,12 +161,21 @@ def main():
     # layer must not itself be able to starve one. (Placed after `bw` deliberately: the first
     # version of this check sat beside the --layer-h resolution above and referenced `bw` two lines
     # before it existed.)
+    # THE TOLERANCE IS NOT SLOPPINESS, IT IS THE DIFFERENCE BETWEEN A GUARD AND A NUISANCE.
+    # The first version compared against an exact 1.0 and refused --w1 2.62 at --layer-h 0.32:
+    # 2.62 x 0.10 = 0.2620 against a 0.82 x 0.32 = 0.2624 bead, which is 0.9985x -- full flow to any
+    # precision that matters, and the operator would have to type 2.6244 to satisfy it. Worse, the
+    # message printed "the width that carries full flow is 2.62mm, not 2.62", because both rounded
+    # to the same two decimals. A guard that goes red on a correct value AND cannot state why is
+    # how a gate earns a reputation for crying wolf and gets switched off.
+    # 1% is well inside the real failure this catches, which was 0.51x -- half.
     _ratio = (a.w1 * press) / (bw * lh)
-    if _ratio < 1.0 - 1e-9:
+    if _ratio < 0.99:
+        _need = bw * lh / press
         sys.exit(f"REFUSING TO EMIT: layer 1 would carry {a.w1*press:.4f}mm2/mm against the body's "
-                 f"{bw*lh:.4f}mm2/mm bead = {_ratio:.2f}x. At --layer-h {lh:g} the width that "
-                 f"carries full flow is {bw*lh/press:.2f}mm, not {a.w1:g}. This ladder exists to "
-                 f"measure a first layer; it must not be able to starve one.")
+                 f"{bw*lh:.4f}mm2/mm bead = {_ratio:.3f}x. At --layer-h {lh:g} the width that "
+                 f"carries full flow is {_need:.3f}mm, and --w1 is {a.w1:.3f}mm. This ladder exists "
+                 f"to measure a first layer; it must not be able to starve one.")
 
     for nm, v in (("--speed", a.speed), ("--speed1", a.speed1)):
         if v > machine.MAX_SPEED + 1e-9:
