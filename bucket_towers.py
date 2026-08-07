@@ -765,9 +765,11 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg, rings=None):
         out += latch.arc_to(cx, cy, r_h, th, latch.ang(cx, cy, cand[0]), seg)
         out += cand[1:]
     out += latch.arc_to(cx, cy, r_h, latch.ang(cx, cy, out[-1]), th, seg)
-    # THE BORDER RINGS, inner to outer: enter each at its nearest point to the head, walk the
-    # full loop, step outward across the empty bay to the next. The links cross only unlaid bay,
-    # never the lattice, and the last ring ends a bead from the rim, one short rib from seam0.
+    # THE BORDER RINGS AND SKIRT, walked skirt-first then inner-to-outer (reversed list order:
+    # the skirt is appended last). Every link crosses only zones not yet laid this layer -- the
+    # bay, the wall toolpath before the walls print -- and the exit rib from the outermost border
+    # ring crosses the inner ring once, the same class of same-height weld crossing the lattice
+    # raster makes at every perpendicular layer.
     for ring in reversed(rings or []):
         j0 = min(range(len(ring)), key=lambda j: math.dist(ring[j], out[-1]))
         out += latch.line_pts(out[-1], ring[j0], seg)
@@ -779,7 +781,7 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg, rings=None):
 
 def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_floor,
           floor_pitch, r_h, bridges, merge_mm=0.0, floor_pitch_1=None, wdir=1,
-          fabric_passes=1, bpass=None, rings=None):
+          fabric_passes=1, bpass=None, rings=None, rings_l1=None):
     """Every layer as {pts, kind, label}. pts[0] is where the layer starts; kind[j] says how the
     head reaches pts[j+1] -- E extrude, T flat metered crossing, B bridge, R floor rim,
     M the lap that welds a crossing ONTO the post it leaves and the post it lands on.
@@ -848,7 +850,8 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 # Layer 1 keeps its own derived pitch: the plate weld. See floor_pitch_1.
                 pitch_here = floor_pitch_1 if (li == 0 and floor_pitch_1) else floor_pitch
                 first, fp, fk = floor_path(cx, cy, r_h, pitch_here, (math.pi / 2.0) * (li % 2),
-                                           starts[0], entry, SEG, rings=rings)
+                                           starts[0], entry, SEG,
+                                           rings=(rings_l1 if rings_l1 is not None else rings))
                 pts = [first] + fp
                 kind = fk
             elif is_floor:
@@ -889,7 +892,6 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                            "label": ("floor latch" if is_floor else
                                      (f"posts + BRIDGES {_m:g}x" if _m else "posts"))
                                     + (f" circuit {_ci+1}/{n_circ}" if n_circ > 1 else "")})
-    return layers
     return layers
 
 
@@ -1527,12 +1529,13 @@ def main():
     r_poly = min(math.hypot(ends[k][0] + (starts[(k+1) % n_tow][0]-ends[k][0])*t/64.0 - cx,
                             ends[k][1] + (starts[(k+1) % n_tow][1]-ends[k][1])*t/64.0 - cy)
                  for k in range(n_tow) for t in range(65))
-    # TWO bounds, and which one binds depends on the wrap: the chord polygon (historic), and the
-    # POST WALL ANNULUS -- at --mouth out with a deep wrap the tips sit so near the ring that the
-    # tip-to-tip chords run OUTSIDE the posts' own walls, and a disc sized to the chords alone
-    # overlaps the wall toolpath at every foot (measured: edge 1.11mm from post centres at wrap
-    # 287.5 before this bound existed). The floor stops one bead short of whichever is nearer.
-    r_h = min(r_poly, r_ring - r_t) - bw
+    # THE RASTER MUST OVERLAP THE BORDER, NOT MEET IT. Oleg 2026-08-08 ~04:00, third floor
+    # read: "still not touching the walls. make the first layer of internal lines overlap the
+    # round line". So the lattice disc reaches the POST KEEP-IN radius (post wall minus a lap of
+    # bead): its lines CROSS both boundary rings' chord-parallels instead of scalloping a bead
+    # short, and the rings' post arcs carry the last stretch to the walls. Bounded only by the
+    # keep-in -- the old bead-short-of-everything bound is what kept leaving gaps.
+    r_h = r_ring - r_t - 0.55 * bw
     if a.floor_layers and r_h <= a.floor_pitch:
         ap.error(f"--dia {a.dia:g} leaves a {r_h:.1f} mm latch disc, which does not fit a "
                  f"{a.floor_pitch:g} mm pitch")
@@ -1751,9 +1754,31 @@ def main():
     _fab_np = a.fabric_passes
     _rings = (boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG)
               if a.floor_layers else [])
+    _rings_l1 = _rings
+    if _rings:
+        # THE SKIRT (same read: "and give a skirt, do like that for all layers of the base"): one
+        # loop OUTSIDE the post ring on every floor layer, so each wall's foot is welded from
+        # BOTH faces -- raster and rings inside, skirt outside -- and the two lips of every
+        # outward mouth are tied together at the base. Drawn before the walls each layer, so the
+        # radial link out crosses only bare plate and the wall then prints ONTO the crossing.
+        # TWO RADII, because layer 1's bead is w1-wide: at the wall-hugging offset its edge runs
+        # 0.4mm off the 350 plate (gate 2 refused it), so layer 1's skirt pulls in to the last
+        # sliver the plate carries -- deep-overlapping the wall foot, which is the point -- while
+        # the upper floor layers sit at the clean 0.55-bead weld offset. Both are ~3mm past the
+        # probed mesh's 345 edge: extrapolated bed there, the accepted-risk class this part's
+        # own edge already carries.
+        def _skirt(rr):
+            _nsk = max(64, int(math.ceil(2 * math.pi * rr / SEG)))
+            return [(cx + rr * math.cos(2 * math.pi * t / _nsk),
+                     cy + rr * math.sin(2 * math.pi * t / _nsk)) for t in range(_nsk + 1)]
+        _sk_up = r_ring + r_t + 0.55 * bw
+        _sk_l1 = min(_sk_up, min(bedx, bedy) / 2.0 - w1 / 2.0 - 0.05)
+        _rings_l1 = _rings + [_skirt(_sk_l1)]
+        _rings = _rings + [_skirt(_sk_up)]
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
                    a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1,
-                   wdir=wdir, fabric_passes=_fab_np, bpass=bpass, rings=_rings)
+                   wdir=wdir, fabric_passes=_fab_np, bpass=bpass, rings=_rings,
+                   rings_l1=_rings_l1)
     _zlist = [press if L.get("li", 0) == 0 else
               z_of(L["li"] - 1) + L.get("zf", 1.0) * (z_of(L["li"]) - z_of(L["li"] - 1))
               for L in layers]
