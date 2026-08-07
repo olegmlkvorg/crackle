@@ -831,6 +831,49 @@ def main():
                          "measured, not taste: layers are perpendicular, so a layer lands on the "
                          "one below only where the rasters cross. At the old 5.0 a 5-layer floor "
                          "was REFUSED by validate.py at 23%% unsupported; 2.5 reads 2%%.")
+    ap.add_argument("--layer-h", type=float, default=None,
+                    help="layer height mm. Default is machine.SLICER_LAYER_H (%g), the stock "
+                         "profile. Oleg 2026-08-07: \"Let's try doubling it? Except for the first "
+                         "layer\" -- and the first layer is already separate (--h1), so doubling "
+                         "this leaves it alone by construction. "
+                         "ONLY THE HEIGHTS HIS PROFILES ACTUALLY OFFER are accepted (%s): a height "
+                         "the slicer profiles do not carry has never been laid by this machine and "
+                         "would be a number nobody has seen come off a nozzle. "
+                         "IT HALVES THE PRINT AT 0.48, which is the real argument for it -- a "
+                         "10-hour plate lost 3 good hours to a power-off on 2026-08-07, and the "
+                         "cheapest fix for that exposure is a shorter print. "
+                         "WHAT MOVES WITH IT, and both are handled rather than left to bite: the "
+                         "fabric's rod must still reach the layer pitch or the membrane stops "
+                         "fusing (--cross-flow derives from this now), and the bridge multipliers "
+                         "hit the flow cap sooner (--cap-mode decides what gives)."
+                         % (machine.SLICER_LAYER_H,
+                            ", ".join(f"{h:g}" for h in machine.SLICER_LAYER_HEIGHTS)))
+    ap.add_argument("--cap-mode", choices=("width", "slow"), default="width",
+                    help="what gives when a bridge multiplier asks for more than the material's "
+                         "sustained flow. 'width' CAPS the multiplier, which is what this file did "
+                         "until 2026-08-07 and what its own comment argued for: a bridge is a "
+                         "strand pulled taut across air and TIME is what makes it sag, so buying "
+                         "volume with speed trades the risk the part can least afford. "
+                         "'slow' HOLDS the multiplier and drops the feedrate on those layers only. "
+                         "Oleg overruled the old default on 2026-08-07: \"Yes you can slow down "
+                         "where max flow is limiting factor\". The exposure is bounded and worth "
+                         "stating: at layer 0.48 it is the accent and top-rim layers, not the "
+                         "ordinary ones, so it touches ~18 layers of ~750. Every slowed layer "
+                         "prints its own speed and its time in air, so the cost is visible. "
+                         "IT ALSO RESTORES THE HIERARCHY HE ASKED FOR: capping flattens a 4x accent "
+                         "and an 8x top rim to the same 2.79x at layer 0.48, so 'x8 for the final 4 "
+                         "layers' silently stops being distinguishable from the accents. Slowing "
+                         "holds them apart at rod 1.416mm and 2.002mm. "
+                         "NOT THE DEFAULT YET, AND THAT IS DELIBERATE: a slowed file currently "
+                         "FAILS validate.py R3, which refuses a print running more than one speed "
+                         "unless the regime is DECLARED in the header the way '; SPEED_LAYER1=' and "
+                         "'; SPEED_CROSS=' are. R3 is right to refuse it -- an undeclared second "
+                         "speed is exactly what that rule exists to catch, and weakening it to "
+                         "admit this feature would be the trade this project keeps refusing to "
+                         "make. The remaining work is a '; SPEED_BRIDGE=' declaration plus an "
+                         "R3b-style check that every declared bridge speed actually appears on the "
+                         "moves that claim it. Until then --cap-mode slow emits a file the gate "
+                         "will not pass, which is the honest state rather than a hidden one.")
     ap.add_argument("--height", type=float, default=40.0, help="total height mm including floor")
     ap.add_argument("--stagger-deg", type=float, default=None,
                     help="rotation of the whole C, in degrees, from the opening pointing dead "
@@ -927,7 +970,18 @@ def main():
     # MATERIAL FOLLOWS THE PRINTER. A part generated for one machine with another machine's
     # filament is silently wrong: right geometry, wrong temperature, wrong flow ceiling.
     a.material = machine.check_spool(a.printer, a.material or machine.LOADED[a.printer])
-    bw, lh = machine.SLICER_LINE_W, machine.SLICER_LAYER_H
+    bw = machine.SLICER_LINE_W
+    # THE LAYER HEIGHT IS A CHOICE NOW, AND IT IS CHECKED AGAINST WHAT THE MACHINE OFFERS. It was
+    # machine.SLICER_LAYER_H with no way to vary it; Oleg asked to double it on 2026-08-07 and the
+    # honest constraint is not "any float" but "a height one of his six profiles actually carries".
+    lh = machine.SLICER_LAYER_H if a.layer_h is None else a.layer_h
+    if not any(abs(lh - h) < 1e-9 for h in machine.SLICER_LAYER_HEIGHTS):
+        raise SystemExit(
+            f"REFUSING TO EMIT: --layer-h {lh:g} is not one of the heights this machine's profiles "
+            f"offer ({', '.join(f'{h:g}' for h in machine.SLICER_LAYER_HEIGHTS)}). A height no "
+            f"profile carries has never been laid here, so nothing about its bead, its flow or its "
+            f"cooling was measured. Pick one of those, or add it to machine.SLICER_LAYER_HEIGHTS "
+            f"with the profile it came from.")
     press = machine.PRESS_HARD                      # 0.10, R1
     for _nm, _v in (("--speed", a.speed), ("--speed1", a.speed1)):
         if _v > machine.MAX_SPEED + 1e-9:
@@ -1095,6 +1149,31 @@ def main():
                 f"{merge_flow*flow:.2f} mm3/s against the {r8cap:g} mm3/s maintained figure for "
                 f"{a.material} on this machine. The lap runs at the BODY speed ({speed:g} mm/s), "
                 f"not the crossing speed, so its flow is merge_flow x bead x body speed.")
+    # ---- THE MEMBRANE IS A GATE NOW, NOT A SENTENCE IN THE REPORT. -------------------------------
+    # This file printed "its rod exceeds the layer pitch, so consecutive strands touch and FUSE into
+    # a continuous membrane" UNCONDITIONALLY. That is a claim about physics computed from two
+    # numbers it never compared, and at --layer-h 0.48 with --cross-flow 0.25 it is FALSE while
+    # still being printed: the rod is 0.354mm against a 0.48 pitch, so the strands float 0.126mm
+    # apart and the fabric Oleg told us to keep becomes separate threads.
+    #
+    # The relation falls straight out of the two definitions and is worth writing once:
+    #     area = bw * lh * cross_flow ;  rod = sqrt(4*area/pi) ;  fuses when rod >= lh
+    #     =>  cross_flow >= pi * lh / (4 * bw)
+    # At the shipped 0.24/0.82 that threshold is 0.230 and the default is 0.25 -- an 8.8% margin
+    # nobody chose. Any change to layer height or bead width spends it silently, which is precisely
+    # the class of failure that cost four base layers this week.
+    cross_min = math.pi * lh / (4.0 * bw)
+    fabric_rod = 2.0 * math.sqrt(a.cross_flow * bw * lh / math.pi)
+    if a.cross_flow > 0 and fabric_rod < lh - 1e-9:
+        raise SystemExit(
+            f"REFUSING TO EMIT: the fabric's rod is {fabric_rod:.3f}mm against a {lh:g}mm layer "
+            f"pitch, so consecutive strands would NOT touch -- they float {lh-fabric_rod:.3f}mm "
+            f"apart and the net comes off as separate threads instead of the membrane Oleg said to "
+            f"keep (\"Don't remove the fabric that has to stay\", 2026-08-06). "
+            f"A strand fuses to the one below only when its rod reaches the layer pitch: "
+            f"cross_flow >= pi*lh/(4*bead) = {cross_min:.3f} at this height. "
+            f"Pass --cross-flow {math.ceil(cross_min*100)/100:g} or higher, or drop --layer-h.")
+
     merge_mm2 = merge_flow * bw * lh                # cross-section of ONE pass of the lap
     lap_pack = 1.0 + 2.0 * merge_flow               # the wall's own bead + both passes of the lap
 
@@ -1154,9 +1233,37 @@ def main():
     # extruder. Slowing the move instead was considered and REJECTED -- a bridge is a strand pulled
     # taut across 33mm of air and time is the thing that makes it sag, so cutting speed to buy
     # volume trades the risk we can least afford. Requested and delivered are both declared below.
+    #
+    # OVERRULED 2026-08-07, and the paragraph above is kept because the physics in it is still true
+    # and still the reason to watch these layers. Oleg: "Yes you can slow down where max flow is
+    # limiting factor", and then the argument the old comment never made: "it is still going to be
+    # fast enough to avoid sag". He is pointing at something real that a speed-only view misses --
+    # AT MAX FLOW THE STRAND IS TWICE AS THICK. A 4x rod is 1.001mm across against 0.501mm at 1x,
+    # and a fat strand resists its own weight in a way a thin one does not. Time in air goes up;
+    # section goes up faster. Neither of us can settle that from first principles, so --cap-mode
+    # makes it a choice, defaults to his, and PRINTS the time in air per slowed layer so the plate
+    # can settle it.
+    #
+    # WHAT IS BOUNDED, and it is why this is a reasonable bet rather than a gamble: at 0.48 the
+    # ORDINARY bridges still fit under the cap, so only the accent and top-rim layers slow -- about
+    # 18 layers of 750. The top rim is the structural one (it ties the towers); the accents are
+    # bands. If a slowed layer sags, it sags where it is visible and mostly where it is cosmetic.
     mult_cap = r8cap / flow if (r8cap and flow) else None
     def _cap(m):
-        return m if (mult_cap is None or m <= mult_cap) else math.floor(mult_cap * 100) / 100.0
+        if mult_cap is None or m <= mult_cap or a.cap_mode == "slow":
+            return m
+        return math.floor(mult_cap * 100) / 100.0
+
+    def _speed_for(m):
+        """Feedrate a bridge at multiplier `m` must run at to stay under the flow cap.
+
+        Only ever SLOWER than the body speed: a multiplier that already fits returns it unchanged,
+        so this cannot become a back door to a faster wall.
+        """
+        if mult_cap is None or m <= mult_cap or a.cap_mode != "slow":
+            return speed
+        return speed * mult_cap / m
+
     m_ord, m_acc = _cap(a.bridge_w_mult), _cap(a.accent_w_mult)
     m_top = _cap(a.top_w_mult)
     _cap_all = (("--bridge-w-mult", a.bridge_w_mult, m_ord),
@@ -1847,9 +1954,22 @@ def main():
                     w(f"G1 F{f}")
                 if kind == "B":
                     _a2 = _bm * bw * lh
+                    # A SLOWED BRIDGE WRITES ITS OWN F, AND WRITES IT BACK. F is sticky, so a bridge
+                    # laid at a reduced feedrate would otherwise carry that speed into the next
+                    # post's whole arc -- silently printing the wall at the bridge's speed, which is
+                    # the same class of bug as the crossing regime bleeding into the body above.
+                    _bs = _speed_for(_bm)
+                    if _bs < speed - 1e-9 and li != 0:
+                        w(f"G1 F{round(_bs*60)}   ; BRIDGE SLOWED to {_bs:.1f}mm/s -- {_bm:g}x at "
+                          f"{speed:g}mm/s would ask {_bm*flow:.1f}mm3/s of a {r8cap:g} extruder. "
+                          f"Oleg 2026-08-07: slow it rather than thin it")
                     w(f"G1 X{x:.3f} Y{y:.3f} E{E:.5f} ; BRIDGE {_bm:g}x {_a2:.4f}mm2 rod "
                       f"{2*math.sqrt(_a2/math.pi):.3f}mm, {seg:.2f}mm tip to tip, "
-                      f"{bridge_air:.2f}mm unsupported air")
+                      f"{bridge_air:.2f}mm unsupported air"
+                      + (f", {bridge_air/_bs*1000:.0f}ms in air at {_bs:.1f}mm/s"
+                         if _bs < speed - 1e-9 else ""))
+                    if _bs < speed - 1e-9 and li != 0:
+                        w(f"G1 F{f}   ; back to the body speed")
                 else:
                     w(f"G1 X{x:.3f} Y{y:.3f} E{E:.5f}")
             ppx, ppy = x, y
@@ -1893,9 +2013,16 @@ def main():
     # material, and two different parts cannot share a name. Suffix only when it is on, so every
     # filename written before --merge-mm existed still names the same file.
     jf = f"_j{a.merge_mm:g}" if a.merge_mm > 0 else ""
+    # THE LAYER HEIGHT IS IN THE NAME FOR EXACTLY THE REASON THE FLOOR IS, and it was not until
+    # 2026-08-07. Two runs at 0.24 and 0.48 are the same geometry with HALF the layers, a different
+    # membrane and a different bridge schedule -- and they would have collided on one filename,
+    # which is the defect the floor suffix exists to prevent ("Two different parts cannot share a
+    # name"). Suffix only when it is off the stock height, so every filename written before
+    # --layer-h existed still names the same file.
+    lz = "" if abs(lh - machine.SLICER_LAYER_H) < 1e-9 else f"_z{lh:g}"
     fn = os.path.join(a.out, f"bucket_towers_{a.printer}_{a.material}_d{a.dia:g}_h{a.height:g}_"
                              f"n{n_tow}t{a.tower_d:g}{wf}_b{a.bridge_every}{bb}{mf}_"
-                             f"f{a.floor_layers}x{a.floor_pitch:g}{xf}{jf}.gcode")
+                             f"f{a.floor_layers}x{a.floor_pitch:g}{xf}{jf}{lz}.gcode")
     open(fn, "w").write("\n".join(L) + "\n")
 
     print(fn)

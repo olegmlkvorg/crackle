@@ -1474,7 +1474,12 @@ def speed_for_flow(flow, bead_w, layer_h):
 # exactly one line with nothing left over, which is the cheapest printable wall that exists.
 SLICER_LINE_W = 0.82    # mm, READ from all six K2 Plus 0.8 process profiles, 2026-08-04
 SLICER_FIRST_H = 0.40   # mm, initial_layer_print_height, same six profiles
-# Layer heights those profiles offer: 0.24, 0.32, 0.40, 0.48, 0.56.
+# THE LAYER HEIGHTS HIS SIX K2 PLUS 0.8 PROFILES ACTUALLY OFFER, as a list rather than a sentence.
+# It was a comment until 2026-08-07, which meant a generator taking a layer height had nothing to
+# check against and would happily lay a height this machine has never been asked for. A height
+# outside this set is not "unproven", it is unoffered: no profile on the machine produces it, so
+# nothing about the bead geometry, the flow figures or the first-layer numbers was measured there.
+SLICER_LAYER_HEIGHTS = (0.24, 0.32, 0.40, 0.48, 0.56)
 SLICER_LAYER_H = 0.24   # mm, Oleg 2026-08-04 "yea i meant 0.24 update it", matching the stock
                         # 0.24mm Standard profile. He first said 0.28; when told 0.28 was not among
                         # the stock heights he moved to the profile's own number rather than
