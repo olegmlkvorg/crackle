@@ -858,7 +858,14 @@ def check(path):
     for _i, _ln in enumerate(open(path)):
         _m = re.match(r'G1 (?:F(\d+) )?(?:X([-\d.]+) Y([-\d.]+) )?(?:Z([\d.]+) )?E([-\d.]+)', _ln)
         if not _m:
-            _mf = re.match(r'G1 F(\d+)\s*$', _ln)
+            # A BARE FEEDRATE MAY CARRY A COMMENT, and until 2026-08-07 this regex required the line
+            # to END at the number. So `G1 F1050 ; BRIDGE SLOWED to 17.5mm/s` was invisible here,
+            # `_f` stayed at whatever came before it, and every following move was scored at a STALE
+            # speed -- reporting 157 mm3/s for a move actually running at 55. It fails in the
+            # direction that raises a false alarm on a correct file, but the same staleness would
+            # UNDER-report a move that sped up, which is the direction that matters. Any generator
+            # writing an explained feedrate change was affected, not just the one that found it.
+            _mf = re.match(r'G1 F(\d+)\s*(?:;.*)?$', _ln.rstrip())
             if _mf:
                 _f = float(_mf.group(1)) / 60.0
             continue
@@ -980,7 +987,15 @@ def check(path):
     # by re-running the arithmetic that produced it, which is not an independent check.
     _m_bmm2 = re.search(r'^; BRIDGE_MM2=([\d.,]+)', _rules_txt, re.M)
     _bdecl = sorted(float(v) for v in _m_bmm2.group(1).split(',')) if _m_bmm2 else None
+    # R3d's declaration. A SLOWED BRIDGE IS A DECLARED SPEED REGIME, and it is a LIST rather than a
+    # single value because each flow multiplier needs its own speed to stay under the same cap: at
+    # layer 0.48 a 4x accent lands at 34.9 mm/s and an 8x rim at 17.5, from one flow ceiling.
+    # SPEED_POCKET and SPEED_CORNER are single-valued because one slowdown covers their whole
+    # feature; a bridge schedule is several features at once.
+    _m_bspd = re.search(r'^; SPEED_BRIDGE=([\d.,]+)', _rules_txt, re.M)
+    _bspd_decl = sorted(round(float(v), 1) for v in _m_bspd.group(1).split(',')) if _m_bspd else None
     _spd, _flw, _nlink, _pspd, _cspd = {}, [], 0, {}, {}
+    _bspd = {}                  # speed histogram of the BRIDGE moves alone, for R3d
     _nthin = 0
     _bvals = []
     _xspd = {}
@@ -1069,6 +1084,11 @@ def check(path):
                 # buy volume, R3 must see it rather than a bridge exemption swallowing it.
                 if _isbridge:
                     _bvals.append((_de * _area) / _d)          # mm2 per mm of path
+                    # AND ITS SPEED, SEPARATELY, so R3d can check a declared slowdown against the
+                    # moves that claim it. Collected for EVERY bridge, not only slow ones: a
+                    # histogram that only recorded the exceptions could not tell "all bridges run
+                    # at the body speed" from "no bridge move was seen at all".
+                    _bspd[_sp] = _bspd.get(_sp, 0) + 1
                 # FLOW: all LINK stay exempt — they legitimately meter flow down. A declared
                 # bridge is exempt too; an UNDECLARED one is not, and R4 fails it as before.
                 if not _islink and not (_isbridge and _bdecl):
@@ -1118,6 +1138,27 @@ def check(path):
                 print(f"  crossings declared at {_xv:g} mm/s — a second regime, in-air strands "
                       f"rather than deposition onto structure")
                 _spd = {k: v for k, v in _spd.items() if k != _xv}
+        # A DECLARED BRIDGE SLOWDOWN IS THE SAME ARGUMENT AGAIN, and it is removed here for the same
+        # reason the crossing regime is: before the layer-1 test, which keys on there being exactly
+        # two speeds left.
+        #
+        # WHY A BRIDGE MAY SLOW AT ALL, since this file's own comment above argues it should not.
+        # Oleg, 2026-08-07: "Yes you can slow down where max flow is limiting factor" and "it is
+        # still going to be fast enough to avoid sag". The physics both ways: time in air is what
+        # makes a strand sag, so slowing is the wrong direction -- but AT MAX FLOW THE STRAND IS
+        # TWICE AS THICK (a 4x rod is 1.001mm against 0.501mm at 1x) and section resists its own
+        # weight. Neither settles from first principles, so it is his call, DECLARED, and R3d below
+        # proves the declared speeds are the ones actually emitted.
+        #
+        # ONLY SLOWER, NEVER FASTER. A declared bridge speed above the body speed is not removed, so
+        # this cannot become a door for a faster wall wearing a bridge tag.
+        if _bspd_decl and len(_spd) > 1:
+            _body_now = max(_spd, key=_spd.get)
+            _rm = [v for v in _bspd_decl if v in _spd and v < _body_now - 0.6]
+            if _rm:
+                print(f"  bridges declared at {sorted(_rm)} mm/s — a slowed regime, held at the "
+                      f"body's flow ceiling rather than thinned (R3d checks the moves)")
+                _spd = {k: v for k, v in _spd.items() if k not in _rm}
         _decl_l1 = re.search(r'^; SPEED_LAYER1=([\d.]+)', _rules_txt, re.M)
         if _decl_l1 and len(_spd) == 2:
             _l1v = round(float(_decl_l1.group(1)), 1)
@@ -1205,6 +1246,64 @@ def check(path):
                 print(f"  R3c: {sum(_cspd.values())} corner moves at the declared {_cnr_decl:g} "
                       f"mm/s" + (f" ({_ratio:.1f}x slower than the {_body_sp:g} mm/s body)"
                                  if _ratio else "") + " — corner slowdown applied")
+
+    # R3d — A DECLARED BRIDGE SLOWDOWN MUST ACTUALLY APPEAR IN THE MOVES, AND AN UNDECLARED ONE
+    # MUST FAIL. The exact mirror of R3b and R3c, for the regime added on 2026-08-07.
+    #
+    # Oleg: "Yes you can slow down where max flow is limiting factor". The generator holds the flow
+    # multiplier and drops the feedrate instead of thinning the rod, which is what keeps his line
+    # HIERARCHY: at layer 0.48 a 4x accent and an 8x rim both cap to the same 2.79x if you thin
+    # them, so "x8 for the final 4 layers" silently stops being distinguishable from the accents.
+    #
+    # THIS RULE EXISTS BECAUSE THE FILE ABOVE PREDICTED IT. R3's own comment says a bridge stays in
+    # the speed histogram on purpose, "If a generator ever slowed one to buy volume, R3 must see it
+    # rather than a bridge exemption swallowing it." It did see it, and it failed the file. The
+    # answer is a declaration that is CHECKED, never an exemption -- weakening R3 to admit our own
+    # feature is the trade this project keeps refusing to make.
+    if _bspd_decl is not None or (_bspd and len(_bspd) > 1):
+        _body_sp = max(_spd, key=_spd.get) if _spd else None
+        _slow = {k: v for k, v in _bspd.items()
+                 if _body_sp is not None and k < _body_sp - 0.6}
+        if _slow and _bspd_decl is None:
+            problems.append(
+                f"R3d: {sum(_slow.values())} bridge moves run at {sorted(_slow)} mm/s, below the "
+                f"{_body_sp:g} mm/s body, but the file declares no '; SPEED_BRIDGE=' — an "
+                f"undeclared second speed regime. A bridge that quietly slows is the exact thing "
+                f"R3 keeps bridges in its histogram to catch. Declare it, or the slowdown is "
+                f"unverifiable.")
+        elif _bspd_decl is not None and not _slow:
+            problems.append(
+                f"R3d: '; SPEED_BRIDGE={','.join(f'{v:g}' for v in _bspd_decl)}' is declared but NO "
+                f"bridge move runs slower than the body speed — the slowdown was stamped and never "
+                f"applied. This is the silent-non-application failure the stamp exists to catch.")
+        elif _bspd_decl is not None:
+            _undeclared = {k: v for k, v in _slow.items()
+                           if not any(abs(k - d) < 0.6 for d in _bspd_decl)}
+            _unused = [d for d in _bspd_decl
+                       if not any(abs(k - d) < 0.6 for k in _bspd.keys())]
+            _toofast = [d for d in _bspd_decl if _body_sp is not None and d > _body_sp - 0.6]
+            if _undeclared:
+                problems.append(
+                    f"R3d: {sum(_undeclared.values())} bridge moves run at {sorted(_undeclared)} "
+                    f"mm/s, which '; SPEED_BRIDGE=' does not list "
+                    f"({','.join(f'{v:g}' for v in _bspd_decl)}) — the emitted speed and the "
+                    f"declared one disagree, and the moves are the file.")
+            elif _unused:
+                problems.append(
+                    f"R3d: '; SPEED_BRIDGE=' declares {sorted(_unused)} mm/s and NO bridge move "
+                    f"runs at it. A declared regime nobody uses is a stamp describing a file that "
+                    f"was not written.")
+            elif _toofast:
+                problems.append(
+                    f"R3d: '; SPEED_BRIDGE=' declares {sorted(_toofast)} mm/s, which is not slower "
+                    f"than the {_body_sp:g} mm/s body — a slowdown that does not slow down. This "
+                    f"declaration exempts a speed from R3 and must never be a door for a FASTER "
+                    f"move wearing a bridge tag.")
+            else:
+                print(f"  R3d: {sum(_slow.values())} bridge moves at the declared "
+                      f"{','.join(f'{v:g}' for v in sorted(_slow))} mm/s "
+                      f"({_body_sp/max(_slow):.1f}x to {_body_sp/min(_slow):.1f}x slower than the "
+                      f"{_body_sp:g} body) — flow held, speed cut, slowdown applied")
 
     # R4e — THE BRIDGE FLOW SCHEDULE MUST BE DECLARED, AND EVERY BRIDGE MOVE MUST LAY ONE OF THE
     # DECLARED CROSS-SECTIONS. The exact mirror of R3b/R3c, for the one regime that meters flow UP.

@@ -848,7 +848,7 @@ def main():
                          "hit the flow cap sooner (--cap-mode decides what gives)."
                          % (machine.SLICER_LAYER_H,
                             ", ".join(f"{h:g}" for h in machine.SLICER_LAYER_HEIGHTS)))
-    ap.add_argument("--cap-mode", choices=("width", "slow"), default="width",
+    ap.add_argument("--cap-mode", choices=("width", "slow"), default="slow",
                     help="what gives when a bridge multiplier asks for more than the material's "
                          "sustained flow. 'width' CAPS the multiplier, which is what this file did "
                          "until 2026-08-07 and what its own comment argued for: a bridge is a "
@@ -1427,6 +1427,24 @@ def main():
     # regime (pressed to the plate), not a wobble inside the body's one.
     w(f"; SPEED_LAYER1={speed1:.4f}")
     w(f"; SPEED_CROSS={speed_x:.4f}")
+    # THE SLOWED BRIDGES ARE DECLARED, AND validate.py R3d CHECKS THE DECLARATION AGAINST THE MOVES.
+    # A LIST, not a single value, because each multiplier needs its own speed to sit under one flow
+    # ceiling: at layer 0.48 a 4x accent lands at 34.9 mm/s and an 8x rim at 17.5. Emitted only when
+    # a bridge actually slows, so a file with none carries no stamp and R3d has nothing to verify --
+    # a declaration nobody uses is itself a finding there.
+    _bslow = sorted({round(_speed_for(m), 1) for m in set(bridges.values())
+                     if _speed_for(m) < speed - 1e-9})
+    if _bslow:
+        w(f"; SPEED_BRIDGE={','.join(f'{v:g}' for v in _bslow)}")
+        w(f";   flow HELD and speed CUT rather than the rod thinned. Oleg 2026-08-07: \"Yes you can "
+          f"slow down where max flow is limiting factor\", \"it is still going to be fast enough to "
+          f"avoid sag\".")
+        w(f";   Capping the width instead would flatten every multiplier above "
+          f"{mult_cap:.2f}x to the same number, so the 4x/8x hierarchy he asked for on 2026-08-06 "
+          f"would stop being visible.")
+        w(f";   THE COST, STATED: time in air is what makes a strand sag, and this INCREASES it. "
+          f"What buys it back is section -- at max flow the rod is much thicker. Neither settles "
+          f"from first principles; the plate does.")
     if speed_x > machine.MAX_SPEED + 1e-9:
         # THE CEILING IS RAISED OUT LOUD OR NOT AT ALL. validate.py honours '; SPEED_OVERRIDE=' and
         # PRINTS that the north star was raised, so this can never be a quiet change. It applies to
