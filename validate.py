@@ -1200,6 +1200,13 @@ def check(path):
                 print(f"  bridges declared at {sorted(_rm)} mm/s — a slowed regime, held at the "
                       f"body's flow ceiling rather than thinned (R3d checks the moves)")
                 _spd = {k: v for k, v in _spd.items() if k not in _rm}
+        _decl_fl = re.search(r'^; SPEED_FLOOR=([\d.]+)', _rules_txt, re.M)
+        if _decl_fl and len(_spd) > 1:
+            _flv = round(float(_decl_fl.group(1)), 1)
+            if _flv in _spd and _flv < machine.DEFAULT_SPEED - 0.6:
+                print(f"  floor declared at {_flv:g} mm/s -- the tall floor bead at the speed "
+                      f"that keeps flow constant, a declared regime like layer 1")
+                _spd = {k: v for k, v in _spd.items() if k != _flv}
         _decl_l1 = re.search(r'^; SPEED_LAYER1=([\d.]+)', _rules_txt, re.M)
         if _decl_l1 and len(_spd) == 2:
             _l1v = round(float(_decl_l1.group(1)), 1)
@@ -1986,7 +1993,11 @@ def check(path):
             break
     if _zs:
         _steps = [round(_zs[i + 1] - _zs[i], 4) for i in range(len(_zs) - 1)]
-        _big = [g for g in _steps if _lh and g > _lh + 1e-6]
+        # A DECLARED FLOOR HEIGHT is a second ladder rung, not a floating line: '; LAYER_H_FLOOR='
+        # (2026-08-08, tall floor beads under 0.24 walls). Steps may reach the larger of the two.
+        _mlf = re.search(r'^; LAYER_H_FLOOR=([\d.]+)', _rules_txt, re.M)
+        _lmax = max(_lh or 0, float(_mlf.group(1)) if _mlf else 0) or _lh
+        _big = [g for g in _steps if _lmax and g > _lmax + 1e-6]
         if _big:
             problems.append(f"Z steps {_big} exceed one layer height ({_lh}) — those layers "
                             f"extrude into air (floating lines)")

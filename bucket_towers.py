@@ -479,7 +479,7 @@ def air_for_count(cx, cy, r_ring, r_t, bw, n, half_deg=180.0):
 
 
 def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1, merge_mm=0.0,
-                phis=None, half_rad=None):
+                phis=None, half_rad=None, zlist=None):
     """Refuse to emit anything that breaks one of the properties this part is built on.
 
     Every one of these was a real failure, and none of them is checkable by reading the source:
@@ -554,7 +554,13 @@ def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1, merg
             f"the post at ({c[0]:.2f},{c[1]:.2f}). At --stagger-deg {seam_off_deg:g} the head would "
             f"drag across a wall it just laid, and the ONLY reason this file may cross flat with no "
             f"lift is that it does not. Move the seam into the measured window, do not add a hop.")
-    zs = [press + i * lh for i in range(len(layers))]
+    # Circuit entries carry li/zf (2026-08-08); older callers (bucket_sector) pass plain layer
+    # lists and keep the historic one-lh-per-entry ladder.
+    zs = zlist if zlist is not None else [
+        (press if L.get("li", i) == 0 else
+         press + (L["li"] - 1 + L.get("zf", 1.0)) * lh) if isinstance(L, dict) and "li" in L
+        else press + i * lh
+        for i, L in enumerate(layers)]
     bad = [k for k in range(1, len(zs)) if zs[k] < zs[k - 1] - 1e-9]
     if bad:
         raise SystemExit(f"REFUSING TO EMIT: Z descends at layer(s) {bad[:5]}. Towers only go up.")
@@ -617,7 +623,7 @@ def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1, merg
 
 
 # ------------------------------------------------------------------------------------- the part
-def floor_check(r_h, bw, r_ring, bore_r, wrap_deg):
+def floor_check(r_h, bw, r_ring, bore_r, wrap_deg, mouth="in", r_t_wall=None):
     """GATE 5 — THE LATCH FLOOR MUST NOT BE EXTRUDED INTO THE VOLUME THE BAMBOO STICK OCCUPIES.
 
     Nothing in this toolchain looked at this and it is the constraint that actually binds the wrap.
@@ -629,7 +635,10 @@ def floor_check(r_h, bw, r_ring, bore_r, wrap_deg):
     refuse the stick.
     """
     edge = r_h + bw / 2.0                 # outer edge of the floor disc's own bead
-    inner = r_ring - bore_r               # where the bamboo channel's empty volume starts
+    # WHAT THE FLOOR MUST NOT ENTER depends on the mouth (2026-08-08): facing IN, the bore void
+    # opens toward the axis and the void's inner radius binds; facing OUT, the void is outboard
+    # and unreachable by an inside disc -- the binding volume is the POST WALL annulus itself.
+    inner = (r_ring - bore_r) if mouth == "in" else (r_ring - r_t_wall)
     if edge > inner + 1e-9:
         raise SystemExit(
             f"REFUSING TO EMIT: the cross-latch floor's outer bead reaches radius {edge:.3f} mm, "
@@ -720,96 +729,73 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
     layers = []
     for li in range(n_lay):
         is_floor = li < n_floor
-        pts, kind = [], []
-        if is_floor:
-            entry = layers[-1]["pts"][-1] if layers else None
-            # THE LAYER THAT TOUCHES THE PLATE GETS ITS OWN PITCH, and it is the only layer that
-            # has to WELD rather than merely span. Oleg, 2026-08-07: "adhesion is must + not solid
-            # floor". Those two are not in conflict once the first layer stops sharing a pitch with
-            # the four above it: layer 1 overlaps into a sheet that grips the plate, layers 2..n
-            # stay open at --floor-pitch so the base is a lattice and not a slab.
-            #
-            # WHY ONE PITCH FOR ALL FIVE WAS THE RECURRING BUG. At --floor-pitch 2.5 with a 2.00mm
-            # landed bead there is 0.50mm of BARE PLATE between every line, so layer 1 only touches
-            # if it lands its full commanded width. Any shortfall and the lines never meet: Oleg
-            # measured 0.50mm strands, which is exactly what 0.200mm2/mm becomes when nothing
-            # presses it. The 320x300 bucket that STOOD ran 1.6 against the same 2.00 bead, a
-            # 0.40mm OVERLAP, which merges even when each line lands narrow. That margin is the
-            # whole difference and it was being spent on making the base look open.
-            pitch_here = floor_pitch_1 if (li == 0 and floor_pitch_1) else floor_pitch
-            first, fp, fk = floor_path(cx, cy, r_h, pitch_here, (math.pi / 2.0) * (li % 2),
-                                       starts[0], entry, SEG)
-            pts = [first] + fp
-            kind = fk
-        else:
-            pts = [starts[0]]
-        cross = "B" if li in bridges else ("R" if is_floor else "T")
-        for k in range(n):
-            # THE CLOSING GAP DOES NOT WEAVE (lowercase kind): its arrival tip is post 0's
-            # trailing tip, ALREADY PRINTED at this layer's Z when the layer comes back around, so
-            # a sub-height weave pass would drive the nozzle deep into the fresh bead 545 times
-            # a print -- validate's dive check caught exactly that (1020 hits, 2026-08-07). One
-            # gap in n stays single-strand; the other n-1 weave. On a BRIDGE layer that single
-            # strand keeps its FULL multiplier -- past machine.PROVEN_ROD_MM on the 8x rim, one
-            # declared rod per bridge layer, stated in the header rather than smuggled.
-            _ck = cross if not (cross in ("T", "B") and k == n - 1) else cross.lower()
-            loop = tower_arc(centres[k], r_t, a0[k], wdir * 2 * half_rad, narc, ends[k])
-            pts += loop
-            kind += ["E"] * len(loop)
-            nxt = (k + 1) % n
-            if cross == "R":
-                # ON A FLOOR LAYER THE CROSSING IS THE RIM, so it is subdivided and drawn as a
-                # line: the towers' feet are meant to be tied into one solid ring, and a rim that
-                # is one long move leaves the layer above nothing to be measured against.
-                seg_pts = latch.line_pts(pts[-1], starts[nxt], SEG)
-                pts += seg_pts
-                kind += ["R"] * len(seg_pts)
-            else:
-                # THE LAP GOES ON BOTH SIDES OF THE CROSSING AND ONLY AROUND AN AIRBORNE ONE.
-                # A floor-layer rim ("R") is already a full-flow extruded line landing on a solid
-                # latch disc: there is no net there and nothing to weld, so lapping it would only
-                # double material on the feet. The T and B crossings are the net.
-                wp, wk = weld(ends[k], centres[k], a0[k] + wdir * 2.0 * half_rad, -wdir)
-                pts += wp
-                kind += wk
-                # EACH PASS IS STILL ONE MOVE tip to tip -- nothing subdividable, nothing for
-                # the planner to slow mid-air. What changed on 2026-08-07 is the COUNT: Oleg,
-                # reading wandering fat lines off the plate: "There must be a cap on max extrudable
-                # volume for solid bridges, lets better also split them into 3path with 1/3 line
-                # height each instead of one fat line which cant stay straight due to physics."
-                # So a crossing is N thin passes there-back-there at lh/N height steps -- fabric
-                # at cross_flow/N each, bridges at mult/N each -- and every in-air pass stays at
-                # or under machine.PROVEN_ROD_MM, which also lets bridges run at FULL speed
-                # instead of the flow-capped crawl that maximised time in air.
-                _np = (1 if (li == 0 or _ck in ("t", "b")) else
-                       (fabric_passes if _ck == "T" else bpass.get(bridges.get(li), 1)))
-                if _np > 1:
-                    _pfx = "W" if _ck == "T" else "V"
-                    _lead_tip = ends[k]
-                    _a_lead = a0[k] + wdir * 2.0 * half_rad
-                    for _p in range(1, _np + 1):
-                        pts.append(starts[nxt] if _p % 2 == 1 else _lead_tip)
-                        kind.append(f"{_pfx}:{_p}:{_np}")
-                        # THE MISSING LIP (Oleg, off the plate: "solders for sticks are good on
-                        # the left side and missing a lip on right side" -- MEASURED 1.82x more
-                        # material on trailing tips than leading, because passes 1 and N land
-                        # trailing while only the even returns touch leading). Every even return
-                        # welds a mini-lap along the leading tip's arc at its own pass height, so
-                        # the lead side gets its lip instead of a bare touch-and-turn.
-                        if _p % 2 == 0 and _p < _np and merge_mm > 0:
-                            _mp, _mk = weld(_lead_tip, centres[k], _a_lead, -wdir)
-                            pts += _mp
-                            kind += _mk
-                else:
-                    pts.append(starts[nxt])
-                    kind.append(_ck)
-                wp, wk = weld(starts[nxt], centres[nxt], a0[nxt], wdir)
-                pts += wp
-                kind += wk
+        # CIRCUITS. Oleg 2026-08-08, watching v9's settle dwells stutter: "Lets split the column
+        # layers into 3 so we can avoid so long stop and also have some other benefits?" Each
+        # logical layer is drawn as C full ring circuits at lh/C height steps -- wall, fabric and
+        # bridges TOGETHER at each sub-height, one forward direction, no reversals. What that
+        # dissolves, by construction: the settle dwells (the head leaves every lip in the
+        # direction of travel and returns a whole circuit later, cooled), the weave's 1.82x
+        # lip asymmetry and its mini-lap compensation, the closing-gap exception (arrivals always
+        # meet material at their OWN sub-height), and mid-move Z modulation. Bridge circuits
+        # carry mult/C each, which keeps every in-air rod under machine.PROVEN_ROD_MM at FULL
+        # speed. Layer 1 stays ONE circuit: it is the pressed plate weld, one regime (R9).
         _m = bridges.get(li)
-        layers.append({"pts": pts, "kind": kind, "mult": _m,
-                       "label": ("floor latch" if is_floor else
-                                 (f"posts + BRIDGES {_m:g}x" if _m else "posts"))})
+        if li == 0:
+            n_circ = 1
+        elif _m is not None:
+            n_circ = max(fabric_passes, bpass.get(_m, 1))
+        else:
+            n_circ = fabric_passes
+        base_z_frac = [(c + 1) / n_circ for c in range(n_circ)]   # fractions of lh, ending at 1.0
+        for _ci, _zf in enumerate(base_z_frac):
+            pts, kind = [], []
+            if is_floor and n_circ == 1:
+                entry = layers[-1]["pts"][-1] if layers else None
+                # Layer 1 keeps its own derived pitch: the plate weld. See floor_pitch_1.
+                pitch_here = floor_pitch_1 if (li == 0 and floor_pitch_1) else floor_pitch
+                first, fp, fk = floor_path(cx, cy, r_h, pitch_here, (math.pi / 2.0) * (li % 2),
+                                           starts[0], entry, SEG)
+                pts = [first] + fp
+                kind = fk
+            elif is_floor:
+                entry = layers[-1]["pts"][-1] if layers else None
+                # Floor circuits above layer 1: same lattice raster PER LOGICAL LAYER (direction
+                # alternates per layer, not per circuit, so the C thin passes stack into the one
+                # full-height rib the lattice was proven with).
+                first, fp, fk = floor_path(cx, cy, r_h, floor_pitch, (math.pi / 2.0) * (li % 2),
+                                           starts[0], entry, SEG)
+                pts = [first] + fp
+                kind = fk
+            else:
+                pts = [starts[0]]
+            cross = "B" if _m is not None else ("R" if is_floor else "T")
+            for k in range(n):
+                loop = tower_arc(centres[k], r_t, a0[k], wdir * 2 * half_rad, narc, ends[k])
+                pts += loop
+                kind += ["E"] * len(loop)
+                nxt = (k + 1) % n
+                if cross == "R":
+                    seg_pts = latch.line_pts(pts[-1], starts[nxt], SEG)
+                    pts += seg_pts
+                    kind += ["R"] * len(seg_pts)
+                else:
+                    # Laps still weld every crossing to both walls, every circuit, at the
+                    # circuit's own height -- the joint is now C thin laps stacking into the same
+                    # per-area weld the lip gate budgets.
+                    wp, wk = weld(ends[k], centres[k], a0[k] + wdir * 2.0 * half_rad, -wdir)
+                    pts += wp
+                    kind += wk
+                    pts.append(starts[nxt])
+                    kind.append(cross)
+                    wp, wk = weld(starts[nxt], centres[nxt], a0[nxt], wdir)
+                    pts += wp
+                    kind += wk
+            layers.append({"pts": pts, "kind": kind, "mult": _m, "li": li,
+                           "zf": _zf, "cdiv": n_circ,
+                           "label": ("floor latch" if is_floor else
+                                     (f"posts + BRIDGES {_m:g}x" if _m else "posts"))
+                                    + (f" circuit {_ci+1}/{n_circ}" if n_circ > 1 else "")})
+    return layers
     return layers
 
 
@@ -937,6 +923,15 @@ def main():
                          "measured, not taste: layers are perpendicular, so a layer lands on the "
                          "one below only where the rasters cross. At the old 5.0 a 5-layer floor "
                          "was REFUSED by validate.py at 23%% unsupported; 2.5 reads 2%%.")
+    ap.add_argument("--floor-layer-h", type=float, default=None,
+                    help="layer height mm for the FLOOR layers only (layer 1 keeps --h1). Oleg "
+                         "2026-08-08: 'we can use 0.56 line height for bottom and 0.24 for walls' "
+                         "-- the tall floor beads buy the bottom quickly while the walls go back "
+                         "to the height whose physics needed no compensation machinery. Must be "
+                         "one of the machine's profile heights. The floor then runs at the speed "
+                         "that keeps FLOW CONSTANT file-wide (body_flow / floor_bead), declared "
+                         "as '; SPEED_FLOOR=' the same way layer 1 declares its regime. Default: "
+                         "same as --layer-h (no second regime).")
     ap.add_argument("--layer-h", type=float, default=None,
                     help="layer height mm. Default is machine.SLICER_LAYER_H (%g), the stock "
                          "profile. Oleg 2026-08-07: \"Let's try doubling it? Except for the first "
@@ -1128,6 +1123,11 @@ def main():
     # machine.SLICER_LAYER_H with no way to vary it; Oleg asked to double it on 2026-08-07 and the
     # honest constraint is not "any float" but "a height one of his six profiles actually carries".
     lh = machine.SLICER_LAYER_H if a.layer_h is None else a.layer_h
+    lh_f = lh if a.floor_layer_h is None else a.floor_layer_h
+    if not any(abs(lh_f - h) < 1e-9 for h in machine.SLICER_LAYER_HEIGHTS):
+        raise SystemExit(
+            f"REFUSING TO EMIT: --floor-layer-h {lh_f:g} is not one of the heights this "
+            f"machine's profiles offer ({', '.join(f'{h:g}' for h in machine.SLICER_LAYER_HEIGHTS)}).")
     if not any(abs(lh - h) < 1e-9 for h in machine.SLICER_LAYER_HEIGHTS):
         raise SystemExit(
             f"REFUSING TO EMIT: --layer-h {lh:g} is not one of the heights this machine's profiles "
@@ -1242,6 +1242,11 @@ def main():
             f"  machine.PROVEN_LAYER1's (0.10, 2.00) pair was measured at layer 0.24 and does NOT "
             f"transfer to another height on its own.")
     flow = bw * lh * speed
+    # THE FLOOR KEEPS THE SAME FLOW at its taller bead by running slower: one flow, two declared
+    # speeds (the SPEED_LAYER1 pattern). v_floor = flow / (bw * lh_f) = speed * lh / lh_f.
+    e_mm_f = bw * lh_f / A_FIL
+    speed_floor = speed * lh / lh_f
+    f_floor = round(speed_floor * 60)
     r8cap = machine.flow_cap(a.material, a.printer)
 
     # ---------------------------------------------------------------- THE C-CHANNEL, DERIVED
@@ -1250,13 +1255,11 @@ def main():
     # so the two numbers can never state different things about the same wall.
     if a.wrap_deg <= 0 or a.wrap_deg > 360.0 + 1e-9:
         ap.error(f"--wrap-deg {a.wrap_deg:g} is not in (0, 360]")
-    # ODD ONLY: an even pass count ends the fabric stroke on the NEAR post, the next feature
-    # expects the head on the FAR one, and gate 1 refuses the 60mm gap as a travel. Refused here
-    # with the reason rather than discovered as a cryptic one-stroke failure 2000 lines later.
-    if a.fabric_passes < 1 or a.fabric_passes % 2 == 0:
-        ap.error(f"--fabric-passes {a.fabric_passes} must be a positive ODD number: the passes "
-                 f"run there-back-there, so only an odd count ends on the far post and keeps the "
-                 f"one-stroke invariant.")
+    # Any positive count: since 2026-08-08 the passes are full ring CIRCUITS, one forward
+    # direction, so parity no longer matters (the there-back-there weave that needed odd counts
+    # is retired -- Oleg: "split the column layers into 3 so we can avoid so long stop").
+    if a.fabric_passes < 1:
+        ap.error(f"--fabric-passes {a.fabric_passes} must be a positive number of circuits.")
     if a.mouth == "out" and abs(a.wrap_deg - 360.0) < 1e-9:
         ap.error("--mouth out is meaningless at --wrap-deg 360: a closed loop has no mouth.")
     if a.tower_d is None:
@@ -1430,11 +1433,17 @@ def main():
     r_poly = min(math.hypot(ends[k][0] + (starts[(k+1) % n_tow][0]-ends[k][0])*t/64.0 - cx,
                             ends[k][1] + (starts[(k+1) % n_tow][1]-ends[k][1])*t/64.0 - cy)
                  for k in range(n_tow) for t in range(65))
-    r_h = r_poly - bw
+    # TWO bounds, and which one binds depends on the wrap: the chord polygon (historic), and the
+    # POST WALL ANNULUS -- at --mouth out with a deep wrap the tips sit so near the ring that the
+    # tip-to-tip chords run OUTSIDE the posts' own walls, and a disc sized to the chords alone
+    # overlaps the wall toolpath at every foot (measured: edge 1.11mm from post centres at wrap
+    # 287.5 before this bound existed). The floor stops one bead short of whichever is nearer.
+    r_h = min(r_poly, r_ring - r_t) - bw
     if a.floor_layers and r_h <= a.floor_pitch:
         ap.error(f"--dia {a.dia:g} leaves a {r_h:.1f} mm latch disc, which does not fit a "
                  f"{a.floor_pitch:g} mm pitch")
-    floor_edge, bore_inner = (floor_check(r_h, bw, r_ring, bore_r, a.wrap_deg)
+    floor_edge, bore_inner = (floor_check(r_h, bw, r_ring, bore_r, a.wrap_deg,
+                                          mouth=a.mouth, r_t_wall=r_t)
                               if a.floor_layers else (r_h + bw / 2.0, r_ring - bore_r))
 
     # THE MOUTH. The two tips are +-wrap/2 from the outward radial, so the SHORT way between them
@@ -1461,11 +1470,22 @@ def main():
     circ_t = 2 * math.pi * r_t
     nseg = max(MIN_TOWER_SEGS, int(math.ceil(circ_t / SEG)))     # PER FULL REVOLUTION
     narc = arc_segs(nseg, a.wrap_deg)
-    n_lay = int(round((a.height - press) / lh)) + 1
+    # THE LOGICAL Z LADDER, one function so build, gates and emitter cannot disagree: layer 0 at
+    # the press, floors at --floor-layer-h steps, body at --layer-h steps above the floor top.
+    _floor_top = press + max(0, a.floor_layers - 1) * lh_f
+    def z_of(li):
+        if li <= 0:
+            return press
+        if li < a.floor_layers:
+            return press + li * lh_f
+        return _floor_top + (li - max(a.floor_layers - 1, 0)) * lh
+    n_lay = a.floor_layers + int(round((a.height - _floor_top) / lh))
+    if a.floor_layers == 0:
+        n_lay = int(round((a.height - press) / lh)) + 1
     if n_lay <= a.floor_layers:
         ap.error(f"--height {a.height:g} gives {n_lay} layers, not more than the {a.floor_layers} "
                  f"floor layers asked for -- there would be no towers")
-    top_z = press + (n_lay - 1) * lh
+    top_z = z_of(n_lay - 1)
 
     # ------------------------------------------------------------- THE BRIDGE FLOW SCHEDULE
     # THE LAYER SET IS THE UNION OF THREE SCHEDULES, and the multiplier is decided by PRECEDENCE:
@@ -1625,9 +1645,10 @@ def main():
         # Floor raised 3 -> 5 on Oleg's read of the v8 plate, 2026-08-08: "As of solid
         # bridges we are in around 90% perfect ration and having some sags. Lets try 10% less
         # filament and split into 5 sub layers instead of 3."
-        _n9 = max(5, int(math.ceil(_m9 / _mcap)))
-        if _n9 % 2 == 0:
-            _n9 += 1
+        # Floor of 1 since 2026-08-08 ("we dont need any of this split layers logic"): at 0.24
+        # walls the ordinary mults sit under the proven rod on their own, and only a mult past
+        # the cap (the 7.2x rim at 0.24 -> 2) still splits, because the cap is evidence.
+        _n9 = max(1, int(math.ceil(_m9 / _mcap)))
         bpass[_m9] = _n9
         if _m9 / _n9 > _mcap + 1e-9:
             raise SystemExit(
@@ -1637,9 +1658,12 @@ def main():
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
                    a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1,
                    wdir=wdir, fabric_passes=_fab_np, bpass=bpass)
+    _zlist = [press if L.get("li", 0) == 0 else
+              z_of(L["li"] - 1) + L.get("zf", 1.0) * (z_of(L["li"]) - z_of(L["li"] - 1))
+              for L in layers]
     n_cross, n_merge, lap_measured = check_paths(layers, centres, r_t, (bedx, bedy), press, lh,
                                                  stag_deg, bw, w1, a.merge_mm,
-                                                 phis=phis, half_rad=half_rad)
+                                                 phis=phis, half_rad=half_rad, zlist=_zlist)
 
     # ------------------------------------------------------------------ measured off the built path
     def layer_mm(L):
@@ -1696,7 +1720,7 @@ def main():
     land_w1 = w1
     # FLOOR THICKNESS OFF THE LAYER LADDER, not off the argument: layer 1 occupies the press gap
     # and every layer after it one lh, which is the same z ladder the emitter writes.
-    floor_h = press + max(0, a.floor_layers - 1) * lh
+    floor_h = _floor_top
     # ends[0] -> starts[1], NOT seams[0] -> seams[1]. The crossing is tip to tip; reading the old
     # single-seam pair reported 35.42mm while every bridge in the file spans 33.22, and that number
     # is quoted four times in this header and onto the comment of every bridge move in the file.
@@ -1758,16 +1782,22 @@ def main():
     # running two feedrates fails constant-speed, which is correct: layer 1 is a different
     # regime (pressed to the plate), not a wobble inside the body's one.
     w(f"; SPEED_LAYER1={speed1:.4f}")
+    if abs(lh_f - lh) > 1e-9 and a.floor_layers > 1:
+        w(f"; SPEED_FLOOR={speed_floor:.4f}")
+        w(f";   the {lh_f:g} floor bead at the speed that keeps flow CONSTANT file-wide "
+          f"(Oleg 2026-08-08: '0.56 line height for bottom and 0.24 for walls').")
+        w(f"; LAYER_H_FLOOR={lh_f:g}")
     w(f"; SPEED_CROSS={speed_x:.4f}")
     # THE SLOWED BRIDGES ARE DECLARED, AND validate.py R3d CHECKS THE DECLARATION AGAINST THE MOVES.
     # A LIST, not a single value, because each multiplier needs its own speed to sit under one flow
     # ceiling: at layer 0.48 a 4x accent lands at 34.9 mm/s and an 8x rim at 17.5. Emitted only when
     # a bridge actually slows, so a file with none carries no stamp and R3d has nothing to verify --
     # a declaration nobody uses is itself a finding there.
-    # SPLIT BRIDGES: the moves are per-PASS mults (m/N) plus the closing gap's full mult, so the
-    # declared speeds and cross-sections must be the ones the moves actually carry.
-    _bmoves = ({m / bpass[m] for m in set(bridges.values())}
-               | set(bridges.values()))          # per-pass mults + closing-gap singles
+    # CIRCUIT BRIDGES: every bridge move carries mult/C (C = the layer's circuit count), no
+    # exceptions -- the closing-gap single died with the weave. Declared speeds and
+    # cross-sections are the per-circuit ones the moves actually carry.
+    _bcirc = {m: max(a.fabric_passes, bpass[m]) for m in bpass}
+    _bmoves = {m / _bcirc[m] for m in _bcirc}
     _bslow = sorted({round(_speed_for(m), 1) for m in _bmoves
                      if _speed_for(m) < speed - 1e-9})
     if _bslow:
@@ -1795,7 +1825,9 @@ def main():
         w(f";   raised from the {machine.MAX_SPEED:g} mm/s north star for the gap crossings ONLY. "
           f"Oleg 2026-08-06: \"I asked you to speed it up not slow it down\". The crossings are "
           f"{speed_x/speed:.1f}x the body speed and they are 59% of this print's motion.")
-    w(f"; FLOW={flow:.4f}")
+    # R4's yardstick is the flow the BODY MOVES carry, which since circuits is bead x (lh/C) x
+    # speed. The full-bead figure feeds the bridge speed math and R8's derate story.
+    w(f"; FLOW={flow/a.fabric_passes:.4f}")
     w(f"; PRESSED_LAYER1={press:g}")
     # THE GAP NAMED HERE IS THE GAP THE BEAD IS LAID INTO, which is --h1 and is NOT PRESS_HARD
     # once --zoff is in play. The old wording said "pressed into the 0.1 gap" on a file laying its
@@ -1834,14 +1866,10 @@ def main():
     _mm2s = sorted({round(m * bw * lh, 4) for m in _bmoves})
     w(f"; BRIDGE_FLOW={','.join(f'{m:g}' for m in sorted(_bmoves))}")
     w(f"; BRIDGE_MM2={','.join(f'{v:.4f}' for v in _mm2s)}")
-    if any(n > 1 for n in bpass.values()):
-        w(f"; BRIDGE_PASSES=" + ",".join(f"{m:g}x->{bpass[m]}" for m in sorted(bpass))
-          + f"  (per-pass rod capped at machine.PROVEN_ROD_MM={machine.PROVEN_ROD_MM:g}mm, the "
-          f"fattest rod ever read straight; Oleg 2026-08-07: 'split them into 3path')")
-        w(f";   THE CLOSING GAP of each bridge layer stays ONE full-mult strand (its arrival tip "
-          f"already stands at")
-        w(f";   this layer's Z; a sub-height pass ploughs it). One over-cap rod per bridge layer, "
-          f"declared here.")
+    if any(n > 1 for n in _bcirc.values()):
+        w(f"; BRIDGE_PASSES=" + ",".join(f"{m:g}x->{_bcirc[m]}" for m in sorted(_bcirc))
+          + f"  circuits per bridge layer (per-circuit rod capped at machine.PROVEN_ROD_MM="
+          f"{machine.PROVEN_ROD_MM:g}mm; Oleg: '10% less filament and split into 5 sub layers')")
     # THE LAP IS DECLARED AS A LENGTH AND A CROSS-SECTION, both measurable off the emitted moves.
     # MERGE_MM is the arc length gate 6 measured on the built points, NOT the argument that asked
     # for it, so a lap that silently came out short would contradict its own stamp.
@@ -1855,11 +1883,11 @@ def main():
              else f"gap={fab_sub-fabric_rod:.3f}mm")
           + f" (strand pitch {fab_sub:.3f}, {a.fabric_passes} pass(es) per {lh:g} layer)")
         if a.fabric_passes > 1:
-            w(f"; FABRIC_PASSES={a.fabric_passes}")
-            w(f"; Z_MODULATED=weave: each fabric gap is crossed {a.fabric_passes}x per layer at "
-              f"Z steps of {fab_sub:.3f}, Z riding inside the moves. Oleg 2026-08-07: 'lets do 3 "
-              f"moves at line height 1/3 2/3 3/3'. Total flow per gap UNCHANGED ('fabric should "
-              f"not be 2x thick').")
+            w(f"; FABRIC_PASSES={a.fabric_passes} full ring CIRCUITS per layer at {fab_sub:.3f} "
+              f"steps -- wall, fabric and bridges together at each sub-height, one direction, no "
+              f"reversals, no dwells (Oleg 2026-08-08: 'split the column layers into 3 so we can "
+              f"avoid so long stop and also have some other benefits'). Total flow per layer "
+              f"UNCHANGED.")
     if lip_regimes:
         w(f"; LIP_BUDGET=" + ", ".join(f"{nm} {v:.3f}" for nm, v in lip_regimes)
           + (f" vs {lip_proven:.3f} proven (machine.PROVEN_LIP)" if lip_proven
@@ -2311,10 +2339,14 @@ def main():
     # row, so it does not begin by dragging along the prime itself.
     w(f"G0 F{f} X{sx0:.3f} Y{sy0:.3f} ; HOP prime -> first line, over bare plate")
     fan_on = False
-    for li, Lay in enumerate(layers):
-        z = press + li * lh
-        w(f"; ---- layer {li+1} of {n_lay}  z {z:.3f}  ({Lay['label']})")
-        w(f"G1 F{f_l1 if li == 0 else f} Z{z:.3f}")   # STANDALONE Z -- this is R2's layer ladder,
+    for _idx, Lay in enumerate(layers):
+        li = Lay.get("li", _idx)                     # LOGICAL layer (layer 1 rules key on it)
+        _zf = Lay.get("zf", 1.0)
+        _cdiv = Lay.get("cdiv", 1)                   # circuit flow divisor
+        z = press if li == 0 else z_of(li - 1) + _zf * (z_of(li) - z_of(li - 1))
+        w(f"; ---- layer {_idx+1} of {len(layers)}  z {z:.3f}  ({Lay['label']})")
+        _is_floor_reg = 0 < li < a.floor_layers and abs(lh_f - lh) > 1e-9
+        w(f"G1 F{f_l1 if li == 0 else (f_floor if _is_floor_reg else f)} Z{z:.3f}")   # R2 ladder
         # and it is also where layer 1's slower feedrate is set: F is sticky, so one word here
         # carries the whole layer.
         if li == 1 and not fan_on:
@@ -2329,41 +2361,10 @@ def main():
             seg = math.hypot(x - ppx, y - ppy)
             if seg < 1e-9:
                 continue
-            if kind and kind[0] in ("W", "V") and ":" in kind:
-                # A WEAVE PASS, geometry from build(): kind is W:p:N (fabric) or V:p:N (bridge).
-                # Oleg 2026-08-07: "lets do 3 moves at line height 1/3 2/3 3/3" and, on bridges,
-                # "split them into 3path with 1/3 line height each instead of one fat line which
-                # cant stay straight due to physics". Z rides INSIDE the move ('; Z_MODULATED');
-                # each pass carries its regime's own tag so the gates that own it can see it.
-                _pfx, _ps, _ns = kind.split(":")
-                _p9, _n9 = int(_ps), int(_ns)
-                _tz = z - lh * (_n9 - _p9) / _n9
-                if _pfx == "W":
-                    E += seg * e_mm * a.cross_flow / _n9
-                    w(f"G1 F{f_x} X{x:.3f} Y{y:.3f} Z{_tz:.3f} E{E:.5f} ; THIN CROSS "
-                      f"{a.cross_flow*100/_n9:.1f}% weave {_p9}/{_n9} -- deliberate strand, "
-                      f"not ooze (clears both posts)")
-                else:
-                    _bm9 = Lay["mult"] / _n9
-                    _a29 = _bm9 * bw * lh
-                    _bs9 = _speed_for(_bm9)
-                    E += seg * e_mm * _bm9
-                    w(f"G1 F{round(_bs9*60)} X{x:.3f} Y{y:.3f} Z{_tz:.3f} E{E:.5f} ; BRIDGE "
-                      f"{_bm9:g}x {_a29:.4f}mm2 pass {_p9}/{_n9} rod "
-                      f"{2*math.sqrt(_a29/math.pi):.3f}mm, {seg:.2f}mm tip to tip")
-                if _p9 % 2 == 0 and _p9 < _n9:
-                    # LET THE LIP SETTLE. Oleg, reading the v8 plate 2026-08-08: "the right lip
-                    # still is [less defined] then left one meaning you dont let it settle and
-                    # rush into wall". The even return lands on the leading lip and the mini-lap
-                    # used to charge straight along the wall, dragging the still-molten strand
-                    # with it. 400ms of G4 (no extrusion -- R10 is about stationary EXTRUSION,
-                    # this is a pause) lets the strand freeze to the lip before the lap moves.
-                    w("G4 P400 ; SETTLE -- let the strand freeze to the lip before the lap runs")
-            elif kind in ("T", "t"):
-                # FLAT, OVER AIR, NO LIFT. Licensed by geometry, not by a tag: the chord provably
-                # clears both posts' MATERIAL (check_paths gate 3, arc-aware). Lowercase "t" is
-                # the layer-closing gap: single strand, never woven (its arrival tip already
-                # stands at this Z).
+            if kind in ("T", "t"):
+                # FLAT, OVER AIR, NO LIFT, at the CIRCUIT's own flow: cross_flow/cdiv per strand,
+                # C strands per logical layer stacking into the declared fabric. Licensed by
+                # geometry: the chord provably clears both posts' MATERIAL (gate 3, arc-aware).
                 if a.cross_flow > 0 and li == 0:
                     # LAYER 1 CROSSES AT FULL LAYER-1 FLOW, pressed to the plate: on a floorless
                     # part these drapes ARE the feet-ties, and they weld only if they carry the
@@ -2377,9 +2378,9 @@ def main():
                     # THERE IS NO RETRACTION IN THIS PROJECT, so this move was never dry. It oozed,
                     # and the web in the printed part IS that ooze. Metering it at a stated fraction
                     # of the body's own rate turns an uncontrolled leak into a strand we chose.
-                    E += seg * e_mm * a.cross_flow
+                    E += seg * e_mm * a.cross_flow / _cdiv
                     w(f"G1 F{f_x} X{x:.3f} Y{y:.3f} E{E:.5f} ; THIN CROSS "
-                      f"{a.cross_flow*100:.0f}% "
+                      f"{a.cross_flow*100/_cdiv:.1f}% "
                       f"-- deliberate strand, not ooze (clears both tower walls)")
                 else:
                     w(f"G0 F{f} X{x:.3f} Y{y:.3f} ; HOP flat across open air, no lift (clears both "
@@ -2403,7 +2404,7 @@ def main():
                 # plate weld, and metering it thin both starves the weld and made R9 read layer 1
                 # as a blend of two rates (3.58mm vs the declared 3.94 -- the citation drifted).
                 # One layer, one regime.
-                E += seg * (e_mm_l1 if li == 0 else e_mm * merge_flow)
+                E += seg * (e_mm_l1 if li == 0 else e_mm * merge_flow / _cdiv)
                 w(f"G1 F{f_l1 if li == 0 else f} X{x:.3f} Y{y:.3f} E{E:.5f} ; LINK MERGE "
                   f"{100 if li == 0 else merge_flow*100:.0f}% -- net lapped onto the post, "
                   f"{a.merge_mm:g}mm of arc")
@@ -2419,12 +2420,18 @@ def main():
                 # "the features are all bridges", "Just different extrusion volume". Solid line,
                 # accent band and top rim are THIS one move at 2x / 4x / 8x-capped, never a second
                 # pass over the same air and never a fatter post.
-                _bm = Lay["mult"] if kind in ("B", "b") else 1.0
-                E += seg * (e_mm_l1 if li == 0 else e_mm * _bm)
+                _bm = (Lay["mult"] / _cdiv) if kind in ("B", "b") else 1.0
+                _rate = (e_mm_l1 if li == 0 else
+                         (e_mm_f if (_is_floor_reg and kind in ("E", "R")) else
+                          e_mm * _bm / (1 if kind in ("B", "b") else _cdiv)))
+                E += seg * _rate
                 # F IS STICKY, so a body move following a crossing must restore the body feedrate or
                 # the whole tower would silently print at the crossing speed.
                 if a.cross_flow > 0 and speed_x != speed and li != 0:
-                    w(f"G1 F{f}")
+                    # THE RESTORE MUST RESTORE THE LAYER'S OWN REGIME: writing the body F here on
+                    # a floor layer ran the whole 0.56-bead floor at 50mm/s = 2.3x the declared
+                    # flow (48k moves, caught by R4 on the first v11 gate run).
+                    w(f"G1 F{f_floor if _is_floor_reg else f}")
                 if kind in ("B", "b"):
                     _a2 = _bm * bw * lh
                     # A SLOWED BRIDGE WRITES ITS OWN F, AND WRITES IT BACK. F is sticky, so a bridge
@@ -2443,6 +2450,11 @@ def main():
                          if _bs < speed - 1e-9 else ""))
                     if _bs < speed - 1e-9 and li != 0:
                         w(f"G1 F{f}   ; back to the body speed")
+                elif _cdiv > 1 and kind == "E":
+                    # A circuit's wall arc deliberately carries 1/C of the bead -- C thin passes
+                    # stack into the full wall. LINK = the declared metered-down family, counted
+                    # by validate so the exemption cannot hide growth.
+                    w(f"G1 X{x:.3f} Y{y:.3f} E{E:.5f} ; LINK wall split over {_cdiv} circuits")
                 else:
                     w(f"G1 X{x:.3f} Y{y:.3f} E{E:.5f}")
             ppx, ppy = x, y

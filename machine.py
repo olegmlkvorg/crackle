@@ -805,6 +805,13 @@ PROVEN_SEND = {
         # An empty list means every file that declares a bore must cite a gauge. That is correct.
         # NO LONGER EMPTY as of 2026-08-06: the gauge was printed and READ.
         "fit_bore": [
+            (4.84,
+             "READ PERFECT BY OLEG on the v9 stub, 2026-08-08 ~01:15: 'The bores are perfect "
+             "now'. Bore 4.84 (allow 1.665) at wrap 287.5, MOUTH OUT -- his own +10%/+15% sizing "
+             "of the 4.40/250 that inserted but did not lock. The modelled mouth is 2.527mm "
+             "against the 3.175 stick (-0.648): a click-lock, and the stick both entered and "
+             "held on a 12-minute stub's channels. STILL UNMEASURED: calipers have never touched "
+             "a channel; this is a hand read, at stub height, with the sticks he actually uses."),
             # 4.40 SUPERSEDES 4.20, AND THE REASON IS A LENGTH NOBODY RECORDED.
             # Oleg, 2026-08-07: "when you printed coupons it was correctly picked but its near to
             # impossible to inserve on longer span, so we need to selected the one next to one i
