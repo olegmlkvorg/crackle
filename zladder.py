@@ -363,7 +363,7 @@ def main():
     w(f"M104 S{temp}")
     # R7: the nozzle probes at PRINT temperature. Cold it is SHORTER, so Z zero records high and the
     # hot tip then grows down into the gap — the direction was got backwards once and cost a layer.
-    w("G28")
+    machine.home(w, a.printer)
     # ALWAYS EMITTED, INCLUDING THE ZERO. SET_GCODE_OFFSET survives a job — the K2's own start_print
     # macro zeroes it for exactly this reason — so a file that only wrote it when non-zero would
     # inherit whatever the previous print or a hand command left behind, and cell 1 would silently

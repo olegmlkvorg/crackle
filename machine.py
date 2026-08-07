@@ -1281,6 +1281,52 @@ def aux_fans(printer, frac):
             for t in AUX_FANS.get(printer, [])]
 
 
+# A SAVED BED MESH THIS MACHINE ALREADY HOLDS, verified present on the printer before being named
+# here: `bed_mesh default` exists in the K2's own config. A machine with no entry gets a plain G28,
+# because `BED_MESH_PROFILE LOAD=<name>` ERRORS on a missing profile and aborting a six-hour print
+# to save twenty minutes is the wrong trade.
+SAVED_MESH = {"k2plus": "default"}
+
+
+def home(w, printer):
+    """G28, and then PUT THE BED MESH BACK, because G28 throws it away.
+
+    Oleg, 2026-08-07, on a 3-minute coupon: "why you executing clibration again?" and then "restore
+    cache after running g28, or dont run g28 at all".
+
+    WHAT ACTUALLY HAPPENS, and I got this wrong once before correcting it. The K2's
+    `homing_override` runs on every G28 and contains `BED_MESH_CLEAR`, so homing DISCARDS the active
+    mesh. The firmware then rebuilds it: `bed_mesh` is probe_count [9, 9] over [5,5]..[345,345], so
+    81 points, which on a large footprint is about twenty minutes -- SIX TIMES the runtime of a
+    3-minute coupon.
+
+    I FIRST TOLD HIM THIS WAS NOT OUR FILE. That was wrong and the evidence I cited was the thing
+    that disproved it: the routine runs at nozzle 140 / bed 50, and I argued those could not be ours
+    because our files command 210/60. They are `custom_macro.g28_ext_temp` = 140 and
+    `default_bed_temp` = 50 -- **G28's OWN probe temperatures**. The temps did not show the routine
+    was external, they showed G28 owns it.
+
+    So the fix is his: restore what G28 cleared. `BED_MESH_PROFILE LOAD=<name>` costs nothing and
+    puts back a mesh the machine already measured.
+
+    WHY NOT SIMPLY DROP G28, the other half of what he offered: without homing, every commanded
+    position is relative to wherever the head happened to be left, and this project's whole
+    first-layer doctrine is a 0.1mm gap. A part that skips homing is a part with no Z reference at
+    all. Homing is cheap; the MESH REBUILD after it is what costs twenty minutes, and that is the
+    thing being fixed.
+
+    NOT EMITTED FOR A MACHINE WITH NO VERIFIED SAVED PROFILE. Klipper errors on a missing profile,
+    and killing a print for a mesh is worse than waiting for one.
+    """
+    w("G28")
+    prof = SAVED_MESH.get(printer)
+    if prof:
+        w(f"BED_MESH_PROFILE LOAD={prof}"
+          f"      ; G28's homing_override runs BED_MESH_CLEAR, so this puts back the mesh it")
+        w(f";                                       just threw away. Without it the firmware "
+          f"re-probes 81 points, ~20 min.")
+
+
 # BED TEMPERATURE IS PER MATERIAL, and more is NOT better. Oleg, after a TPU flow test welded
 # itself to a 120C plate: "tpu on 120 bed is like glue. how to scrap it away".
 #

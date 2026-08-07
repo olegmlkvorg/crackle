@@ -153,7 +153,7 @@ def main():
     # Probe at PRINT temperature: the nozzle is shorter cold and then grows DOWN into the plate
     # (validate.py R7). This is also the leading suspect for the press failure -- a tip carrying
     # oozed PLA measures the plate as HIGHER than it is -- so the ladder is what settles it.
-    w("G28")
+    machine.home(w, a.printer)
     # THE OFFSET IS ALWAYS EMITTED, INCLUDING THE ZERO. SET_GCODE_OFFSET is machine state that
     # survives a job — the K2's own start_print macro sets it to 0 for this reason — so a file that
     # only writes it when non-zero would silently inherit whatever the previous print, or a hand

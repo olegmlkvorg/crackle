@@ -607,7 +607,7 @@ def main():
     w("G90")
     w(f"M140 S{bed:.0f}")
     w(f"M104 S{temp}")
-    w("G28")
+    machine.home(w, a.printer)
     w("SET_GCODE_OFFSET Z=0                 ; start from the machine's own zero, not last run's")
     w(f"M190 S{bed:.0f}")
     w(f"M140 S{bed:.0f}")

@@ -425,7 +425,7 @@ def main():
     w(f"M104 S{temp}")
     # R7: the nozzle probes at PRINT temperature. Cold it is SHORTER, so Z zero records high and the
     # hot tip then grows down into the gap.
-    w("G28")
+    machine.home(w, a.printer)
     # ALWAYS EMITTED, INCLUDING A ZERO. SET_GCODE_OFFSET survives a job, so a file that only wrote
     # it when non-zero would inherit whatever the last print left behind.
     w("SET_GCODE_OFFSET Z=0                 ; start from the machine's own zero, not last run's")

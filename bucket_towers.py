@@ -1887,7 +1887,7 @@ def main():
     w(f"M109 S{temp}")
     # THE NOZZLE PROBES AT FULL PRINT TEMPERATURE (R7). A cold nozzle is SHORTER, so Z zero records
     # high and the hot tip then grows down into the plate, turning a 0.10 gap into ~0.054.
-    w("G28")
+    machine.home(w, a.printer)
     # ALWAYS EMITTED, INCLUDING THE ZERO. SET_GCODE_OFFSET is machine state that survives a job
     # -- the K2's own start_print macro zeroes it for exactly this reason -- so a file that only
     # wrote it when non-zero would inherit whatever the previous print or a hand command left
