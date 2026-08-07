@@ -116,6 +116,14 @@ def main():
                          "— a spring-steel sheet flexes under a paper shim and absorbs exactly the "
                          "difference. If the whole plate scrapes, this is too big; if the whole "
                          "plate is round strands, too small.")
+    ap.add_argument("--layer-h", type=float, default=None,
+                    help="LAYER 2's height, mm. Default is machine.SLICER_LAYER_H. This exists "
+                         "because layer 2's whole job here is to be THE BUCKET'S second layer, and "
+                         "on 2026-08-07 the bucket's layer height became a choice. A ladder whose "
+                         "second layer is 0.24 tells you nothing about a bucket whose second layer "
+                         "is 0.48: it is the layer-1-to-layer-2 RELATIONSHIP being tested, not "
+                         "layer 1 alone. Checked against machine.SLICER_LAYER_HEIGHTS, because a "
+                         "height no profile offers has never been laid on this machine.")
     ap.add_argument("--cell", type=float, default=40.0, help="cell side, mm")
     ap.add_argument("--w1", type=float, default=2.0,
                     help="target LANDED width of a layer-1 line, mm. Oleg's number. Stated as a "
@@ -141,8 +149,24 @@ def main():
     bed = machine.bed_for(material, a.printer)
     bx, by = machine.BED[a.printer]
     press = machine.PRESS_HARD                      # 0.10 — R1's number and the bucket's
-    lh = machine.SLICER_LAYER_H                     # 0.24
+    lh = machine.SLICER_LAYER_H if a.layer_h is None else a.layer_h
+    if not any(abs(lh - h) < 1e-9 for h in machine.SLICER_LAYER_HEIGHTS):
+        sys.exit(f"REFUSING TO EMIT: --layer-h {lh:g} is not one of the heights this machine's "
+                 f"profiles offer ({', '.join(f'{h:g}' for h in machine.SLICER_LAYER_HEIGHTS)}).")
     bw = machine.SLICER_LINE_W                      # 0.82
+    # LAYER 1 MUST CARRY THE BODY'S FLOW, AND --w1 IS A WIDTH, SO IT GOES STALE WHEN --layer-h MOVES.
+    # This is the defect that cost a print on 2026-08-07: `--w1 2` carried from a 0.24 command into a
+    # 0.48 one lays 0.51x the body bead, and the PRIME is metered at layer 1's rate, so the plate
+    # showed thin unwelded strands in the first eight seconds. A ladder built to MEASURE a first
+    # layer must not itself be able to starve one. (Placed after `bw` deliberately: the first
+    # version of this check sat beside the --layer-h resolution above and referenced `bw` two lines
+    # before it existed.)
+    _ratio = (a.w1 * press) / (bw * lh)
+    if _ratio < 1.0 - 1e-9:
+        sys.exit(f"REFUSING TO EMIT: layer 1 would carry {a.w1*press:.4f}mm2/mm against the body's "
+                 f"{bw*lh:.4f}mm2/mm bead = {_ratio:.2f}x. At --layer-h {lh:g} the width that "
+                 f"carries full flow is {bw*lh/press:.2f}mm, not {a.w1:g}. This ladder exists to "
+                 f"measure a first layer; it must not be able to starve one.")
 
     for nm, v in (("--speed", a.speed), ("--speed1", a.speed1)):
         if v > machine.MAX_SPEED + 1e-9:
@@ -227,8 +251,17 @@ def main():
     w(f"; SPEED_LAYER1={a.speed1:.4f}")
     w(f"; FLOW={mm2_2 * a.speed:.4f}")
     w(f"; PRESSED_LAYER1={press:g}")
-    w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed ({a.w1/(bw*lh/press):.2f}x the body's own flow pressed "
-      f"into the {press:g} gap)")
+    # THE WIDTH IS THE CONSTANT HERE AND THE GAP IS THE VARIABLE, so the stamp must not name a
+    # single gap. It used to say "pressed into the 0.1 gap" on a file whose cells deliberately land
+    # 0.05 to 0.25, and validate.py R9b caught it correctly: the stamp names the gap it was metered
+    # for, and an offset saying otherwise means somebody changed one of the two and not the other.
+    # That check is right and the LIE was ours -- this file has five gaps by construction. Stating
+    # the RANGE means R9b finds no single-gap claim to cross-examine, which its own comment says is
+    # not a failure, while R9's weld check stays governed by '; Z_LADDER=1' where it belongs.
+    w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY cell ({_ratio:.2f}x the body's own "
+      f"{bw*lh:.4f}mm2/mm bead). THE GAP IS THE VARIABLE, swept {min(hts):g}..{max(hts):g}mm by "
+      f"offset; the material scales with it so the width stays constant and the gap is the only "
+      f"difference between cells.")
     w(f"; PRINT_TEMP={temp}")
     _cap = machine.flow_cap(material, a.printer)
     w(f"; FLOW_DERATE=this file reproduces the BUCKET's operating point on purpose, so it carries "
@@ -277,6 +310,18 @@ def main():
     # into finished material, which is the right default for one continuous part and the wrong one
     # here. The stamp does NOT relax the checks that matter: a travel still may not extrude, and
     # parts still may not share ground.
+    # THIS FILE IS THE COUPON R9 POINTS AT, AND IT HAS TO SAY SO. Without this stamp R9 refuses the
+    # ladder for printing an unproven first layer -- which is literally its purpose -- while its own
+    # failure message reads "Print zladder.py, read the plate, then cite the cell it welded on".
+    # The gate told the operator to print the tool it then refused. A bootstrap deadlock, found
+    # 2026-08-07 by running the ladder at a new layer height.
+    #
+    # THE EXEMPTION ALREADY EXISTED IN validate.py (layer1_excuse, '; Z_LADDER=1') and this
+    # generator never emitted it. It is DECLARED AND COUNTED, not a trust-me flag: validate measures
+    # the file's own moves and requires at least THREE different first-layer heights at one width,
+    # so a part that stamps this is refused and told why. FLOW_TEST=1 sets the same precedent for
+    # the flow cap.
+    w("; Z_LADDER=1")
     w(f"; SEQUENTIAL={n} numbered cells, lifted hops between, nothing stacked across cells")
     w(";")
 
