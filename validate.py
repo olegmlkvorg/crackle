@@ -2086,6 +2086,15 @@ def check(path):
             _inb = True; continue
         if not _inb:
             continue
+        # DECLARED IN-AIR STRANDS ARE NOT PLATE CUSPS. The fabric weave (2026-08-07) reverses
+        # deliberately at the post tips -- there-back-there, welding INTO a standing wall at
+        # height -- and 545 layers of that read as a >=1000-cusp pile at each post to a check
+        # whose mechanism is first-layer beads peeling off the PLATE at a hairpin. Wrong frame
+        # for a declared regime: THIN CROSS and LINK moves are counted and gated elsewhere
+        # (R4's exemption census, the send ledger), so they are out of this check's
+        # jurisdiction. An UNDECLARED cusp pile still fires exactly as before.
+        if 'THIN CROSS' in _ln.upper() or '; LINK' in _ln:
+            continue
         _c = _ln.split(';')[0]
         _m = re.match(r'^G1 (?:F[\d.]+ )?X([-\d.]+) Y([-\d.]+) Z([\d.]+) E', _c)
         if _m:

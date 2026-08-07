@@ -306,20 +306,46 @@ def merge_arc(c, r, a_tip, sign, merge_mm, step_rad):
     return out
 
 
-def dip(p, q, c, r):
-    """How far (mm) segment p->q passes INSIDE the circle (c, r). 0.0 means it clears it.
+def dip(p, q, c, r, arc=None):
+    """How far (mm) segment p->q passes INSIDE the MATERIAL of post (c, r). 0.0 means it clears.
 
     This is the whole basis for crossing between towers WITHOUT lifting: if the chord never enters
-    either tower's toolpath circle, there is nothing under the nozzle to plough and nothing to
-    lift over. Both endpoints sit exactly ON a circle, so a clean chord measures exactly 0.0 here
-    and anything that doubles back reads positive.
+    a post's material, there is nothing under the nozzle to plough and nothing to lift over.
+
+    `arc` = (phi, stagger_rad, half_rad) makes it ARC-AWARE, and that is what makes --mouth out
+    possible at all (Oleg 2026-08-07: "I want bamboo sticks to be inserted on outside for better
+    look, so you need to invert sticks caveties"). With the opening facing OUTWARD the tip-to-tip
+    chord crosses its own posts' OPEN MOUTHS -- air, nothing under the nozzle -- and a full-circle
+    test refuses that legal chord for material that is not there. Material spans offsets
+    [stagger-half, stagger+half] from the post's outward radial; the mouth is the rest. Same
+    sector arithmetic as air_span.solid(), which already earned it.
+
+    The closed-form closest-approach shortcut is only valid for the full circle (one deepest
+    point); with a sector the deepest point may sit in the mouth while a shallower stretch clips
+    material, so the arc case SAMPLES the in-circle portion. `arc=None` keeps the exact closed
+    form and the old behaviour bit for bit.
     """
     dx, dy = q[0] - p[0], q[1] - p[1]
     l2 = dx * dx + dy * dy
     if l2 < 1e-18:
         return 0.0
-    t = max(0.0, min(1.0, ((c[0] - p[0]) * dx + (c[1] - p[1]) * dy) / l2))
-    return max(0.0, r - math.hypot(p[0] + dx * t - c[0], p[1] + dy * t - c[1]))
+    if arc is None:
+        t = max(0.0, min(1.0, ((c[0] - p[0]) * dx + (c[1] - p[1]) * dy) / l2))
+        return max(0.0, r - math.hypot(p[0] + dx * t - c[0], p[1] + dy * t - c[1]))
+    phi, stag, half = arc
+    worst = 0.0
+    n = 256                       # ~0.26mm steps on the longest 66mm chord; tips are 1e-9-exact ends
+    for i in range(n + 1):
+        t = i / n
+        x, y = p[0] + dx * t, p[1] + dy * t
+        d = math.hypot(x - c[0], y - c[1])
+        if d >= r:
+            continue
+        off = math.atan2(y - c[1], x - c[0]) - phi - stag
+        off = (off + math.pi) % (2 * math.pi) - math.pi
+        if abs(off) <= half + 1e-12:
+            worst = max(worst, r - d)
+    return worst
 
 
 def air_span(p, q, cA, cB, r_t, bw, n=2000, arc=None):
@@ -344,13 +370,19 @@ def air_span(p, q, cA, cB, r_t, bw, n=2000, arc=None):
     """
     edge = r_t + bw / 2.0
     L = math.dist(p, q)
+    # arc = (phiA, phiB, half_rad[, stagger_rad]). The stagger term arrived with --mouth out:
+    # material is centred on the STAGGER, not on the outward radial, and testing |off| <= half
+    # against the radial silently assumed stagger 0 -- true for every part before 2026-08-07 and
+    # false the moment the mouth turns outward (stagger pi), where it would read the mouth as
+    # material and the wall as air, flattering the span in exactly the direction that lies.
+    _stag = arc[3] if (arc and len(arc) > 3) else 0.0
 
     def solid(x, y, c, phi):
         if math.dist((x, y), c) > edge:
             return False
         if arc is None:
             return True
-        off = math.atan2(y - c[1], x - c[0]) - phi
+        off = math.atan2(y - c[1], x - c[0]) - phi - _stag
         off = (off + math.pi) % (2 * math.pi) - math.pi      # to (-pi, pi]
         return abs(off) <= arc[2] + 1e-12
 
@@ -364,7 +396,7 @@ def air_span(p, q, cA, cB, r_t, bw, n=2000, arc=None):
     return L * over / n
 
 
-def seam_window(centres, phis, r_t, half_deg=180.0, step_deg=SEAM_SCAN_DEG):
+def seam_window(centres, phis, r_t, half_deg=180.0, step_deg=SEAM_SCAN_DEG, wdir=1):
     """STAGGER offsets (deg) whose gap crossings clear every post. MEASURED, not argued.
 
     A CLOSED LOOP HAS ONE SEAM; AN OPEN ARC HAS TWO FREE ENDS, and that is the line that had to
@@ -388,9 +420,14 @@ def seam_window(centres, phis, r_t, half_deg=180.0, step_deg=SEAM_SCAN_DEG):
         good = True
         for k in range(n):
             j = (k + 1) % n
-            p = seam_point(centres[k], phis[k], r_t, st + hr)
-            q = seam_point(centres[j], phis[j], r_t, st - hr)
-            if dip(p, q, centres[k], r_t) > 1e-9 or dip(p, q, centres[j], r_t) > 1e-9:
+            # wdir mirrors the walk (see build): the crossing runs leading -> trailing,
+            # and which tip LEADS depends on the walk direction.
+            p = seam_point(centres[k], phis[k], r_t, st + wdir * hr)
+            q = seam_point(centres[j], phis[j], r_t, st - wdir * hr)
+            # ARC-AWARE since 2026-08-07: a chord through a post's own OPEN MOUTH is over air and
+            # is legal, which is the whole mechanism behind --mouth out. Material spans st +- half.
+            if (dip(p, q, centres[k], r_t, arc=(phis[k], st, hr)) > 1e-9
+                    or dip(p, q, centres[j], r_t, arc=(phis[j], st, hr)) > 1e-9):
                 good = False
                 break
         if good:
@@ -441,7 +478,8 @@ def air_for_count(cx, cy, r_ring, r_t, bw, n, half_deg=180.0):
                     cs[0], cs[1], r_t, bw, arc=(phis[0], phis[1], hr))
 
 
-def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1, merge_mm=0.0):
+def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1, merge_mm=0.0,
+                phis=None, half_rad=None):
     """Refuse to emit anything that breaks one of the properties this part is built on.
 
     Every one of these was a real failure, and none of them is checkable by reading the source:
@@ -487,23 +525,31 @@ def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1, merg
     # the emitted points and it still runs on every crossing -- but it no longer DISCRIMINATES, so
     # it must not be quoted as the reason the arc form is safe. A guard is worth only what it has
     # been seen to reject.
+    # ARC-AWARE since 2026-08-07 (--mouth out): the test is against MATERIAL, not the toolpath
+    # circle. With the mouth outward the crossing legally passes over its own posts' open mouths
+    # -- air -- and the circle test would refuse the whole orientation for material that is not
+    # there. When phis/half_rad are absent (older callers), the full-circle test stands, which can
+    # only over-refuse, never under.
+    _stag_rad = math.radians(seam_off_deg)
     worst = (0.0, None)
     n_cross = 0
     for i, L in enumerate(layers):
         for j, kind in enumerate(L["kind"]):
-            if kind not in ("T", "B", "R"):
+            if kind not in ("T", "t", "B", "R"):
                 continue
             p, q = L["pts"][j], L["pts"][j + 1]
             n_cross += 1
-            for c in centres:
-                d = dip(p, q, c, r_t)
+            for ci, c in enumerate(centres):
+                _arc = ((phis[ci], _stag_rad, half_rad)
+                        if (phis is not None and half_rad is not None) else None)
+                d = dip(p, q, c, r_t, arc=_arc)
                 if d > worst[0]:
                     worst = (d, (i + 1, p, q, c))
     if worst[0] > 1e-9:
         i, p, q, c = worst[1]
         raise SystemExit(
             f"REFUSING TO EMIT: a gap crossing on layer {i} passes {worst[0]:.3f} mm INSIDE a "
-            f"tower's toolpath circle -- ({p[0]:.2f},{p[1]:.2f}) -> ({q[0]:.2f},{q[1]:.2f}) against "
+            f"tower's MATERIAL -- ({p[0]:.2f},{p[1]:.2f}) -> ({q[0]:.2f},{q[1]:.2f}) against "
             f"the post at ({c[0]:.2f},{c[1]:.2f}). At --stagger-deg {seam_off_deg:g} the head would "
             f"drag across a wall it just laid, and the ONLY reason this file may cross flat with no "
             f"lift is that it does not. Move the seam into the measured window, do not add a hop.")
@@ -628,19 +674,27 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg):
 
 
 def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_floor,
-          floor_pitch, r_h, bridges, merge_mm=0.0, floor_pitch_1=None):
+          floor_pitch, r_h, bridges, merge_mm=0.0, floor_pitch_1=None, wdir=1):
     """Every layer as {pts, kind, label}. pts[0] is where the layer starts; kind[j] says how the
     head reaches pts[j+1] -- E extrude, T flat metered crossing, B bridge, R floor rim,
     M the lap that welds a crossing ONTO the post it leaves and the post it lands on.
 
     THE ORDERING IS FORCED, there is no design freedom in it: the head arrives at post k's TRAILING
-    tip (stagger - wrap/2), walks CCW through the post's OUTWARD face, and departs from the LEADING
-    tip (stagger + wrap/2). So the crossing is leading tip of k -> trailing tip of k+1, and the
-    layer closes on post 0's trailing tip, which is exactly where the next layer starts."""
+    tip (stagger - wdir*wrap/2), walks through the post's continuous face in direction `wdir`, and
+    departs from the LEADING tip (stagger + wdir*wrap/2). The crossing is leading tip of k ->
+    trailing tip of k+1, and the layer closes on post 0's trailing tip, which is exactly where the
+    next layer starts.
+
+    `wdir` IS THE MOUTH INVERSION (2026-08-07, Oleg: "invert sticks caveties"). +1 walks CCW --
+    the historic part, byte for byte. -1 walks CW, which is the MIRROR: at stagger 180 each post
+    then departs from the tip FACING its gap, so the crossing spans just the gap between facing
+    tips -- exactly as the mouth-in part does around stagger 0. Without the mirror, a CCW walk at
+    stagger 180 has to leave from the far tip and drag the chord across its own post's material,
+    which the (arc-aware) window scan correctly refuses at every stagger near 180."""
     n = len(centres)
-    starts = [seam_point(centres[k], phis[k], r_t, stagger - half_rad) for k in range(n)]
-    ends = [seam_point(centres[k], phis[k], r_t, stagger + half_rad) for k in range(n)]
-    a0 = [phis[k] + stagger - half_rad for k in range(n)]
+    starts = [seam_point(centres[k], phis[k], r_t, stagger - wdir * half_rad) for k in range(n)]
+    ends = [seam_point(centres[k], phis[k], r_t, stagger + wdir * half_rad) for k in range(n)]
+    a0 = [phis[k] + stagger - wdir * half_rad for k in range(n)]
     step_rad = 2.0 * half_rad / narc          # the arc's OWN angular step; the lap reuses it
 
     def weld(tip, c, a_tip, sign):
@@ -688,7 +742,13 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
             pts = [starts[0]]
         cross = "B" if li in bridges else ("R" if is_floor else "T")
         for k in range(n):
-            loop = tower_arc(centres[k], r_t, a0[k], 2 * half_rad, narc, ends[k])
+            # THE CLOSING GAP DOES NOT WEAVE (kind "t", lowercase): its arrival tip is post 0's
+            # trailing tip, ALREADY PRINTED at this layer's Z when the layer comes back around, so
+            # a sub-height weave pass would drive the nozzle 0.37mm into the fresh bead 545 times
+            # a print -- validate's dive check caught exactly that (1020 hits, 2026-08-07). One
+            # gap in n stays single-strand; the other n-1 weave.
+            _ck = cross if not (cross == "T" and k == n - 1) else "t"
+            loop = tower_arc(centres[k], r_t, a0[k], wdir * 2 * half_rad, narc, ends[k])
             pts += loop
             kind += ["E"] * len(loop)
             nxt = (k + 1) % n
@@ -704,7 +764,7 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 # A floor-layer rim ("R") is already a full-flow extruded line landing on a solid
                 # latch disc: there is no net there and nothing to weld, so lapping it would only
                 # double material on the feet. The T and B crossings are the net.
-                wp, wk = weld(ends[k], centres[k], a0[k] + 2.0 * half_rad, -1)
+                wp, wk = weld(ends[k], centres[k], a0[k] + wdir * 2.0 * half_rad, -wdir)
                 pts += wp
                 kind += wk
                 # ONE MOVE, NOT A SUBDIVIDED LINE, and that is not a shortcut. A bridge is a strand
@@ -714,8 +774,8 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 # volume" -- so a solid line, an accent band and the top rim are all THIS move at a
                 # different flow, never a second pass and never a wider post.
                 pts.append(starts[nxt])
-                kind.append(cross)
-                wp, wk = weld(starts[nxt], centres[nxt], a0[nxt], +1)
+                kind.append(_ck)
+                wp, wk = weld(starts[nxt], centres[nxt], a0[nxt], wdir)
                 pts += wp
                 kind += wk
         _m = bridges.get(li)
@@ -776,6 +836,16 @@ def main():
                          "at every bore the gauge carried, so no bore could ever have made it hold. "
                          "250 is the wrap Oleg picked off that gauge. A default that cannot work at "
                          "any setting of the other knobs is a trap, not a starting point.")
+    ap.add_argument("--mouth", choices=("in", "out"), default="in",
+                    help="which way the C-channel opening faces. 'in' (historic): opening toward "
+                         "the bucket axis, continuous face outward, sticks hidden. 'out' (Oleg "
+                         "2026-08-07: 'I want bamboo sticks to be inserted on outside for better "
+                         "look, so you need to invert sticks caveties'): opening outward, sticks "
+                         "visible as exterior ribs, continuous face inward. The crossing chord "
+                         "then legally passes over its own posts' OPEN mouths -- air -- which is "
+                         "why dip()/seam_window went arc-aware; the stagger default becomes the "
+                         "measured passing band nearest 180 instead of nearest 0, and a geometry "
+                         "with no passing band on the requested side is REFUSED, never forced.")
     ap.add_argument("--pitch", type=float, default=25.0,
                     help="MAXIMUM arc spacing mm between tower centres; the count is derived from "
                          "it and stated in the header.")
@@ -970,6 +1040,20 @@ def main():
                          "OPEN AT 0.48 IS UNMEASURED: a 0.354mm rod floating 0.126mm above its "
                          "neighbour has never been printed -- it may sag onto the strand below "
                          "and read as a lighter membrane. The plate decides; the header says so.")
+    ap.add_argument("--fabric-passes", type=int, default=1,
+                    help="crossings per fabric gap per layer, each at --cross-flow/N of the body "
+                         "rate, stacked at Z = layer - lh*(N-1)/N .. layer in lh/N steps. Oleg "
+                         "2026-08-07: 'for fabric we need better strategy because the threads are "
+                         "so thin. lets do 3 moves at line height 1/3 2/3 3/3 so we get 3 layers "
+                         "of fabric per layer of print' -- and, correcting an earlier misread, "
+                         "'fabric should not be 2x thick': TOTAL flow is unchanged, one thread "
+                         "becomes N thinner ones sharing the span. ODD ONLY, so the stroke still "
+                         "ends on the far post and one-stroke holds. 1 = historic behaviour byte "
+                         "for byte. Z rides inside the crossing moves and the file declares "
+                         "'; Z_MODULATED', so validate judges descent against the plate floor. "
+                         "Laps stay ONCE per gap (around the pass group), or the lips would "
+                         "carry N times the weld. Layer 1 never modulates (there is no lh below "
+                         "it to descend into).")
     ap.add_argument("--merge-mm", type=float, default=2.0,
                     help="mm of ARC LENGTH that each gap crossing laps ONTO the post, at BOTH ends. "
                          "Oleg 2026-08-06, holding the printed bucket: 'you need to merge the net "
@@ -1138,6 +1222,15 @@ def main():
     # so the two numbers can never state different things about the same wall.
     if a.wrap_deg <= 0 or a.wrap_deg > 360.0 + 1e-9:
         ap.error(f"--wrap-deg {a.wrap_deg:g} is not in (0, 360]")
+    # ODD ONLY: an even pass count ends the fabric stroke on the NEAR post, the next feature
+    # expects the head on the FAR one, and gate 1 refuses the 60mm gap as a travel. Refused here
+    # with the reason rather than discovered as a cryptic one-stroke failure 2000 lines later.
+    if a.fabric_passes < 1 or a.fabric_passes % 2 == 0:
+        ap.error(f"--fabric-passes {a.fabric_passes} must be a positive ODD number: the passes "
+                 f"run there-back-there, so only an odd count ends on the far post and keeps the "
+                 f"one-stroke invariant.")
+    if a.mouth == "out" and abs(a.wrap_deg - 360.0) < 1e-9:
+        ap.error("--mouth out is meaningless at --wrap-deg 360: a closed loop has no mouth.")
     if a.tower_d is None:
         bore_d = a.stick_d + a.bore_allow
         a.tower_d = bore_d + 2.0 * bw
@@ -1182,20 +1275,37 @@ def main():
     cx, cy = bedx / 2.0, bedy / 2.0
     centres = [(cx + r_ring * math.cos(p), cy + r_ring * math.sin(p)) for p in phis]
 
-    # THE WINDOW IS MEASURED BEFORE ANY GEOMETRY IS BUILT, and the default sits at its centre.
+    # THE WINDOW IS MEASURED BEFORE ANY GEOMETRY IS BUILT, and the default sits at the centre of
+    # the passing band nearest the REQUESTED MOUTH DIRECTION. Since the scan went arc-aware
+    # (2026-08-07) it legitimately passes TWO bands -- one around stagger 0 (mouth in, the
+    # historic part) and one around 180 (mouth out, Oleg: "I want bamboo sticks to be inserted on
+    # outside for better look") -- and picking "the widest" would silently choose the orientation
+    # for him. The mouth is a stated choice; the window within it stays measured.
     half_deg = a.wrap_deg / 2.0
     half_rad = math.radians(half_deg)
-    offs = seam_window(centres, phis, r_t, half_deg)
-    win_c, win_w = widest_run(offs)
-    if win_c is None:
+    wdir = -1 if a.mouth == "out" else 1
+    offs = seam_window(centres, phis, r_t, half_deg, wdir=wdir)
+    if not offs:
         raise SystemExit(
             f"REFUSING TO EMIT: NO stagger lets the head cross between {n_tow} posts of "
             f"{a.tower_d:g} mm on a {a.dia:g} mm circle without passing inside a post wall. The "
             f"posts are too close together for a flat crossing; widen --dia or raise --pitch.")
+    _mouth_target = 180.0 if a.mouth == "out" else 0.0
+    _near = [o for o in offs
+             if min(abs(o - _mouth_target), 360.0 - abs(o - _mouth_target)) <= 90.0]
+    win_c, win_w = widest_run(_near)
+    if win_c is None:
+        _all_c, _all_w = widest_run(offs)
+        raise SystemExit(
+            f"REFUSING TO EMIT: --mouth {a.mouth} needs a passing stagger within 90 deg of "
+            f"{_mouth_target:g}, and the measured window has none there. What the scan DID pass "
+            f"is a {_all_w:.2f} deg band centred {_all_c:.2f}. This geometry cannot face its "
+            f"mouths {a.mouth} without a crossing ploughing a wall; change --wrap-deg or the "
+            f"post count, do not force --stagger-deg.")
     stag_deg = win_c if a.stagger_deg is None else a.stagger_deg
     stagger = math.radians(stag_deg)
-    starts = [seam_point(centres[k], phis[k], r_t, stagger - half_rad) for k in range(n_tow)]
-    ends = [seam_point(centres[k], phis[k], r_t, stagger + half_rad) for k in range(n_tow)]
+    starts = [seam_point(centres[k], phis[k], r_t, stagger - wdir * half_rad) for k in range(n_tow)]
+    ends = [seam_point(centres[k], phis[k], r_t, stagger + wdir * half_rad) for k in range(n_tow)]
 
     # ------------------------------------------------------------------ THE MERGE LAP, VALIDATED
     # Three ways --merge-mm can be wrong, and each is refused with the number that refused it
@@ -1242,39 +1352,45 @@ def main():
     # stick stopped entering a bucket whose bore had just been made 0.2mm looser. Enforcing the
     # LETTER of "the fabric has to stay" (fusion) destroyed its spirit (light).
     #
-    # The relation, worth writing once:
-    #     area = bw * lh * cross_flow ;  rod = sqrt(4*area/pi) ;  fuses when rod >= lh
-    #     =>  fusion needs cross_flow >= pi * lh / (4 * bw)   (0.230 at 0.24; 0.460 at 0.48)
-    # FUSED-AND-LIGHT IS IMPOSSIBLE AT A DOUBLED PITCH -- fusion at 0.48 costs 2x the material of
-    # the 0.24 membrane by construction. So neither state is "correct": they are different parts,
-    # and the one thing this gate refuses is a file that does not SAY which one it is.
-    cross_min = math.pi * lh / (4.0 * bw)
-    fabric_rod = 2.0 * math.sqrt(a.cross_flow * bw * lh / math.pi)
-    fabric_fused = fabric_rod >= lh - 1e-9
+    # The relation, worth writing once. SINCE --fabric-passes (2026-08-07) the pitch that decides
+    # fusion is the SUB-pitch lh/N and the rod is the PER-PASS rod at cross_flow/N: N thinner
+    # strands stacked lh/N apart, total flow unchanged ("fabric should not be 2x thick, I have not
+    # asked for that" -- one thread becomes N sharing the span).
+    #     sub = lh / N ;  area/pass = bw * lh * cross_flow / N ;  rod = sqrt(4*area/pi)
+    #     fuses when rod >= sub  =>  cross_flow >= pi * lh / (4 * bw * N)
+    # FUSED-AND-LIGHT IS IMPOSSIBLE AT A DOUBLED PITCH FOR N=1 -- fusion at 0.48 costs 2x the
+    # 0.24 membrane's material by construction; raising N is what breaks that trade (N=3 at 0.56
+    # fuses from total 0.18 instead of 0.54). Neither state is "correct": they are different
+    # parts, and the one thing this gate refuses is a file that does not SAY which one it is.
+    fab_sub = lh / a.fabric_passes
+    cross_min = math.pi * lh / (4.0 * bw * a.fabric_passes)
+    fabric_rod = 2.0 * math.sqrt((a.cross_flow / a.fabric_passes) * bw * lh / math.pi)
+    fabric_fused = fabric_rod >= fab_sub - 1e-9
     if a.cross_flow > 0:
         if a.fabric == "open" and fabric_fused:
             raise SystemExit(
                 f"REFUSING TO EMIT: --fabric open, but the {fabric_rod:.3f}mm rod REACHES the "
-                f"{lh:g}mm layer pitch, so consecutive strands touch and fuse. The header would "
-                f"declare an open net the file does not lay. Drop --cross-flow below "
-                f"{cross_min:.3f}, or declare --fabric fused.")
+                f"{fab_sub:g}mm strand pitch ({a.fabric_passes} pass(es) on the {lh:g} layer), so "
+                f"consecutive strands touch and fuse. The header would declare an open net the "
+                f"file does not lay. Drop --cross-flow below {cross_min:.3f}, or declare "
+                f"--fabric fused.")
         if a.fabric == "fused" and not fabric_fused:
             raise SystemExit(
-                f"REFUSING TO EMIT: --fabric fused, but the {fabric_rod:.3f}mm rod is short of the "
-                f"{lh:g}mm layer pitch -- the strands float {lh-fabric_rod:.3f}mm apart. The "
-                f"header would declare a membrane the file does not lay. Raise --cross-flow to "
+                f"REFUSING TO EMIT: --fabric fused, but the {fabric_rod:.3f}mm rod is short of "
+                f"the {fab_sub:g}mm strand pitch ({a.fabric_passes} pass(es) on the {lh:g} "
+                f"layer) -- the strands float {fab_sub-fabric_rod:.3f}mm apart. The header would "
+                f"declare a membrane the file does not lay. Raise --cross-flow to "
                 f"{math.ceil(cross_min*100)/100:g} or higher, or declare --fabric open.")
         if a.fabric is None and not fabric_fused:
             raise SystemExit(
-                f"REFUSING TO EMIT: the fabric's rod is {fabric_rod:.3f}mm against a {lh:g}mm "
-                f"layer pitch, so consecutive strands do NOT touch -- they float "
-                f"{lh-fabric_rod:.3f}mm apart as separate threads, which is a DIFFERENT PART from "
-                f"the fused membrane every 0.24 bucket carried, and nothing declared the choice. "
+                f"REFUSING TO EMIT: the fabric's rod is {fabric_rod:.3f}mm against a "
+                f"{fab_sub:g}mm strand pitch ({a.fabric_passes} pass(es) on the {lh:g} layer), "
+                f"so consecutive strands do NOT touch -- they float {fab_sub-fabric_rod:.3f}mm "
+                f"apart as separate threads, which is a DIFFERENT PART from the fused membrane "
+                f"every 0.24 bucket carried, and nothing declared the choice. "
                 f"Pass --fabric open to choose the light net (UNMEASURED at this pitch -- the "
                 f"strand may sag onto the one below), or raise --cross-flow to {cross_min:.3f}+ "
-                f"for a fused membrane -- KNOWING that fusion at {lh:g} costs "
-                f"{cross_min/0.25:.1f}x the 0.24 membrane's material and is what made the walls "
-                f"solid and the lips uninsertable on 2026-08-07.")
+                f"for a fused membrane.")
 
     merge_mm2 = merge_flow * bw * lh                # cross-section of ONE pass of the lap
     lap_pack = 1.0 + 2.0 * merge_flow               # the wall's own bead + both passes of the lap
@@ -1470,16 +1586,18 @@ def main():
             f"strands on 2026-08-06 and 08-07. Pass --floor-pitch-1 below {w1:.3f}, or raise --w1.")
 
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
-                   a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1)
+                   a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1,
+                   wdir=wdir)
     n_cross, n_merge, lap_measured = check_paths(layers, centres, r_t, (bedx, bedy), press, lh,
-                                                 stag_deg, bw, w1, a.merge_mm)
+                                                 stag_deg, bw, w1, a.merge_mm,
+                                                 phis=phis, half_rad=half_rad)
 
     # ------------------------------------------------------------------ measured off the built path
     def layer_mm(L):
         ext = trav = 0.0
         for j, k in enumerate(L["kind"]):
             d = math.dist(L["pts"][j], L["pts"][j + 1])
-            if k == "T":
+            if k in ("T", "t"):
                 trav += d
             else:
                 ext += d
@@ -1492,8 +1610,9 @@ def main():
     # "six towers at 4.50s STOOD, one at 0.57s roped" -- 2.6x the real 9.13 s, on the one number
     # the part's cooling is judged against. The C-channel is what made it load-bearing: an open arc
     # extrudes a third of what a closed 8.2 post did.
+    _weave = a.fabric_passes if a.cross_flow > 0 else 1   # weave multiplies the crossing path
     lay_s_ext = tow_ext / speed                      # post cooling: extruding time per layer
-    lay_s_all = tow_ext / speed + tow_trav / speed_x  # wall clock per layer, crossings included
+    lay_s_all = tow_ext / speed + tow_trav * _weave / speed_x  # wall clock/layer, crossings incl.
     path_mm = sum(layer_mm(L)[0] for L in layers)
     trav_mm = sum(layer_mm(L)[1] for L in layers)
     floor_mm = sum(layer_mm(L)[0] for L in layers[:a.floor_layers])
@@ -1506,9 +1625,15 @@ def main():
     # travel only while --cross-flow is 0; above 0 the emitter writes those same moves as G1 with E
     # ("; THIN CROSS"). Left as travel, the summary described a file it had just written as having
     # 44.5m of dry crossings when validate.py reads the emitted file as travel=0.4m extrude=80.4m.
-    cross_mm = trav_mm if a.cross_flow > 0 else 0.0
+    # THE WEAVE MULTIPLIES THE CROSSING PATH. layer_mm() sees the CHORD once (build() emits one T
+    # per gap; the emitter expands it to --fabric-passes moves), so every distance and clock
+    # derived from trav_mm must scale by the passes or the header describes a shorter file than
+    # the one written. Layer 1 never weaves and floor R-crossings are not T, so the scale applies
+    # to the T path only -- layer 1's single-pass T is inside floor layers on any floored part and
+    # a rounding error on a floorless one; stated, not hidden.
+    cross_mm = trav_mm * _weave if a.cross_flow > 0 else 0.0
     ext_mm = path_mm + cross_mm                      # path with material coming out of the nozzle
-    dry_mm = trav_mm - cross_mm                      # path flown dry
+    dry_mm = max(0.0, trav_mm - (cross_mm / max(_weave, 1)))   # path flown dry
     n_moves = sum(len(L["kind"]) for L in layers)
     # THE LAP'S OWN LENGTH AND CLOCK, measured off the built points. It is inside path_mm already
     # (a lap extrudes), but it is the price of the feature and a price nobody states is a price
@@ -1531,7 +1656,7 @@ def main():
     # is quoted four times in this header and onto the comment of every bridge move in the file.
     gap_chord = math.dist(ends[0], starts[1])
     bridge_air = air_span(ends[0], starts[1], centres[0], centres[1], r_t, bw,
-                          arc=(phis[0], phis[1], half_rad))
+                          arc=(phis[0], phis[1], half_rad, stagger))
     # WHEN THE SPAN IS PAST THE ONE THAT HAS HELD, SAY SO AND HAND OVER THE FIX. Searched by
     # running the real geometry at each candidate count rather than by inverting a formula, so the
     # suggested --pitch is one the generator provably reproduces.
@@ -1553,7 +1678,7 @@ def main():
     # SAME DEFECT, SAME FIX: layer 1 runs at --speed1 and the crossings at --cross-speed, so a
     # single division by `speed` was a wall-clock estimate for a file that does not exist.
     mins = sum(layer_mm(Lz)[0] / (speed1 if i == 0 else speed)
-               + layer_mm(Lz)[1] / (speed1 if i == 0 else speed_x)
+               + layer_mm(Lz)[1] * (1 if i == 0 else _weave) / (speed1 if i == 0 else speed_x)
                for i, Lz in enumerate(layers)) / 60.0
     # vol_cm3 IS NOT MODELLED HERE. It is read off the E the emitter actually writes, below the
     # emission loop, because three different rates now leave this nozzle: the body's e_mm, layer 1's
@@ -1668,8 +1793,15 @@ def main():
         w(f"; MERGE_PASSES=2")
     if a.cross_flow > 0:
         w(f"; FABRIC={'fused' if fabric_fused else 'open'} rod={fabric_rod:.3f}mm "
-          + (f"overlap={fabric_rod-lh:.3f}mm" if fabric_fused else f"gap={lh-fabric_rod:.3f}mm")
-          + f" (pitch {lh:g})")
+          + (f"overlap={fabric_rod-fab_sub:.3f}mm" if fabric_fused
+             else f"gap={fab_sub-fabric_rod:.3f}mm")
+          + f" (strand pitch {fab_sub:.3f}, {a.fabric_passes} pass(es) per {lh:g} layer)")
+        if a.fabric_passes > 1:
+            w(f"; FABRIC_PASSES={a.fabric_passes}")
+            w(f"; Z_MODULATED=weave: each fabric gap is crossed {a.fabric_passes}x per layer at "
+              f"Z steps of {fab_sub:.3f}, Z riding inside the moves. Oleg 2026-08-07: 'lets do 3 "
+              f"moves at line height 1/3 2/3 3/3'. Total flow per gap UNCHANGED ('fabric should "
+              f"not be 2x thick').")
     if lip_regimes:
         w(f"; LIP_BUDGET=" + ", ".join(f"{nm} {v:.3f}" for nm, v in lip_regimes)
           + (f" vs {lip_proven:.3f} proven (machine.PROVEN_LIP)" if lip_proven
@@ -1693,9 +1825,20 @@ def main():
         w(f";          stick        {a.stick_d:.3f}mm  (--stick-d; 1/8 inch NOMINAL, not callipered)")
         w(f";          bore         {2*bore_r:.3f}mm  MODELLED (--bore-allow {a.bore_allow:g})")
         w(f";          channel OD   {a.tower_d:.3f}mm  ({td_src})")
-        w(f";          wrap         {a.wrap_deg:g} deg, opening {360-a.wrap_deg:g} deg facing INWARD "
-          f"at the bucket axis,")
-        w(f";                       so the OUTER face stays continuous and the sticks do not show.")
+        if a.mouth == "out":
+            w(f";          wrap         {a.wrap_deg:g} deg, opening {360-a.wrap_deg:g} deg facing "
+              f"OUTWARD (--mouth out, Oleg 2026-08-07:")
+            w(f";                       'sticks on outside for better look'), so the INNER face "
+              f"stays continuous and the")
+            w(f";                       sticks show as exterior ribs. The crossing legally passes "
+              f"over its own posts'")
+            w(f";                       OPEN mouths -- air -- which is why the clearance gates are "
+              f"arc-aware.")
+        else:
+            w(f";          wrap         {a.wrap_deg:g} deg, opening {360-a.wrap_deg:g} deg facing "
+              f"INWARD at the bucket axis,")
+            w(f";                       so the OUTER face stays continuous and the sticks do not "
+              f"show.")
         w(f";          mouth        {mouth:.3f}mm modelled clear between the two lip beads, against "
           f"a {a.stick_d:.3f}mm stick")
         w(f";                       = {mouth-a.stick_d:+.3f}mm. THE MODELLED PART DOES NOT GRIP if "
@@ -1739,18 +1882,18 @@ def main():
             _a2 = _m * bw * lh
             w(f";          {_nm:<9}{_m:>5.2f}x  {_a2:.4f}mm2  rod {2*math.sqrt(_a2/math.pi):.3f}mm  "
               f"{_m*flow:5.2f}mm3/s   on {_n} layer(s)")
-    w(f";          fabric   {a.cross_flow:>5.2f}x  {a.cross_flow*bw*lh:.4f}mm2  "
-      f"rod {2*math.sqrt(a.cross_flow*bw*lh/math.pi):.3f}mm  "
-      f"{a.cross_flow*bw*lh*speed_x:5.2f}mm3/s   on every non-bridge layer")
+    w(f";          fabric   {a.cross_flow/a.fabric_passes:>5.3f}x  "
+      f"{a.cross_flow*bw*lh/a.fabric_passes:.4f}mm2/strand  rod {fabric_rod:.3f}mm  "
+      f"x{a.fabric_passes} pass(es)/layer  on every non-bridge layer")
     w(f";        THE FABRIC STAYS (Oleg 2026-08-06: \"Don't remove the fabric that has to stay\") "
       f"and its STATE is")
     if fabric_fused:
-        w(f";        FUSED: the {fabric_rod:.3f}mm rod reaches the {lh:g}mm layer pitch, so "
-          f"consecutive strands touch")
+        w(f";        FUSED: the {fabric_rod:.3f}mm rod reaches the {fab_sub:.3f}mm strand pitch, "
+          f"so consecutive strands touch")
         w(f";        and fuse into a continuous membrane -- the character of every 0.24 bucket.")
     else:
         w(f";        OPEN, declared with --fabric open: the {fabric_rod:.3f}mm rod is "
-          f"{lh-fabric_rod:.3f}mm short of the {lh:g}mm")
+          f"{fab_sub-fabric_rod:.3f}mm short of the {fab_sub:.3f}mm strand")
         w(f";        pitch, so the strands float apart as separate threads -- a NET, not a "
           f"membrane. UNMEASURED")
         w(f";        at this pitch: the strand may sag onto the one below and read as a lighter "
@@ -1832,10 +1975,18 @@ def main():
     else:
         w(f";        Inside the {PROVEN_AIR_MM:g}mm that held tonight — which is a LOWER BOUND, "
           f"not a limit.")
-    w(f"; FLOOR  {a.floor_layers} cross-latch layer(s) on a {r_h:.1f}mm disc, in TWO pitch regimes "
-      f"— layer 1 at {floor_pitch_1:g}mm,")
-    w(f";        layers 2-{a.floor_layers} at {a.floor_pitch:g}mm. bucket_latch.py's")
-    w(f";        lattice, imported and called, so there is one implementation of it in this repo.")
+    if a.floor_layers == 0:
+        w(f"; FLOOR  NONE (--floor-layers 0, Oleg 2026-08-07: 'skip the floor'). The posts stand "
+          f"straight on the")
+        w(f";        plate, feet pressed at {press:g} with layer 1's own {w1:.2f}mm bead; layer-1 "
+          f"crossings drape ON")
+        w(f";        the plate and weld the feet together. Precedent: towercoupon's floorless "
+          f"posts stood.")
+    else:
+        w(f"; FLOOR  {a.floor_layers} cross-latch layer(s) on a {r_h:.1f}mm disc, in TWO pitch regimes "
+          f"— layer 1 at {floor_pitch_1:g}mm,")
+        w(f";        layers 2-{a.floor_layers} at {a.floor_pitch:g}mm. bucket_latch.py's")
+        w(f";        lattice, imported and called, so there is one implementation of it in this repo.")
     if a.floor_layers >= 2:
         w(f";        {a.floor_layers} x {lh:g} on the {press:g} press = {floor_h:.2f}mm of floor. "
           f"Plate bending goes as thickness")
@@ -2120,17 +2271,44 @@ def main():
             seg = math.hypot(x - ppx, y - ppy)
             if seg < 1e-9:
                 continue
-            if kind == "T":
-                # FLAT, AT THE LAYER'S OWN Z, NO LIFT. Licensed by geometry, not by a tag: the
-                # chord provably clears both tower walls (check_paths gate 3), so there is no
-                # material under it. F is at the north star, which is also what keeps this move
-                # under validate.py's ploughing threshold rather than at it.
-                if a.cross_flow > 0:
+            if kind in ("T", "t"):
+                # FLAT (or WOVEN), OVER AIR, NO LIFT. Licensed by geometry, not by a tag: the
+                # chord provably clears both posts' MATERIAL (check_paths gate 3, arc-aware), so
+                # there is nothing under the nozzle to plough. Lowercase "t" is the layer-closing
+                # gap: single strand, never woven (its arrival tip already stands at this Z).
+                if a.cross_flow > 0 and a.fabric_passes > 1 and li != 0 and kind == "T":
+                    # THE WEAVE. Oleg 2026-08-07: "lets do 3 moves at line height 1/3 2/3 3/3 so
+                    # we get 3 layers of fabric per layer of print" -- N passes there-back-there
+                    # at Z stepping up by lh/N, each at cross_flow/N, TOTAL flow unchanged
+                    # ("fabric should not be 2x thick"). Z rides INSIDE the moves; the header
+                    # declares '; Z_MODULATED' so validate judges the descent against the plate
+                    # floor, and each pass keeps the THIN CROSS tag its gates key on. The first
+                    # pass descends over the GAP -- open air, nothing beneath but the previous
+                    # layer's top strand one full lh below. Layer 1 never takes this branch:
+                    # there is no lh below the press gap to step into.
+                    _e_pass = seg * e_mm * a.cross_flow / a.fabric_passes
+                    for _p in range(a.fabric_passes):
+                        _tx, _ty = ((x, y) if _p % 2 == 0 else (ppx, ppy))
+                        _tz = z - lh * (a.fabric_passes - 1 - _p) / a.fabric_passes
+                        E += _e_pass
+                        w(f"G1 F{f_x} X{_tx:.3f} Y{_ty:.3f} Z{_tz:.3f} E{E:.5f} ; THIN CROSS "
+                          f"{a.cross_flow*100/a.fabric_passes:.1f}% weave {_p+1}/"
+                          f"{a.fabric_passes} -- deliberate strand, not ooze (clears both posts)")
+                elif a.cross_flow > 0 and li == 0:
+                    # LAYER 1 CROSSES AT FULL LAYER-1 FLOW, pressed to the plate: on a floorless
+                    # part these drapes ARE the feet-ties, and they weld only if they carry the
+                    # weld's own bead. Metering them thin also made R9 read layer 1 as a BLEND of
+                    # two widths (3.58 vs the declared 3.94) and refuse the coupon citation --
+                    # the first layer is ONE regime, so every deposit in it carries w1's rate.
+                    E += seg * e_mm_l1
+                    w(f"G1 F{f_l1} X{x:.3f} Y{y:.3f} E{E:.5f} ; LINK plate-tie at layer 1's own "
+                      f"rate -- the feet-ties of a floorless part")
+                elif a.cross_flow > 0:
                     # THERE IS NO RETRACTION IN THIS PROJECT, so this move was never dry. It oozed,
                     # and the web in the printed part IS that ooze. Metering it at a stated fraction
                     # of the body's own rate turns an uncontrolled leak into a strand we chose.
                     E += seg * e_mm * a.cross_flow
-                    w(f"G1 F{f_l1 if li == 0 else f_x} X{x:.3f} Y{y:.3f} E{E:.5f} ; THIN CROSS "
+                    w(f"G1 F{f_x} X{x:.3f} Y{y:.3f} E{E:.5f} ; THIN CROSS "
                       f"{a.cross_flow*100:.0f}% "
                       f"-- deliberate strand, not ooze (clears both tower walls)")
                 else:
@@ -2151,9 +2329,14 @@ def main():
                 # tag deliberately avoids the words BRIDGE/POCKET/CORNER/THIN CROSS: each of those
                 # names a different declared regime with its own gate, and borrowing one would put
                 # these moves in front of a check built for something else.
-                E += seg * e_mm * merge_flow
+                # LAYER 1'S LAPS CARRY LAYER 1'S OWN RATE: a lap pressed to the plate is a
+                # plate weld, and metering it thin both starves the weld and made R9 read layer 1
+                # as a blend of two rates (3.58mm vs the declared 3.94 -- the citation drifted).
+                # One layer, one regime.
+                E += seg * (e_mm_l1 if li == 0 else e_mm * merge_flow)
                 w(f"G1 F{f_l1 if li == 0 else f} X{x:.3f} Y{y:.3f} E{E:.5f} ; LINK MERGE "
-                  f"{merge_flow*100:.0f}% -- net lapped onto the post, {a.merge_mm:g}mm of arc")
+                  f"{100 if li == 0 else merge_flow*100:.0f}% -- net lapped onto the post, "
+                  f"{a.merge_mm:g}mm of arc")
             else:
                 # LAYER 1 IS METERED SEPARATELY AND ON PURPOSE.
                 # Oleg, 2026-08-05, after the first ring printed: "first layer need to be full flow
@@ -2223,8 +2406,13 @@ def main():
     # C-channel at the same diameter and count are different parts, and so are two runs whose
     # bridges carry 1x and 8x. Suffixes appear only when the feature is on, so every filename
     # written before these flags existed still names the same file.
-    xf = f"_x{a.cross_flow*100:g}" if a.cross_flow > 0 else ""
-    wf = "" if abs(a.wrap_deg - 360.0) < 1e-9 else f"_w{a.wrap_deg:g}s{a.stick_d:g}"
+    # THE WEAVE AND THE MOUTH ARE IN THE NAME for the reason everything else is: a 3-pass woven
+    # net and a single-strand net are different parts, and so are mouths in and mouths out.
+    # Suffix only when off the historic default, so every older filename still names its file.
+    xf = (f"_x{a.cross_flow*100:g}" + (f"p{a.fabric_passes}" if a.fabric_passes > 1 else "")
+          if a.cross_flow > 0 else "")
+    wf = ("" if abs(a.wrap_deg - 360.0) < 1e-9
+          else f"_w{a.wrap_deg:g}{'o' if a.mouth == 'out' else ''}s{a.stick_d:g}")
     mf = ("" if set(bridges.values()) == {1.0} else
           "_m" + "-".join(f"{m:g}" for m in sorted(set(bridges.values()))))
     bb = f"_bb{a.bottom_brace_layers}x{a.bottom_bridge_every}" if a.bottom_brace_layers > 0 else ""
@@ -2258,8 +2446,13 @@ def main():
     # header disagreeing with its own moves, which is the exact failure this project keeps paying
     # for. Layer 1 is reported from the value that is actually passed to build().
     _l1_cover = land_w1 / floor_pitch_1 if floor_pitch_1 else 0.0
-    print(f"  floor {a.floor_layers} latch layers = {floor_h:.2f}mm thick, in TWO regimes:")
-    print(f"    layer 1  lands {land_w1:.2f}mm on {floor_pitch_1:g}mm pitch ({_l1_cover:.2f}x, "
+    if a.floor_layers == 0:
+        print(f"  floor NONE (--floor-layers 0): posts stand on the plate, layer-1 crossings "
+              f"drape and weld the feet")
+    if a.floor_layers > 0:
+        print(f"  floor {a.floor_layers} latch layers = {floor_h:.2f}mm thick, in TWO regimes:")
+    if a.floor_layers > 0:
+        print(f"    layer 1  lands {land_w1:.2f}mm on {floor_pitch_1:g}mm pitch ({_l1_cover:.2f}x, "
           f"{'WELDED SHEET' if land_w1 > floor_pitch_1 else 'GRID -- CANNOT WELD'}, "
           f"{max(0.0, land_w1 - floor_pitch_1):.2f}mm overlap) -- this is the layer that grips")
     # LAYERS 2-n LAY THE BODY BEAD, NOT --w1, and dividing by w1 here was a false claim I introduced
@@ -2269,7 +2462,8 @@ def main():
     # OPEN is the exact distinction Oleg asked for ("adhesion is must + not solid floor"), so the
     # line was wrong about the one thing it exists to say.
     _upper_cover = bw / a.floor_pitch
-    print(f"    layers 2-{a.floor_layers}  at {a.floor_pitch:g}mm pitch, laying the BODY bead "
+    if a.floor_layers > 1:
+        print(f"    layers 2-{a.floor_layers}  at {a.floor_pitch:g}mm pitch, laying the BODY bead "
           f"{bw:g}mm ({_upper_cover:.2f}x, "
           f"{'SOLID' if bw >= a.floor_pitch else 'open grid'}); "
           f"ribs cross every {a.floor_pitch:g}mm and bridge {max(0.0, a.floor_pitch-bw):.2f}mm")
@@ -2291,10 +2485,11 @@ def main():
         f"{sum(1 for v in bridges.values() if v == m)} layers"
         for m in sorted(set(bridges.values()))))
     if a.cross_flow > 0:
-        print(f"     fabric {a.cross_flow:g}x = {a.cross_flow*bw*lh:.4f}mm2, rod "
-              f"{2*math.sqrt(a.cross_flow*bw*lh/math.pi):.3f}mm vs the {lh:g} pitch: "
+        print(f"     fabric {a.cross_flow:g}x total in {a.fabric_passes} pass(es) = "
+              f"{a.cross_flow*bw*lh/a.fabric_passes:.4f}mm2/strand, rod {fabric_rod:.3f}mm vs "
+              f"the {fab_sub:.3f} strand pitch: "
               + ("FUSED into a membrane" if fabric_fused else
-                 f"OPEN net, strands float {lh-fabric_rod:.3f}mm apart (--fabric open, "
+                 f"OPEN net, strands float {fab_sub-fabric_rod:.3f}mm apart (--fabric open, "
                  f"UNMEASURED at this pitch)"))
     if lip_regimes and lip_proven:
         print(f"     lip budget: " + ", ".join(f"{nm} {v:.3f}" for nm, v in lip_regimes)
@@ -2312,7 +2507,7 @@ def main():
         # AGAINST THE AIRBORNE CROSSINGS, NOT n_cross. n_cross counts every T/B/R move and a floor
         # rim is SUBDIVIDED, so dividing by it read "0 laps per crossing" on a file with two laps
         # on every one of them -- a report about the artifact quoting the wrong denominator.
-        _n_air = sum(1 for Lz in layers for k in Lz["kind"] if k in ("T", "B"))
+        _n_air = sum(1 for Lz in layers for k in Lz["kind"] if k in ("T", "t", "B"))
         print(f"  MERGE: {n_merge} laps on {_n_air} airborne crossings "
               f"({n_merge/max(1,_n_air):.1f} each — both ends), every one measured at "
               f"{lap_measured:.4f}mm of arc ON the post's own circle to 1e-6")
