@@ -888,6 +888,15 @@ PROVEN_LIP = {
     "k2plus": 1.7630,
 }
 
+# THE FATTEST IN-AIR ROD EVER READ AS STRAIGHT, mm. The v5 bucket's 2x bridges (rod 1.081mm at
+# 0.82x0.56) spanned 60.6mm and Oleg read them straight off the plate ("The thick bridges do
+# [work]", 2026-08-07); the same night's 8x single rod was never printed and the fat plate-level
+# lines in his photo wandered ("one fat line which can't stay straight due to physics"). A single
+# move's rod above this figure has NO evidence of pulling straight, so bucket_towers derives an
+# odd pass count per bridge multiplier that keeps every in-air pass at or under it -- which also
+# frees the passes to run at full speed instead of the flow-capped crawl that maximised air time.
+PROVEN_ROD_MM = 1.081
+
 # ---------------------------------------------------------------------------------------------
 
 

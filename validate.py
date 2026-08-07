@@ -2093,7 +2093,11 @@ def check(path):
         # for a declared regime: THIN CROSS and LINK moves are counted and gated elsewhere
         # (R4's exemption census, the send ledger), so they are out of this check's
         # jurisdiction. An UNDECLARED cusp pile still fires exactly as before.
-        if 'THIN CROSS' in _ln.upper() or '; LINK' in _ln:
+        if ('THIN CROSS' in _ln.upper() or '; LINK' in _ln
+                or ('; BRIDGE' in _ln and ' pass ' in _ln)):
+            # '; BRIDGE ... pass p/N' is the split-bridge weave (2026-08-07): its turnarounds
+            # weld into a standing wall at height, same argument as the fabric weave. A single
+            # fat bridge carries no ' pass ' and stays in jurisdiction.
             continue
         _c = _ln.split(';')[0]
         _m = re.match(r'^G1 (?:F[\d.]+ )?X([-\d.]+) Y([-\d.]+) Z([\d.]+) E', _c)

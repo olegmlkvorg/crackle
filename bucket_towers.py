@@ -535,7 +535,8 @@ def check_paths(layers, centres, r_t, bed, press, lh, seam_off_deg, bw, w1, merg
     n_cross = 0
     for i, L in enumerate(layers):
         for j, kind in enumerate(L["kind"]):
-            if kind not in ("T", "t", "B", "R"):
+            if kind not in ("T", "t", "B", "b", "R") and not (
+                    kind and kind[0] in ("W", "V") and ":" in kind):
                 continue
             p, q = L["pts"][j], L["pts"][j + 1]
             n_cross += 1
@@ -674,7 +675,8 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg):
 
 
 def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_floor,
-          floor_pitch, r_h, bridges, merge_mm=0.0, floor_pitch_1=None, wdir=1):
+          floor_pitch, r_h, bridges, merge_mm=0.0, floor_pitch_1=None, wdir=1,
+          fabric_passes=1, bpass=None):
     """Every layer as {pts, kind, label}. pts[0] is where the layer starts; kind[j] says how the
     head reaches pts[j+1] -- E extrude, T flat metered crossing, B bridge, R floor rim,
     M the lap that welds a crossing ONTO the post it leaves and the post it lands on.
@@ -692,6 +694,7 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
     stagger 180 has to leave from the far tip and drag the chord across its own post's material,
     which the (arc-aware) window scan correctly refuses at every stagger near 180."""
     n = len(centres)
+    bpass = bpass or {}
     starts = [seam_point(centres[k], phis[k], r_t, stagger - wdir * half_rad) for k in range(n)]
     ends = [seam_point(centres[k], phis[k], r_t, stagger + wdir * half_rad) for k in range(n)]
     a0 = [phis[k] + stagger - wdir * half_rad for k in range(n)]
@@ -742,12 +745,14 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
             pts = [starts[0]]
         cross = "B" if li in bridges else ("R" if is_floor else "T")
         for k in range(n):
-            # THE CLOSING GAP DOES NOT WEAVE (kind "t", lowercase): its arrival tip is post 0's
+            # THE CLOSING GAP DOES NOT WEAVE (lowercase kind): its arrival tip is post 0's
             # trailing tip, ALREADY PRINTED at this layer's Z when the layer comes back around, so
-            # a sub-height weave pass would drive the nozzle 0.37mm into the fresh bead 545 times
+            # a sub-height weave pass would drive the nozzle deep into the fresh bead 545 times
             # a print -- validate's dive check caught exactly that (1020 hits, 2026-08-07). One
-            # gap in n stays single-strand; the other n-1 weave.
-            _ck = cross if not (cross == "T" and k == n - 1) else "t"
+            # gap in n stays single-strand; the other n-1 weave. On a BRIDGE layer that single
+            # strand keeps its FULL multiplier -- past machine.PROVEN_ROD_MM on the 8x rim, one
+            # declared rod per bridge layer, stated in the header rather than smuggled.
+            _ck = cross if not (cross in ("T", "B") and k == n - 1) else cross.lower()
             loop = tower_arc(centres[k], r_t, a0[k], wdir * 2 * half_rad, narc, ends[k])
             pts += loop
             kind += ["E"] * len(loop)
@@ -767,14 +772,37 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 wp, wk = weld(ends[k], centres[k], a0[k] + wdir * 2.0 * half_rad, -wdir)
                 pts += wp
                 kind += wk
-                # ONE MOVE, NOT A SUBDIVIDED LINE, and that is not a shortcut. A bridge is a strand
-                # pulled taut across air; every intermediate point is a place the planner can slow
-                # down and let it sag. towercoupon.py laid its proven 16.8 mm spans as single moves.
-                # Oleg 2026-08-06: "the features are all bridges", "Just different extrusion
-                # volume" -- so a solid line, an accent band and the top rim are all THIS move at a
-                # different flow, never a second pass and never a wider post.
-                pts.append(starts[nxt])
-                kind.append(_ck)
+                # EACH PASS IS STILL ONE MOVE tip to tip -- nothing subdividable, nothing for
+                # the planner to slow mid-air. What changed on 2026-08-07 is the COUNT: Oleg,
+                # reading wandering fat lines off the plate: "There must be a cap on max extrudable
+                # volume for solid bridges, lets better also split them into 3path with 1/3 line
+                # height each instead of one fat line which cant stay straight due to physics."
+                # So a crossing is N thin passes there-back-there at lh/N height steps -- fabric
+                # at cross_flow/N each, bridges at mult/N each -- and every in-air pass stays at
+                # or under machine.PROVEN_ROD_MM, which also lets bridges run at FULL speed
+                # instead of the flow-capped crawl that maximised time in air.
+                _np = (1 if (li == 0 or _ck in ("t", "b")) else
+                       (fabric_passes if _ck == "T" else bpass.get(bridges.get(li), 1)))
+                if _np > 1:
+                    _pfx = "W" if _ck == "T" else "V"
+                    _lead_tip = ends[k]
+                    _a_lead = a0[k] + wdir * 2.0 * half_rad
+                    for _p in range(1, _np + 1):
+                        pts.append(starts[nxt] if _p % 2 == 1 else _lead_tip)
+                        kind.append(f"{_pfx}:{_p}:{_np}")
+                        # THE MISSING LIP (Oleg, off the plate: "solders for sticks are good on
+                        # the left side and missing a lip on right side" -- MEASURED 1.82x more
+                        # material on trailing tips than leading, because passes 1 and N land
+                        # trailing while only the even returns touch leading). Every even return
+                        # welds a mini-lap along the leading tip's arc at its own pass height, so
+                        # the lead side gets its lip instead of a bare touch-and-turn.
+                        if _p % 2 == 0 and _p < _np and merge_mm > 0:
+                            _mp, _mk = weld(_lead_tip, centres[k], _a_lead, -wdir)
+                            pts += _mp
+                            kind += _mk
+                else:
+                    pts.append(starts[nxt])
+                    kind.append(_ck)
                 wp, wk = weld(starts[nxt], centres[nxt], a0[nxt], wdir)
                 pts += wp
                 kind += wk
@@ -1585,9 +1613,27 @@ def main():
             f"the plate cannot weld to itself. This is the defect that produced round separated "
             f"strands on 2026-08-06 and 08-07. Pass --floor-pitch-1 below {w1:.3f}, or raise --w1.")
 
+    # ---- THE ROD CAP: no in-air pass fatter than has ever pulled straight. ------------------
+    # machine.PROVEN_ROD_MM = 1.081 (v5's 2x bridges, read straight by Oleg over 60.6mm). Each
+    # bridge multiplier gets the smallest ODD pass count that brings its per-pass rod under the
+    # cap, floored at Oleg's explicit 3 ("split them into 3path"). The CLOSING gap stays a single
+    # full-mult strand (its arrival tip already stands at this Z; a sub-height pass ploughs it) --
+    # ONE declared over-cap rod per bridge layer, printed here, never smuggled.
+    _mcap = math.pi * machine.PROVEN_ROD_MM ** 2 / (4.0 * bw * lh)   # max mult one pass may carry
+    bpass = {}
+    for _m9 in set(bridges.values()):
+        _n9 = max(3, int(math.ceil(_m9 / _mcap)))
+        if _n9 % 2 == 0:
+            _n9 += 1
+        bpass[_m9] = _n9
+        if _m9 / _n9 > _mcap + 1e-9:
+            raise SystemExit(
+                f"REFUSING TO EMIT: bridge mult {_m9:g}x cannot get under the proven rod "
+                f"({machine.PROVEN_ROD_MM:g}mm) at any odd pass count -- arithmetic is broken.")
+    _fab_np = a.fabric_passes
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
                    a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1,
-                   wdir=wdir)
+                   wdir=wdir, fabric_passes=_fab_np, bpass=bpass)
     n_cross, n_merge, lap_measured = check_paths(layers, centres, r_t, (bedx, bedy), press, lh,
                                                  stag_deg, bw, w1, a.merge_mm,
                                                  phis=phis, half_rad=half_rad)
@@ -1597,8 +1643,10 @@ def main():
         ext = trav = 0.0
         for j, k in enumerate(L["kind"]):
             d = math.dist(L["pts"][j], L["pts"][j + 1])
-            if k in ("T", "t"):
-                trav += d
+            if k in ("T", "t") or (k and k[0] == "W"):
+                trav += d              # fabric crossings run at --cross-speed
+            elif k and k[0] == "V":
+                ext += d               # bridge passes run at the body/bridge speed
             else:
                 ext += d
         return ext, trav
@@ -1610,9 +1658,10 @@ def main():
     # "six towers at 4.50s STOOD, one at 0.57s roped" -- 2.6x the real 9.13 s, on the one number
     # the part's cooling is judged against. The C-channel is what made it load-bearing: an open arc
     # extrudes a third of what a closed 8.2 post did.
-    _weave = a.fabric_passes if a.cross_flow > 0 else 1   # weave multiplies the crossing path
     lay_s_ext = tow_ext / speed                      # post cooling: extruding time per layer
-    lay_s_all = tow_ext / speed + tow_trav * _weave / speed_x  # wall clock/layer, crossings incl.
+    lay_s_all = tow_ext / speed + tow_trav / speed_x  # wall clock/layer, crossings included
+    # (the weave needs no multiplier here since 2026-08-07: every pass is an explicit point in
+    # build(), so layer_mm measures the real path by construction)
     path_mm = sum(layer_mm(L)[0] for L in layers)
     trav_mm = sum(layer_mm(L)[1] for L in layers)
     floor_mm = sum(layer_mm(L)[0] for L in layers[:a.floor_layers])
@@ -1625,15 +1674,9 @@ def main():
     # travel only while --cross-flow is 0; above 0 the emitter writes those same moves as G1 with E
     # ("; THIN CROSS"). Left as travel, the summary described a file it had just written as having
     # 44.5m of dry crossings when validate.py reads the emitted file as travel=0.4m extrude=80.4m.
-    # THE WEAVE MULTIPLIES THE CROSSING PATH. layer_mm() sees the CHORD once (build() emits one T
-    # per gap; the emitter expands it to --fabric-passes moves), so every distance and clock
-    # derived from trav_mm must scale by the passes or the header describes a shorter file than
-    # the one written. Layer 1 never weaves and floor R-crossings are not T, so the scale applies
-    # to the T path only -- layer 1's single-pass T is inside floor layers on any floored part and
-    # a rounding error on a floorless one; stated, not hidden.
-    cross_mm = trav_mm * _weave if a.cross_flow > 0 else 0.0
+    cross_mm = trav_mm if a.cross_flow > 0 else 0.0
     ext_mm = path_mm + cross_mm                      # path with material coming out of the nozzle
-    dry_mm = max(0.0, trav_mm - (cross_mm / max(_weave, 1)))   # path flown dry
+    dry_mm = trav_mm - cross_mm                      # path flown dry
     n_moves = sum(len(L["kind"]) for L in layers)
     # THE LAP'S OWN LENGTH AND CLOCK, measured off the built points. It is inside path_mm already
     # (a lap extrudes), but it is the price of the feature and a price nobody states is a price
@@ -1678,7 +1721,7 @@ def main():
     # SAME DEFECT, SAME FIX: layer 1 runs at --speed1 and the crossings at --cross-speed, so a
     # single division by `speed` was a wall-clock estimate for a file that does not exist.
     mins = sum(layer_mm(Lz)[0] / (speed1 if i == 0 else speed)
-               + layer_mm(Lz)[1] * (1 if i == 0 else _weave) / (speed1 if i == 0 else speed_x)
+               + layer_mm(Lz)[1] / (speed1 if i == 0 else speed_x)
                for i, Lz in enumerate(layers)) / 60.0
     # vol_cm3 IS NOT MODELLED HERE. It is read off the E the emitter actually writes, below the
     # emission loop, because three different rates now leave this nozzle: the body's e_mm, layer 1's
@@ -1718,7 +1761,11 @@ def main():
     # ceiling: at layer 0.48 a 4x accent lands at 34.9 mm/s and an 8x rim at 17.5. Emitted only when
     # a bridge actually slows, so a file with none carries no stamp and R3d has nothing to verify --
     # a declaration nobody uses is itself a finding there.
-    _bslow = sorted({round(_speed_for(m), 1) for m in set(bridges.values())
+    # SPLIT BRIDGES: the moves are per-PASS mults (m/N) plus the closing gap's full mult, so the
+    # declared speeds and cross-sections must be the ones the moves actually carry.
+    _bmoves = ({m / bpass[m] for m in set(bridges.values())}
+               | set(bridges.values()))          # per-pass mults + closing-gap singles
+    _bslow = sorted({round(_speed_for(m), 1) for m in _bmoves
                      if _speed_for(m) < speed - 1e-9})
     if _bslow:
         w(f"; SPEED_BRIDGE={','.join(f'{v:g}' for v in _bslow)}")
@@ -1781,9 +1828,17 @@ def main():
     # multiplier can only be checked by rerunning the arithmetic that produced it, which is not an
     # independent check; mm2 per mm of path is measurable straight off the emitted E and distance,
     # which is exactly what validate.py's R4e does with this line.
-    _mm2s = sorted({round(m * bw * lh, 4) for m in bridges.values()})
-    w(f"; BRIDGE_FLOW={','.join(f'{m:.2f}' for m in sorted(set(bridges.values())))}")
+    _mm2s = sorted({round(m * bw * lh, 4) for m in _bmoves})
+    w(f"; BRIDGE_FLOW={','.join(f'{m:g}' for m in sorted(_bmoves))}")
     w(f"; BRIDGE_MM2={','.join(f'{v:.4f}' for v in _mm2s)}")
+    if any(n > 1 for n in bpass.values()):
+        w(f"; BRIDGE_PASSES=" + ",".join(f"{m:g}x->{bpass[m]}" for m in sorted(bpass))
+          + f"  (per-pass rod capped at machine.PROVEN_ROD_MM={machine.PROVEN_ROD_MM:g}mm, the "
+          f"fattest rod ever read straight; Oleg 2026-08-07: 'split them into 3path')")
+        w(f";   THE CLOSING GAP of each bridge layer stays ONE full-mult strand (its arrival tip "
+          f"already stands at")
+        w(f";   this layer's Z; a sub-height pass ploughs it). One over-cap rod per bridge layer, "
+          f"declared here.")
     # THE LAP IS DECLARED AS A LENGTH AND A CROSS-SECTION, both measurable off the emitted moves.
     # MERGE_MM is the arc length gate 6 measured on the built points, NOT the argument that asked
     # for it, so a lap that silently came out short would contradict its own stamp.
@@ -2271,30 +2326,34 @@ def main():
             seg = math.hypot(x - ppx, y - ppy)
             if seg < 1e-9:
                 continue
-            if kind in ("T", "t"):
-                # FLAT (or WOVEN), OVER AIR, NO LIFT. Licensed by geometry, not by a tag: the
-                # chord provably clears both posts' MATERIAL (check_paths gate 3, arc-aware), so
-                # there is nothing under the nozzle to plough. Lowercase "t" is the layer-closing
-                # gap: single strand, never woven (its arrival tip already stands at this Z).
-                if a.cross_flow > 0 and a.fabric_passes > 1 and li != 0 and kind == "T":
-                    # THE WEAVE. Oleg 2026-08-07: "lets do 3 moves at line height 1/3 2/3 3/3 so
-                    # we get 3 layers of fabric per layer of print" -- N passes there-back-there
-                    # at Z stepping up by lh/N, each at cross_flow/N, TOTAL flow unchanged
-                    # ("fabric should not be 2x thick"). Z rides INSIDE the moves; the header
-                    # declares '; Z_MODULATED' so validate judges the descent against the plate
-                    # floor, and each pass keeps the THIN CROSS tag its gates key on. The first
-                    # pass descends over the GAP -- open air, nothing beneath but the previous
-                    # layer's top strand one full lh below. Layer 1 never takes this branch:
-                    # there is no lh below the press gap to step into.
-                    _e_pass = seg * e_mm * a.cross_flow / a.fabric_passes
-                    for _p in range(a.fabric_passes):
-                        _tx, _ty = ((x, y) if _p % 2 == 0 else (ppx, ppy))
-                        _tz = z - lh * (a.fabric_passes - 1 - _p) / a.fabric_passes
-                        E += _e_pass
-                        w(f"G1 F{f_x} X{_tx:.3f} Y{_ty:.3f} Z{_tz:.3f} E{E:.5f} ; THIN CROSS "
-                          f"{a.cross_flow*100/a.fabric_passes:.1f}% weave {_p+1}/"
-                          f"{a.fabric_passes} -- deliberate strand, not ooze (clears both posts)")
-                elif a.cross_flow > 0 and li == 0:
+            if kind and kind[0] in ("W", "V") and ":" in kind:
+                # A WEAVE PASS, geometry from build(): kind is W:p:N (fabric) or V:p:N (bridge).
+                # Oleg 2026-08-07: "lets do 3 moves at line height 1/3 2/3 3/3" and, on bridges,
+                # "split them into 3path with 1/3 line height each instead of one fat line which
+                # cant stay straight due to physics". Z rides INSIDE the move ('; Z_MODULATED');
+                # each pass carries its regime's own tag so the gates that own it can see it.
+                _pfx, _ps, _ns = kind.split(":")
+                _p9, _n9 = int(_ps), int(_ns)
+                _tz = z - lh * (_n9 - _p9) / _n9
+                if _pfx == "W":
+                    E += seg * e_mm * a.cross_flow / _n9
+                    w(f"G1 F{f_x} X{x:.3f} Y{y:.3f} Z{_tz:.3f} E{E:.5f} ; THIN CROSS "
+                      f"{a.cross_flow*100/_n9:.1f}% weave {_p9}/{_n9} -- deliberate strand, "
+                      f"not ooze (clears both posts)")
+                else:
+                    _bm9 = Lay["mult"] / _n9
+                    _a29 = _bm9 * bw * lh
+                    _bs9 = _speed_for(_bm9)
+                    E += seg * e_mm * _bm9
+                    w(f"G1 F{round(_bs9*60)} X{x:.3f} Y{y:.3f} Z{_tz:.3f} E{E:.5f} ; BRIDGE "
+                      f"{_bm9:g}x {_a29:.4f}mm2 pass {_p9}/{_n9} rod "
+                      f"{2*math.sqrt(_a29/math.pi):.3f}mm, {seg:.2f}mm tip to tip")
+            elif kind in ("T", "t"):
+                # FLAT, OVER AIR, NO LIFT. Licensed by geometry, not by a tag: the chord provably
+                # clears both posts' MATERIAL (check_paths gate 3, arc-aware). Lowercase "t" is
+                # the layer-closing gap: single strand, never woven (its arrival tip already
+                # stands at this Z).
+                if a.cross_flow > 0 and li == 0:
                     # LAYER 1 CROSSES AT FULL LAYER-1 FLOW, pressed to the plate: on a floorless
                     # part these drapes ARE the feet-ties, and they weld only if they carry the
                     # weld's own bead. Metering them thin also made R9 read layer 1 as a BLEND of
@@ -2349,13 +2408,13 @@ def main():
                 # "the features are all bridges", "Just different extrusion volume". Solid line,
                 # accent band and top rim are THIS one move at 2x / 4x / 8x-capped, never a second
                 # pass over the same air and never a fatter post.
-                _bm = Lay["mult"] if kind == "B" else 1.0
+                _bm = Lay["mult"] if kind in ("B", "b") else 1.0
                 E += seg * (e_mm_l1 if li == 0 else e_mm * _bm)
                 # F IS STICKY, so a body move following a crossing must restore the body feedrate or
                 # the whole tower would silently print at the crossing speed.
                 if a.cross_flow > 0 and speed_x != speed and li != 0:
                     w(f"G1 F{f}")
-                if kind == "B":
+                if kind in ("B", "b"):
                     _a2 = _bm * bw * lh
                     # A SLOWED BRIDGE WRITES ITS OWN F, AND WRITES IT BACK. F is sticky, so a bridge
                     # laid at a reduced feedrate would otherwise carry that speed into the next
@@ -2507,7 +2566,8 @@ def main():
         # AGAINST THE AIRBORNE CROSSINGS, NOT n_cross. n_cross counts every T/B/R move and a floor
         # rim is SUBDIVIDED, so dividing by it read "0 laps per crossing" on a file with two laps
         # on every one of them -- a report about the artifact quoting the wrong denominator.
-        _n_air = sum(1 for Lz in layers for k in Lz["kind"] if k in ("T", "t", "B"))
+        _n_air = sum(1 for Lz in layers for k in Lz["kind"]
+                     if k in ("T", "t", "B", "b") or (k and k[0] in ("W", "V") and ":1:" in k))
         print(f"  MERGE: {n_merge} laps on {_n_air} airborne crossings "
               f"({n_merge/max(1,_n_air):.1f} each — both ends), every one measured at "
               f"{lap_measured:.4f}mm of arc ON the post's own circle to 1e-6")
