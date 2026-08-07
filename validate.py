@@ -644,7 +644,13 @@ def check(path):
         if _b.startswith(('G0 ', 'G1 ')) and _m: _zz = round(float(_m.group(1)), 3)
         _mm = re.match(r'^G1 .*X([-\d.]+) Y([-\d.]+).*E[\d.]', _b)
         if _mm:
-            _pt = (float(_mm.group(1)), float(_mm.group(2)))
+            # DECLARED IN-AIR REGIMES ARE FLAGGED, NOT DROPPED. A '; BRIDGE' / '; THIN CROSS' /
+            # '; LINK' move is deliberately airborne, declared in the header and judged by its own
+            # gates (R4e here, S4's span ledger in send.py) -- the run-length measure below must
+            # not re-refuse a span those gates already own. They still contribute their endpoints
+            # as MATERIAL (the next layer may sit on a bridge), so they stay in the point list.
+            _air = ('BRIDGE' in _l) or ('THIN CROSS' in _l) or ('; LINK' in _l)
+            _pt = (float(_mm.group(1)), float(_mm.group(2)), _air)
             _ly.setdefault(_zz, []).append(_pt)
             _ply.setdefault(_cpart, {}).setdefault(_zz, []).append(_pt)
     # ARCH GEOMETRY CANNOT BE READ BY A LAYER-PAIR CHECK, and pretending otherwise is what taught
@@ -677,33 +683,43 @@ def check(path):
     _bead = 1.2
     _mb = re.search(r'bead ([\d.]+)x', open(path).read()[:4000])
     if _mb: _bead = float(_mb.group(1))
+    # THE FRAME IS RUN LENGTH, NOT FRACTION-OF-POINTS. Corrected 2026-08-07 on Oleg's instruction
+    # ("correct the validate", choosing a 4mm floor lattice), and the correction cuts BOTH ways:
+    #   * The old ">5% of points unsupported" REFUSED a deliberate lattice whose unsupported runs
+    #     are 3-4mm -- on a machine where machine.PROVEN_AIR_MM = 16.8mm of open air is PROVEN to
+    #     pull taut as a bridge. A 5.0mm-pitch 5-layer floor was refused at 23% and the floor was
+    #     densified to 2.5 in response, adding ~30g a part, when its 4.18mm runs were never the
+    #     thing that fails. Wrong frame, so the threshold punished physics that works.
+    #   * The same 5% PASSED a genuinely floating line: one 40mm run in a dense 10k-point layer is
+    #     0.4% of points and sailed through. The quantity that decides whether material stays up is
+    #     how LONG it hangs in air before it reaches support again -- a run, not a ratio.
+    # So: consecutive unsupported points along the printed path accumulate into runs; a supported
+    # point or a >3mm jump in the sampled sequence (a path discontinuity -- one long move, whose
+    # air is its OWN declared business) closes the run; the longest run is judged against the
+    # measured bridge evidence. Declared in-air moves (BRIDGE / THIN CROSS / LINK) are excluded
+    # from runs -- their spans are owned by R4e and send.py's S4 ledger -- but their endpoints
+    # still count as material for the layer above.
     _worstz, _worstf, _opairs = None, 0.0, 0
+    _worstrun, _worstrunz = 0.0, None
     for _plab, _zs in _ogroups:
         _src = _ply[_plab] if _plab is not None else _ly
         if len(_zs) <= 2:
             continue
         for _a, _bz in zip(_zs, _zs[1:]):
             _A = _src[_a]
-            _B = _src[_bz][::max(1, len(_src[_bz]) // 400)]
+            _B = _src[_bz]
             if len(_A) < 3 or len(_B) < 3: continue
             _opairs += 1
             # INDEX THE LOWER LAYER IN FULL. Sampling it to 250 points spread over a 315mm plate
             # put the nearest sample far from every query point and reported 94% of a perfectly
             # supported layer as overhanging — the same measure-the-easy-quantity error this guard
             # exists to catch. A spatial hash at bead resolution is exact enough and O(n).
-            # THE FIRST LAYER IS WIDER THAN A BEAD, AND THE CHECK MUST KNOW IT. Layer 1 is laid
-            # into a PRESS_HARD gap carrying the body's full mm2, so it spreads to
-            # bead_w*layer_h/PRESS_HARD -- ~13mm at 2.17x0.6. Measuring support against a 2.17mm
-            # radius then reports a perfectly-covered layer 2 as 22% overhanging. A false positive
-            # is how a guard gets switched off, so the support radius uses the LOWER layer's real
-            # width when that lower layer is the pressed first one.
             # THE PRESSED FIRST LAYER IS FAR WIDER THAN A BEAD. It carries the body's mm2 into
             # a 0.1mm gap, so it lands at mm2/PRESS_HARD -- about 9mm from a 1.5mm bead. Measuring
             # support against a one-bead radius then reports a fully-covered layer 2 as 30%
-            # overhanging. A false positive is how a guard gets switched off.
+            # overhanging. A false positive is how a guard gets switched off, so the support
+            # radius uses the LOWER layer's real width when it is the pressed first one.
             _cell = _bead
-            if _lh and abs(_a - machine.PRESS_HARD) < 1e-6:
-                _cell = max(_bead, _bead * _lh / machine.PRESS_HARD)
             if _lh and abs(_a - machine.PRESS_HARD) < 1e-6:
                 _cell = max(_bead, _bead * _lh / machine.PRESS_HARD)
             _grid = set()
@@ -713,23 +729,48 @@ def check(path):
                 _cx, _cy = int(_p[0] // _cell), int(_p[1] // _cell)
                 return any((_cx + _dx, _cy + _dy) in _grid
                            for _dx in (-1, 0, 1) for _dy in (-1, 0, 1))
-            _un = sum(1 for _p in _B if not _supported(_p))
-            _frac = _un / len(_B)
+            _un = 0
+            _run, _runmax = 0.0, 0.0
+            _pprev = None            # previous NON-declared-air point, for run accumulation
+            for _p in _B:
+                if _p[2]:            # declared in-air move: not this gate's jurisdiction
+                    _pprev = None    # and a discontinuity for run purposes
+                    continue
+                _s = _supported(_p)
+                if not _s:
+                    _un += 1
+                    if _pprev is not None:
+                        _d4 = math.hypot(_p[0] - _pprev[0], _p[1] - _pprev[1])
+                        _run = (_run + _d4) if _d4 <= 3.0 else 0.0
+                    _runmax = max(_runmax, _run)
+                else:
+                    _run = 0.0
+                _pprev = _p
+            _nB = sum(1 for _p in _B if not _p[2])
+            _frac = _un / _nB if _nB else 0.0
             if _frac > _worstf: _worstf, _worstz = _frac, (_a, _bz, _plab)
-    if _worstf > 0.05:
+            if _runmax > _worstrun: _worstrun, _worstrunz = _runmax, (_a, _bz, _plab)
+    if _worstrun > machine.PROVEN_AIR_MM:
         problems.append(
-            f"OVERHANG: {_worstf*100:.0f}% of layer Z{_worstz[1]} has no material within one "
-            f"bead ({_bead}mm) of it on layer Z{_worstz[0]}"
-            f"{' in ' + _worstz[2] if _worstz[2] else ''} — that fraction of the layer is "
-            f"being extruded onto nothing. Ramp the change over more layers.")
+            f"OVERHANG: a continuous {_worstrun:.1f}mm run of layer Z{_worstrunz[1]} has no "
+            f"material within one bead ({_bead}mm) of it on layer Z{_worstrunz[0]}"
+            f"{' in ' + _worstrunz[2] if _worstrunz[2] else ''} — longer than the "
+            f"{machine.PROVEN_AIR_MM:g}mm of open air this machine has ever been seen to bridge "
+            f"(machine.PROVEN_AIR_MM). That material is being extruded onto nothing with no "
+            f"evidence it can span the gap. A declared bridge belongs on its own schedule "
+            f"('; BRIDGE'), judged by R4e and the send ledger; an undeclared run this long is a "
+            f"floating line.")
     elif _ogroups and not _opairs:
         # SAY IT OUT LOUD. A check that had nothing to measure must not read as a check that passed
         # — that is the same silence the missing-stamp failures were added to break.
         print(f"  overhang: nothing to check — no part in this file has two layers "
               f"({len(_ogroups)} part(s), so nothing is stacked on anything)")
     elif _opairs:
-        print(f"  overhang: worst layer pair {_worstf*100:.0f}% unsupported across {_opairs} "
-              f"layer pair(s){' , checked per part' if len(_ogroups) > 1 else ''}")
+        print(f"  overhang: worst unsupported RUN {_worstrun:.1f}mm (proven bridgeable: "
+              f"{machine.PROVEN_AIR_MM:g}mm); worst layer-pair fraction {_worstf*100:.0f}% "
+              f"across {_opairs} pair(s) — fraction is REPORTED, not judged: a lattice is a "
+              f"choice, and run length is what decides whether material stays up"
+              f"{', checked per part' if len(_ogroups) > 1 else ''}")
 
     # STARVED MOVES. Feedrates PERSIST in gcode, so a slow press or a stationary dab leaves every
     # following move crawling until something sets F again — long stretches ran at 24 mm3/s against

@@ -850,6 +850,15 @@ PROVEN_SEND = {
     },
 }
 
+# THE ONLY BRIDGE SPAN THAT HAS ACTUALLY HELD, mm of unsupported air. towercoupon.py, printed
+# 2026-08-05: strands across 16.80mm between 25mm-pitch towers pulled TAUT at full flow and
+# 50 mm/s. A LOWER BOUND (16.8 held; nothing says 17 does not). Lived in bucket_towers.py as
+# PROVEN_AIR_MM until 2026-08-07, when validate.py's overhang gate needed the same fact -- the
+# gate's frame was corrected from fraction-of-points to RUN LENGTH (an unsupported run IS a
+# bridge, and this is the span evidence it is judged against), and two files may not hold two
+# copies of one measurement. bucket_towers.py imports it from here.
+PROVEN_AIR_MM = 16.80
+
 # THE HEAVIEST LIP THAT HAS EVER BEEN INSERTED, per machine: mm3 of deposit per mm2 of wall in the
 # WORST per-layer regime at the C-channel's mouth lips. The lips are where every crossing, every
 # merge lap and every bridge rod-end lands, so this is the quantity that decides whether a stick

@@ -224,11 +224,11 @@ A_FIL = machine.A_FIL     # mm2 of 1.75mm filament; computed once
 SEG = 1.0                             # mm target segment on every curve and every rib
 MIN_TOWER_SEGS = 24                   # never fewer than this per tower loop, however small it is
 SEAM_SCAN_DEG = 0.25                  # resolution of the seam-window measurement
-# THE ONLY BRIDGE SPAN THAT HAS ACTUALLY HELD. towercoupon.py, printed 2026-08-05: strands across
-# 16.80 mm of unsupported air between 25 mm-pitch towers pulled TAUT at this flow and speed. It is
-# a lower bound (16.8 held; nothing says 17 does not), and it is the yardstick this file reports
+# THE ONLY BRIDGE SPAN THAT HAS ACTUALLY HELD -- moved to machine.PROVEN_AIR_MM on 2026-08-07,
+# because validate.py's overhang gate now judges unsupported RUNS against the same evidence and
+# two files may not hold two copies of one measurement. Imported, the yardstick this file reports
 # its own span against rather than quietly assuming the span is fine.
-PROVEN_AIR_MM = 16.80
+PROVEN_AIR_MM = machine.PROVEN_AIR_MM
 
 # THE FIRST FLOOR LAYER'S PITCH AS A FRACTION OF ITS OWN LANDED BEAD. 1.6 / 2.00 = 0.80, taken from
 # the 320x300 bucket that printed complete and STOOD on 2026-08-06 -- the only floor this project
