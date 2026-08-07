@@ -17,6 +17,39 @@ the file.
 
 ---
 
+## STORE THE RELATIONSHIP, NOT THE VALUE
+
+**Oleg, 2026-08-07, after the third one in a night:** *"Okey, natural evolution. 3rd sample now you
+converting to formula"*.
+
+Three constants failed the same way in one session, and each was **correct at the operating point it
+was measured at and silently wrong everywhere else**:
+
+| | was | is |
+|---|---|---|
+| first floor layer pitch | typed `2.5` | `FLOOR1_OVERLAP × w1` — a RATIO to the bead |
+| the fabric membrane | a sentence asserting it fuses | `cross_flow ≥ π·lh / (4·bead)` |
+| layer 1 full flow | the stored pair `(0.10, 2.00)` | `w1·press / (bead·lh) ≥ 1.0` |
+
+**THE TEST: does this constant's correctness depend on another parameter?** If yes, the constant is
+a frozen relationship and it will be carried somewhere it does not apply. Store the relationship;
+derive the value.
+
+**A stored PAIR is the same trap wearing two numbers.** `PROVEN_LAYER1 = (0.10, 2.00)` passed R9 and
+S1 on a file laying half the required flow, because both numbers matched and neither carried the
+LAYER HEIGHT they were measured at. `machine.py` said so in prose — *"the body's own 0.82x0.24 bead
+pressed flat"* — and prose does not fail a build. **It cost a print on 2026-08-07.**
+
+**KNOWN, UNFIXED, AND THE NEXT ONE TO BITE:** `PROVEN_SEND['k2plus']['coverage']` stores
+`(2.00, 1.6)`, whose ratio `pitch/w1 = 0.80` is **the same number as `FLOOR1_OVERLAP`** — one fact
+in two places, which is the footgun `machine.py`'s own `--tower-d` comment warns about. It is stored
+as absolutes, so it goes stale at any other layer height exactly as `PROVEN_LAYER1` did.
+
+**What is genuinely ABSOLUTE, so the rule is not applied blindly:** `temps (210, 60)` is a property
+of the filament. `cross_mms` is a speed — though the quantity that matters is `span / speed`, i.e.
+time in air, and nothing stores that either. `span_mm 17.85` is empirical, but note the file records
+16.80 mm of AIR inside a 17.85 mm chord and that ratio is nowhere.
+
 ## Names that are not what you would guess
 
 | you would write | it is actually | what happens if you guess |
