@@ -53,12 +53,113 @@ MARGIN = 0.05          # mm of bead overlap below which a joint is a butt, not a
 STEP = 0.5             # border walk step, mm
 
 
+def parse_art(path):
+    """art_bucket.py stamps its SOLVED geometry (per-post centre + mouth azimuth for both
+    rings, the exit rib, the cut outline) because it cannot be cheaply re-derived: the posts
+    come from a PNG trace plus a per-post mouth solve. WHAT THIS COSTS, honestly: the circle
+    branch re-derives its border from CMD flags by independent arithmetic; this branch takes
+    the border AS STAMPED, so a wrong stamp is caught only by the existing DECLINE (no wall
+    arcs found where the stamps claim them), not by a second derivation."""
+    posts, wrap, tower_d, exit_seg, hole = [], None, None, None, []
+    for ln in open(path):
+        if ln.startswith('; ART_POST '):
+            t = ln.split()
+            posts.append((t[2], int(t[3]), float(t[4]), float(t[5]),
+                          math.radians(float(t[6].split('=')[1]))))
+        elif ln.startswith('; ART_WRAP='):
+            m = re.search(r'ART_WRAP=([\d.]+) TOWER_D=([\d.]+)', ln)
+            wrap, tower_d = float(m.group(1)), float(m.group(2))
+        elif ln.startswith('; ART_EXIT '):
+            t = ln.split()
+            exit_seg = ((float(t[2]), float(t[3])), (float(t[4]), float(t[5])))
+        elif ln.startswith('; ART_HOLE '):
+            for tok in ln.split()[2:]:
+                if ',' in tok:
+                    x, _, y = tok.partition(',')
+                    try:
+                        hole.append((float(x), float(y)))
+                    except ValueError:
+                        break
+        elif 'BODY_START' in ln:
+            break
+    if not posts or wrap is None:
+        return None
+    return dict(posts=posts, wrap=wrap, tower_d=tower_d, exit_seg=exit_seg, hole=hole)
+
+
+def geometry_art(cmd, art):
+    """The two-ring border, from the emitter's stamps (see parse_art for what that trades)."""
+    bw = machine.SLICER_LINE_W
+    r_t = (art['tower_d'] - bw) / 2.0
+    half = math.radians(art['wrap'] / 2.0)
+    toff = math.radians((360.0 - art['wrap']) / 2.0)
+    rings = {}
+    for ring, k, x, y, mu in art['posts']:
+        rings.setdefault(ring, []).append((k, (x, y), mu))
+    cs, mus, chords = [], [], []
+    for ring in ('outer', 'inner'):
+        ps = sorted(rings.get(ring, []))
+        for k, c, mu in ps:
+            cs.append(c)
+            mus.append(mu)
+        nn = len(ps)
+        for k in range(nn):
+            _, c1, m1 = ps[k]
+            _, c2, m2 = ps[(k + 1) % nn]
+            lead = (c1[0] + r_t * math.cos(m1 + toff), c1[1] + r_t * math.sin(m1 + toff))
+            trail = (c2[0] + r_t * math.cos(m2 - toff), c2[1] + r_t * math.sin(m2 - toff))
+            chords.append((lead, trail))
+    printer = cmd.get('printer', machine.DEFAULT_PRINTER)
+    bedx, bedy = machine.BED[printer]
+    return dict(mode='art', bw=bw, cx=bedx / 2.0, cy=bedy / 2.0, n=len(cs), cs=cs, phis=mus,
+                r_t=r_t, half=half, toff=toff, wdir=1, chords=chords, r_h=None,
+                seam_th=None, exit_seg=art['exit_seg'], hole=art['hole'],
+                w1=float(cmd.get('w1', 0)) or None, h1=float(cmd.get('h1', 0)) or None,
+                lh_f=float(cmd.get('floor_layer_h', 0)) or float(cmd.get('layer_h', 0.24)),
+                floor_pitch=float(cmd.get('net_pitch', 4.0)))
+
+
+def _in_poly(pt, poly):
+    """Point-in-polygon, even-odd."""
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y) and x < x1 + (x2 - x1) * (y - y1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+def border_path_art(g):
+    """Border samples for the two-ring part: every post's MATERIAL arc + every chord.
+    Steps INSIDE the cut outline are EXEMPT-BY-DESIGN and marked: the hole-facing side of an
+    inner post's arc faces a void, and nothing can ever lap a void's side. Returns
+    [(pt, exempt)]."""
+    pts = []
+    for c, mu in zip(g['cs'], g['phis']):
+        a0 = mu - g['toff']
+        sweep = -2.0 * g['half']
+        steps = max(2, int(abs(sweep) * g['r_t'] / STEP))
+        for t in range(steps + 1):
+            a = a0 + sweep * t / steps
+            p = (c[0] + g['r_t'] * math.cos(a), c[1] + g['r_t'] * math.sin(a))
+            pts.append((p, bool(g['hole']) and _in_poly(p, g['hole'])))
+    for a, b in g['chords']:
+        m = max(1, int(math.dist(a, b) / STEP))
+        for t in range(m + 1):
+            p = (a[0] + (b[0] - a[0]) * t / m, a[1] + (b[1] - a[1]) * t / m)
+            pts.append((p, bool(g['hole']) and _in_poly(p, g['hole'])))
+    return pts
+
+
 def parse_cmd(path):
     """The generator's own invocation, from the '; CMD=' stamp. Returns {flag: value}."""
     for ln in open(path):
         if ln.startswith('; CMD='):
             toks = shlex.split(ln[7:].strip())
-            out = {}
+            out = {'_gen': toks[0] if toks else ''}
             i = 1
             while i < len(toks):
                 if toks[i].startswith('--'):
@@ -183,21 +284,23 @@ def floor_layers(path, g):
 
 
 def classify(segs, g):
-    """WALL / RIM / RASTER / FILL per segment, purely geometric."""
+    """WALL / RIM / RASTER / FILL per segment, purely geometric. Art parts have no central
+    raster disc (r_h is None): everything not wall/rim is FILL, and ATTACH tests both."""
     bw, r_t, r_h = g['bw'], g['r_t'], g['r_h']
     cx, cy = g['cx'], g['cy']
     out = []
     for (p, q, w, i) in segs:
-        rp = math.hypot(p[0] - cx, p[1] - cy)
-        rq = math.hypot(q[0] - cx, q[1] - cy)
         cls = None
         for c in g['cs']:
             if (abs(math.dist(p, c) - r_t) < 0.45 * bw
                     and abs(math.dist(q, c) - r_t) < 0.45 * bw):
                 cls = 'WALL'
                 break
-        if cls is None and max(rp, rq) <= r_h + 0.55 * w:
-            cls = 'RASTER'
+        if cls is None and r_h is not None:
+            rp = math.hypot(p[0] - cx, p[1] - cy)
+            rq = math.hypot(q[0] - cx, q[1] - cy)
+            if max(rp, rq) <= r_h + 0.55 * w:
+                cls = 'RASTER'
         if cls is None:
             for a, b in g['chords']:
                 if seg_dist(p, q, a, b) < 0.45 * w:
@@ -259,26 +362,44 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
         print(f"{path}\n  DECLINE: no '; CMD=' stamp -- geometry cannot be re-derived, so "
               f"attachment cannot be measured. Neither a pass nor a finding.")
         return 2
-    m = None
-    for ln in open(path):
-        m = m or re.search(r'rotated ([\d.]+) deg', ln)
-        if 'BODY_START' in ln:
-            break
-    if not m:
-        print(f"{path}\n  DECLINE: no stagger stamp; the border cannot be placed.")
+    art = parse_art(path) if 'art_bucket' in cmd.get('_gen', '') else None
+    if 'art_bucket' in cmd.get('_gen', '') and not art:
+        print(f"{path}\n  DECLINE: an art_bucket file with no ART_POST stamps; the border "
+              f"cannot be placed.")
         return 2
-    g = geometry(cmd, float(m.group(1)))
+    if art:
+        g = geometry_art(cmd, art)
+        border_x = border_path_art(g)
+    else:
+        m = None
+        for ln in open(path):
+            m = m or re.search(r'rotated ([\d.]+) deg', ln)
+            if 'BODY_START' in ln:
+                break
+        if not m:
+            print(f"{path}\n  DECLINE: no stagger stamp; the border cannot be placed.")
+            return 2
+        g = geometry(cmd, float(m.group(1)))
+        border_x = [(p, False) for p in border_path(g)]
     layers = floor_layers(path, g)
     if not layers:
         print(f"{path}\n  DECLINE: no '(floor latch' layers -- nothing here is a floor.")
         return 2
     max_run = max_run_flag if max_run_flag is not None else g['floor_pitch']
-    border = border_path(g)
+    border = [p for p, _ in border_x]
+    n_bexempt = sum(1 for _, e in border_x if e)
     print(f"{path}")
-    print(f"  geometry: {g['n']} posts r_t {g['r_t']:.2f} on {2*g['r_ring']:g}mm, "
-          f"r_poly {g['r_poly']:.2f}, raster disc r_h {g['r_h']:.2f}; weld margin "
-          f"{margin:g}mm, border run limit {max_run:g}mm (= --floor-pitch: the border must not "
-          f"be weaker than the lattice welds to itself)")
+    if art:
+        print(f"  geometry: {g['n']} posts (two rings) r_t {g['r_t']:.2f}, from ART_POST "
+              f"stamps CROSS-CHECKED against the emitted arcs (a wrong stamp DECLINES); weld "
+              f"margin {margin:g}mm, border run limit {max_run:g}mm (= --net-pitch); "
+              f"{n_bexempt} border steps inside the cut are exempt-by-design (a void's side "
+              f"cannot be lapped)")
+    else:
+        print(f"  geometry: {g['n']} posts r_t {g['r_t']:.2f} on {2*g['r_ring']:g}mm, "
+              f"r_poly {g['r_poly']:.2f}, raster disc r_h {g['r_h']:.2f}; weld margin "
+              f"{margin:g}mm, border run limit {max_run:g}mm (= --floor-pitch: the border must "
+              f"not be weaker than the lattice welds to itself)")
     fails = 0
     for li, (label, z, gap, raw) in enumerate(layers):
         segs = classify(raw, g)
@@ -318,9 +439,13 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
                  if v is not big and len(v) > 3}    # <=3 segs = a stub, reported via runs anyway
         one_body = not loose
 
-        # ATTACH -- the border walk.
+        # ATTACH -- the border walk. Exempt steps (the cut-facing side of an inner-ring arc,
+        # art parts only) neither hold nor extend a run: nothing can lap a void's side.
         held = []
-        for bp in border:
+        for bp, ex in border_x:
+            if ex:
+                held.append(None)
+                continue
             ok = False
             for o in near(grid, cell, bp, bp, bead):
                 if o[4] in ('FILL', 'RASTER'):
@@ -331,14 +456,15 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
             held.append(ok)
         runs, cur_run, worst = [], 0.0, 0.0
         for h in held + [True]:
-            if h:
+            if h is False:
+                cur_run += STEP
+            else:
                 if cur_run:
                     runs.append(cur_run)
                 worst = max(worst, cur_run)
                 cur_run = 0.0
-            else:
-                cur_run += STEP
-        weld_frac = sum(held) / len(held)
+        _judged = [h for h in held if h is not None]
+        weld_frac = (sum(_judged) / len(_judged)) if _judged else 1.0
 
         # NO PILE -- DEPTH per 0.4mm cell, in bead heights. Two instruments were tried and
         # retired here, each for measuring the wrong quantity: whole-cell dilation inflated a
@@ -375,15 +501,19 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
         for k2, v in cells.items():
             tot = sum(c for _, c in v)
             if tot > PILE_DEPTH:
-                dth = math.atan2((k2[1] + .5) * pc - g['cy'], (k2[0] + .5) * pc - g['cx']) \
-                      - g['seam_th']
-                dth = (dth + math.pi) % (2 * math.pi) - math.pi
-                # the comb closes at theta=0 while the seam tip sits a few degrees off it, so
-                # the corridor spans from 0 to the seam angle plus the flag's margin either side
-                th_abs = math.atan2((k2[1] + .5) * pc - g['cy'], (k2[0] + .5) * pc - g['cx'])
-                lo = min(0.0, g['seam_th']) - math.radians(seam_deg)
-                hi = max(0.0, g['seam_th']) + math.radians(seam_deg)
-                if seam_deg > 0 and lo <= th_abs <= hi:
+                ctr = ((k2[0] + .5) * pc, (k2[1] + .5) * pc)
+                if g.get('seam_th') is not None:
+                    # circle parts: the angular seam corridor (entry/exit plumbing at theta 0)
+                    th_abs = math.atan2(ctr[1] - g['cy'], ctr[0] - g['cx'])
+                    lo = min(0.0, g['seam_th']) - math.radians(seam_deg)
+                    hi = max(0.0, g['seam_th']) + math.radians(seam_deg)
+                    exempt_here = seam_deg > 0 and lo <= th_abs <= hi
+                else:
+                    # art parts: the EXIT RIB corridor -- one declared radial strip per layer,
+                    # same jurisdiction as the circle seam. --seam-exempt-deg 0 disables it.
+                    exempt_here = (seam_deg > 0 and g.get('exit_seg')
+                                   and seg_dist(ctr, ctr, *g['exit_seg']) <= 1.5)
+                if exempt_here:
                     seam_piles[k2] = tot
                 else:
                     piles[k2] = tot

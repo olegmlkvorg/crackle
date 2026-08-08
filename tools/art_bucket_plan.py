@@ -163,15 +163,19 @@ def offset_inward(pts, d, resmooth=6.0):
 tip_off = math.radians((360.0 - WRAP) / 2.0)
 
 
-def ring_posts(poly, pitch):
+def ring_posts(poly, pitch, phase=0.0):
     """Equal-arc post centres + outward-normal angles along a closed CCW polyline.
 
     MODULE LEVEL since 2026-08-08 (was nested in main): the emitter art_bucket.py imports this,
-    and two implementations of one placement is the drift this repo keeps paying for."""
+    and two implementations of one placement is the drift this repo keeps paying for.
+    `phase` (mm of arc, default 0 = historic placement byte for byte) rotates the whole family
+    along the outline: where post 0 lands is otherwise an accident of where the TRACE started,
+    and the emitter measured that accident parking a post astride a sharp corner no mouth
+    rotation could clear (three-post full sweep bottomed at 0.0875mm)."""
     dd = np.hypot(*np.diff(poly, axis=0).T)
     ss = np.concatenate([[0], np.cumsum(dd)])
     n = max(6, int(round(ss[-1] / pitch)))
-    qs = np.linspace(0, ss[-1], n, endpoint=False)
+    qs = (np.linspace(0, ss[-1], n, endpoint=False) + phase) % ss[-1]
     cx = np.interp(qs, ss, poly[:, 0])
     cy = np.interp(qs, ss, poly[:, 1])
     cs = np.column_stack([cx, cy])
