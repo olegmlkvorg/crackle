@@ -1984,8 +1984,16 @@ def main():
     # does not reproduce is a wrong number wearing a measurement's clothes. --pitch p yields count
     # nc for p in [circ/nc, circ/(nc-1)), so the midpoint of that interval is taken and then
     # VERIFIED against the generator's own arithmetic; a hint that fails to reproduce is dropped.
+    # THE SPAN'S EVIDENCE IS THE SEND LEDGER, NOT ONLY THE COUPON CONSTANT. PROVEN_AIR_MM stays
+    # the yardstick for UNDECLARED overhang runs (validate's jurisdiction, and 16.8 is right
+    # there); a DECLARED bridge's evidence is machine.PROVEN_SEND span_mm -- accepted plates.
+    # Before 2026-08-08 this header called every long span UNPROVEN even after one had been
+    # printed, accepted and ledgered, which is a stale claim in the flattering-to-caution
+    # direction and still a stale claim.
+    _span_proof = next((t for t in machine.PROVEN_SEND.get(a.printer, {}).get("span_mm", [])
+                        if gap_chord <= t[0] + 1e-6), None)
     pitch_hint = None
-    if bridge_air > PROVEN_AIR_MM:
+    if bridge_air > PROVEN_AIR_MM and not _span_proof:
         for nc in range(n_tow + 1, n_tow + 40):
             _air = air_for_count(cx, cy, r_ring, r_t, bw, nc, half_deg)
             if _air is not None and _air <= PROVEN_AIR_MM:
@@ -2298,7 +2306,11 @@ def main():
           f"{a.bottom_bridge_every} instead of every {a.bridge_every},")
         w(f";           which is {n_brace} braced layers up to z "
           f"{press + (a.floor_layers + a.bottom_brace_layers - 1)*lh:.2f}mm.")
-    if bridge_air > PROVEN_AIR_MM:
+    if _span_proof:
+        w(f";        PROVEN at this length: an accepted plate carried {_span_proof[0]:.2f}mm "
+          f"tip-to-tip spans to completion")
+        w(f";        (machine.PROVEN_SEND span_mm: {_span_proof[1][:110]}...)")
+    elif bridge_air > PROVEN_AIR_MM:
         w(f";        !! {bridge_air:.2f}mm is {100*bridge_air/PROVEN_AIR_MM-100:.0f}% LONGER than "
           f"the {PROVEN_AIR_MM:g}mm that has actually held.")
         w(f";        This span is UNPROVEN. It is not a small extrapolation and it is the first "
@@ -2489,8 +2501,12 @@ def main():
     w(f";    machine's bed_mesh covers only 5..345. That edge has NO mesh compensation, on a bed "
       f"measured to")
     w(f";    vary 0.652mm. Plate margin is {min(bedx, bedy) - (cx+_outer):.2f}mm per side.")
-    w(f";  3 A BRIDGE SPAN ~{bridge_air/PROVEN_AIR_MM:.1f}x ANYTHING THAT HAS HELD "
-      f"({bridge_air:.2f}mm against {PROVEN_AIR_MM:g}mm).")
+    if _span_proof:
+        w(f";  3 A BRIDGE SPAN INSIDE ACCEPTED-PLATE EVIDENCE ({bridge_air:.2f}mm; ledger carries "
+          f"{_span_proof[0]:.2f}mm tip to tip).")
+    else:
+        w(f";  3 A BRIDGE SPAN ~{bridge_air/PROVEN_AIR_MM:.1f}x ANYTHING THAT HAS HELD "
+          f"({bridge_air:.2f}mm against {PROVEN_AIR_MM:g}mm).")
     w(f";  All three are combined in one part. Oleg: \"test it on maximum, absolute maximum size. No "
       f"no safety")
     w(f";  gaps. Maybe, like, super small, like, one millimetre safety gap\", and \"fail is ok\".")
@@ -2546,8 +2562,8 @@ def main():
       + (f" (try {pitch_hint[0]:.2f})." if pitch_hint else "."))
     w(f";   STOP AND LOOK AT THAT LAYER. It is the one number in this part that is outside its own "
       f"evidence."
-      if bridge_air > PROVEN_AIR_MM else
-      f";   The span is inside what has held, so a sag here would be new information.")
+      if (bridge_air > PROVEN_AIR_MM and not _span_proof) else
+      f";   The span is inside accepted-plate evidence, so a sag here would be new information.")
     w(f"; THROUGHOUT: strings across the gaps are EXPECTED. There is no retraction in this project "
       f"and the")
     w(f";   head crosses open air {n_tow} times a layer. The coupon printed the same web and stood.")
@@ -2887,7 +2903,10 @@ def main():
               f"each end, which is what Oleg objected to on 2026-08-06")
     print(f"  bridge span {gap_chord:.2f}mm tip to tip, {bridge_air:.2f}mm of UNSUPPORTED AIR "
           f"measured on the chord")
-    if bridge_air > PROVEN_AIR_MM:
+    if _span_proof:
+        print(f"     PROVEN: an accepted plate carried {_span_proof[0]:.2f}mm spans to completion "
+              f"(machine.PROVEN_SEND span_mm)")
+    elif bridge_air > PROVEN_AIR_MM:
         print(f"  !! that span is {100*bridge_air/PROVEN_AIR_MM-100:.0f}% LONGER than the "
               f"{PROVEN_AIR_MM:g}mm that has actually held tonight — UNPROVEN, and the first thing "
               f"to watch")
@@ -2909,10 +2928,14 @@ def main():
           f"never descends (both checked, not claimed)")
     print("\n  WHAT THIS FILE DOES NOT KNOW")
     print("   - whether a ring of towers holds together as a BUCKET. Nothing here has printed.")
-    print(f"   - whether a {bridge_air:.2f}mm bridge lands or sags. {PROVEN_AIR_MM:g}mm did, on a "
-          f"row of six towers, which is a")
-    print("     different part with different air around it, and that figure is a lower bound "
-          "rather than a limit.")
+    if _span_proof:
+        print(f"   - (the {bridge_air:.2f}mm bridge span is no longer on this list: an accepted "
+              f"plate carried {_span_proof[0]:.2f}mm to completion, machine.PROVEN_SEND)")
+    else:
+        print(f"   - whether a {bridge_air:.2f}mm bridge lands or sags. {PROVEN_AIR_MM:g}mm did, on a "
+              f"row of six towers, which is a")
+        print("     different part with different air around it, and that figure is a lower bound "
+              "rather than a limit.")
     # n_tow, NOT 13. This line was typed when --pitch 25 gave 13 towers and it kept saying 13 while
     # the part on the plate had 16 gaps in its wall — a constant in a report about the artifact.
     print(f"   - anything about what it can CARRY. The wall has {n_tow} gaps in it and the floor is "

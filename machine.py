@@ -690,7 +690,10 @@ PROVEN_LAYER1 = {
     # bamboo bucket's base at these numbers was accepted by Oleg the same day. 2.00 landed into a
     # 0.10 gap is 0.200 mm2/mm, which is the body's own 0.82x0.24 bead (0.197) pressed flat: layer
     # 1 is not over-extruded here, it is the same material 2.4x thinner and so 2.4x wider.
-    "k2plus": [(0.10, 2.00)],
+    # 0.25 x 3.94 -- read off two zladder plates by Oleg 2026-08-07 (cited as the R9 coupon since),
+    # and then carried by the f3x4r1c 339.5x304.8 bucket that COMPLETED at 518 min and was
+    # accepted with a photo 2026-08-08: "Perfect bucket".
+    "k2plus": [(0.10, 2.00), (0.25, 3.94)],
 }
 
 
@@ -723,7 +726,7 @@ PROVEN_LAYER1 = {
 # THE LAST FIELD OF EVERY TUPLE IS PROVENANCE and it is not decoration. A value with no story is a
 # value nobody can argue with, which is how an invented constant labelled MEASURED survived here
 # once already.
-SEND_LEDGER_VERSION = "2026-08-06.2"
+SEND_LEDGER_VERSION = "2026-08-08.1"
 
 # MOTION-ONLY MINUTES PAST WHICH A COUPON-BACKED VALUE IS NO LONGER ENOUGH ON ITS OWN.
 # A coupon proves a value AT COUPON SCALE. The stencil ran 5.7 min and the bore gauge 20.5 min;
@@ -750,6 +753,7 @@ PROVEN_SEND = {
             # with zero margin, it was recorded hours before the run as likely to pinhole, and it
             # came off as separated strands. It sits BETWEEN two proven points, which is exactly
             # what a list of watched pairs is for and a threshold is not.
+            (3.94, 3.152, "layer 1 at w1 3.94 on the FLOOR1_OVERLAP pitch (0.8 x w1). Oleg, with photo, 2026-08-08: 'Perfect bucket' -- the f3x4r1c 339.5x304.8 bucket, state=complete at 518 min, all 16 fabric panels even, spans taut on all 79 bridge layers, qa_weld-gated floor attached. First max-size bucket ever to complete. bucket_towers_..._f3x4r1c_x18_j2.gcode, sent and accepted 2026-08-08."),
         ],
         # (purge mm of filament, lead-in fat multiplier or None, stationary mm, provenance)
         "prime": [
@@ -781,6 +785,11 @@ PROVEN_SEND = {
             (17.85, "every one of the 7000 bridge and 62776 thin-cross moves in the 320x300 bucket "
                     "that stood measures exactly 17.85mm. Its own header calls 16.8mm of that "
                     "UNSUPPORTED AIR, and 16.8 is the only span this project has ever seen hold."),
+            # 3.6x the previous evidence in one step, and it went out as a RECORDED OVERRIDE, not
+            # a quiet bet: five sends carried Oleg's verbatim words against this exact FAIL row
+            # before the plate finally converted them into this entry.
+            (63.8417, "62.25mm of unsupported air per crossing, 79 bridge layers, every span "
+                      "pulled taut to the top. Oleg, with photo, 2026-08-08: 'Perfect bucket' -- the f3x4r1c 339.5x304.8 bucket, state=complete at 518 min, all 16 fabric panels even, spans taut on all 79 bridge layers, qa_weld-gated floor attached. First max-size bucket ever to complete. bucket_towers_..._f3x4r1c_x18_j2.gcode, sent and accepted 2026-08-08."),
         ],
         # (mm/s on '; THIN CROSS' moves, provenance)
         "cross_mms": [
@@ -788,6 +797,7 @@ PROVEN_SEND = {
                    "all, and everything this project has printed has laid material at 50."),
             (100.0, "VERIFIED LIVE on the machine: 44 samples at 100 mm/s against 65 at 50, taken "
                     "at z=3.22. Sampling the floor instead would have proved the opposite."),
+            (80.0, "every THIN CROSS in the accepted bucket ran at 80. Oleg, with photo, 2026-08-08: 'Perfect bucket' -- the f3x4r1c 339.5x304.8 bucket, state=complete at 518 min, all 16 fabric panels even, spans taut on all 79 bridge layers, qa_weld-gated floor attached. First max-size bucket ever to complete. bucket_towers_..._f3x4r1c_x18_j2.gcode, sent and accepted 2026-08-08."),
         ],
         # (nozzle C, bed C, provenance)
         "temps": [
@@ -797,6 +807,9 @@ PROVEN_SEND = {
                       "stood. Bed 60 is the mid of the filament's rated 50-70 and the minimum that "
                       "works -- 0 gave 'spagetti, no adhesion' twice and 120 held PLA above Tg so "
                       "a pressed floor never set."),
+            (210, 80, "bed 80 was Oleg's own call ('bump temp to 80 so first layer is not so "
+                      "glass', 2026-08-08) and the accepted bucket printed its whole 518 min on "
+                      "it. Oleg, with photo, 2026-08-08: 'Perfect bucket' -- the f3x4r1c 339.5x304.8 bucket, state=complete at 518 min, all 16 fabric panels even, spans taut on all 79 bridge layers, qa_weld-gated floor attached. First max-size bucket ever to complete. bucket_towers_..._f3x4r1c_x18_j2.gcode, sent and accepted 2026-08-08."),
         ],
         # (bore mm, provenance) -- EMPTY, AND THAT IS THE HONEST STATE.
         # The bore was guessed twice, printed twice and wrong twice before a gauge was printed, and
