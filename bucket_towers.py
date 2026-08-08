@@ -650,7 +650,7 @@ def floor_check(r_h, bw, r_ring, bore_r, wrap_deg, mouth="in", r_t_wall=None):
     return edge, inner
 
 
-def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
+def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg, pitch=None, wbead=None):
     """Closed loops hugging the floor's border: chord-parallel segments welded to arcs around
     every post foot, stepped inward by ~0.9 bead until they overlap the lattice disc.
 
@@ -664,10 +664,17 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
     raster luck lands. Measured and reported, ring by ring.
     """
     n = len(centres)
+    # PER-LAYER LINE WIDTH. Layer 1 lays w1-wide beads (3.94 here), so its rings pitch at
+    # 0.8 x w1 like its own lattice -- six bead-pitch rings under w1 metering crammed five beads
+    # of filament into every bead of space: the mounded outer line and the cracking extruder of
+    # the v14 plate ("why so much filament on outer line? the head started cracking on second
+    # loop"). Upper floors keep exact bead pitch.
+    pitch = pitch or bw
+    wbead = wbead or bw
     rings = []
     i = 0
     while True:
-        d = (1.0 + 1.0 * i) * bw       # first ring one bead inside the border, then bead pitch:
+        d = (1.0 + 1.0 * i) * pitch    # first ring one line-pitch inside the border, then pitch:
         rho = r_t + d                  # edges butt -- welded neighbours, never overlapped
         segs = []                     # per gap: (A, B) endpoints of the inset chord segment
         ok = True
@@ -709,7 +716,7 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
         # regen (caught in the report before the plate).
         if ok and segs:
             _minsegr = min(math.hypot(P[0] - cx, P[1] - cy) for AB2 in segs for P in AB2)
-            if _minsegr < r_h + bw:
+            if _minsegr < r_h + wbead:
                 ok = False
         if not ok:
             break
@@ -725,7 +732,7 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
                 # 165.7 here) while its endpoints stay outside -- caught by measuring the emitted
                 # radii, invisible to an endpoint test.
                 _pr = math.hypot(px - cx, py - cy)
-                _lim = r_h + 0.5 * bw
+                _lim = r_h + wbead
                 if _pr < _lim and _pr > 1e-9:
                     px = cx + (px - cx) * _lim / _pr
                     py = cy + (py - cy) * _lim / _pr
@@ -752,7 +759,7 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
                 # Clamp those points to the disc edge: the arc detours ALONG the raster boundary,
                 # butt beside it, and rejoins the true arc where it re-emerges.
                 _pr = math.hypot(px - cx, py - cy)
-                _lim = r_h + 0.5 * bw
+                _lim = r_h + wbead
                 if _pr < _lim:
                     px = cx + (px - cx) * _lim / _pr
                     py = cy + (py - cy) * _lim / _pr
@@ -1783,9 +1790,11 @@ def main():
     _fab_np = a.fabric_passes
     _rings = (boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG)
               if a.floor_layers else [])
-    _rings_l1 = _rings
-    # THE SKIRT IS GONE (same read: "remove brim") -- it lived from 04:15 to 05:15 and its git
-    # history holds the geometry if it ever earns a return.
+    # LAYER 1'S OWN RINGS: w1-wide lines at the 0.8 x w1 overlap law its lattice already obeys.
+    _rings_l1 = (boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG,
+                                pitch=0.8 * w1, wbead=w1)
+                 if a.floor_layers else [])
+    # THE SKIRT IS GONE ("remove brim") -- git history holds it if it ever earns a return.
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
                    a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1,
                    wdir=wdir, fabric_passes=_fab_np, bpass=bpass, rings=_rings,
