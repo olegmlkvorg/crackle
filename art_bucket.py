@@ -327,9 +327,12 @@ def refine_to_zero(poly, cs, ph, stag, r_t, half_rad, toff, pitch, label, phase=
 #      buffers of that region -- distance d from chords AND feet everywhere, no healing,
 #      nothing to bowtie.
 def floor_region_outer(cs, mus, r_t, toff):
+    # the chord strips are TOPOLOGICAL GLUE, 0.01mm: a 0.05 strip pushed every rail 0.05
+    # further from the border, and 0.656+0.05+join noise landed the whole brim ring ON the
+    # weld test's 0.77 threshold -- qa_weld read 36% of the border unwelded by microns.
     chords = ring_chords(cs, mus, r_t, toff)
     chain = unary_union([Point(tuple(c)).buffer(r_t, quad_segs=48) for c in cs]
-                        + [LineString(ch).buffer(0.05, quad_segs=8) for ch in chords])
+                        + [LineString(ch).buffer(0.01, quad_segs=8) for ch in chords])
     best = None
     for part in (chain.geoms if isinstance(chain, MultiPolygon) else [chain]):
         for ring in part.interiors:
@@ -347,7 +350,7 @@ def hole_region_inner(cs, mus, r_t, toff):
     chain. Outward buffers of this are the hole-ring rails."""
     chords = ring_chords(cs, mus, r_t, toff)
     chain = unary_union([Point(tuple(c)).buffer(r_t, quad_segs=48) for c in cs]
-                        + [LineString(ch).buffer(0.05, quad_segs=8) for ch in chords])
+                        + [LineString(ch).buffer(0.01, quad_segs=8) for ch in chords])
     part = max((chain.geoms if isinstance(chain, MultiPolygon) else [chain]),
                key=lambda p: p.area)
     return Polygon(part.exterior)
@@ -392,6 +395,83 @@ def ring_loops_in(HR, depths):
         for part in poly_parts(HR.buffer(d, quad_segs=24)):
             out.append((i, thin([(x, y) for x, y in part.exterior.coords])))
     return out
+
+
+def wedge_loops(cs, mus, r_t, toff, w_lo=0.80, w_hi=2.30, seg=1.0):
+    """One elongated LOOP per tip WEDGE, hung off the crossing chord itself.
+
+    Where a crossing grazes its own post at a shallow angle, the chord runs 0.8-2.3mm off
+    the arc for 8-20mm: too far for the chord and arc beads to weld each other (0.77 is the
+    weld reach), and on the AIR side of the border where no rail can ever sit -- qa_weld
+    measured 17.5mm unwelded runs there, all of them this wedge. The loop goes out along a
+    line 0.4mm off the CHORD and back along a line 0.4mm off the ARC, joined at the far end:
+    each side welds its wall (0.4 < 0.77) and the crossover ties the sides, so the chord is
+    stitched to the arc along the whole wedge. Depth stays under the 2.7 pile limit
+    everywhere: at the narrow end the two sides nearly merge (2.0) beside wall edges at ~0.2
+    each = 2.4; mid-wedge each side reads ~1.0 + its own wall edge. It is ATTACHED TO THE
+    CHORD (a 0.4mm hop over air), never through a bead -- a stub from the brim rails would
+    cross the arc at 3.0 deep.
+
+    Returns {chord_index: (attach_pt, loop_pts)}: attach ON the chord, loop starting and
+    ending within a hop of it."""
+    n = len(cs)
+    ch = ring_chords(cs, mus, r_t, toff)
+    out = {}
+    for k, (p, q) in enumerate(ch):
+        L = math.dist(p, q)
+        ux, uy = (q[0] - p[0]) / L, (q[1] - p[1]) / L
+        for c, from_p in ((cs[k], True), (cs[(k + 1) % n], False)):
+            samples = []
+            s = 0.0
+            while s <= L:
+                x = (p[0] + ux * s) if from_p else (q[0] - ux * s)
+                y = (p[1] + uy * s) if from_p else (q[1] - uy * s)
+                d0 = math.hypot(x - c[0], y - c[1])
+                w = d0 - r_t
+                if w > w_hi:
+                    break
+                if w >= w_lo:
+                    samples.append(((x, y), d0, w))
+                s += seg
+            if len(samples) < 3:
+                continue
+            near_chord = [(c[0] + (pt[0] - c[0]) * (d0 - 0.4) / d0,
+                           c[1] + (pt[1] - c[1]) * (d0 - 0.4) / d0)
+                          for pt, d0, w in samples]
+            near_arc = [(c[0] + (pt[0] - c[0]) * (r_t + 0.4) / d0,
+                         c[1] + (pt[1] - c[1]) * (r_t + 0.4) / d0)
+                        for pt, d0, w in samples]
+            attach = samples[0][0]
+            loop = near_chord + near_arc[::-1]
+            out.setdefault(k, []).append((attach, loop))
+    return out
+
+
+def chord_with_wedges(cur, nxt, wedges, seg):
+    """The rim chord cur->nxt with each wedge loop spliced in at its attach point: hop off
+    the chord 0.4mm, run the loop, hop back to the same chord point, continue. Returns
+    (pts, kinds) -- chord body 'R', wedge detours 'E' (full floor flow: they are welds)."""
+    body = latch.line_pts(cur, nxt, seg)
+    if not wedges:
+        return body, ["R"] * len(body)
+    pts, kinds = [], []
+    assign = {}
+    for attach, loop in wedges:
+        j = min(range(len(body)), key=lambda i: math.dist(body[i], attach))
+        assign.setdefault(j, []).append(loop)
+    for i, bp in enumerate(body):
+        pts.append(bp)
+        kinds.append("R")
+        for loop in assign.get(i, []):
+            hop = latch.line_pts(bp, loop[0], seg)
+            pts += hop
+            kinds += ["E"] * len(hop)
+            pts += loop[1:]
+            kinds += ["E"] * (len(loop) - 1)
+            back = latch.line_pts(loop[-1], bp, seg)
+            pts += back
+            kinds += ["E"] * len(back)
+    return pts, kinds
 
 
 def hatch_runs(region, pitch, angle_deg, min_len=1.5):
@@ -482,17 +562,33 @@ def monotone_columns(runs, angle_deg):
     return cols
 
 
-def chain_hatch(runs, region, hole_block, start, seg, angle_deg):
-    """One-stroke chain: monotone-column serpentines, columns joined by rail walks (the rail
-    beads repeat at the same XY every floor layer, so a walk is supported and welded; a
-    straight cross-region link is neither -- it floated 42.8mm on the first emission and drew
-    stray lines across the art). Returns points EXCLUDING `start`."""
+def lane_walk(lanes, lane_ctr, cur, target, seg):
+    """A LONG transition rides a LANE -- a closed track buffered INSIDE the net region, so
+    its stubs cross only strand rows (point crossings, 2.0 deep, pass). Walking the rails
+    themselves stacked every transition onto the same neck stretches beside the art hole:
+    qa_weld read 4 passes deep. Lanes at three depths are used in ROTATION so two walks in
+    one layer land on different tracks and cannot stack. Returns pts."""
+    for tries in range(len(lanes)):
+        lane = lanes[(lane_ctr[0] + tries) % len(lanes)]
+        if not poly_parts(lane):
+            continue
+        lane_ctr[0] += 1 + tries
+        out = list(walk_boundary(lane, tuple(cur), tuple(target), seg))
+        if out and math.dist(out[-1], tuple(target)) > 1e-9:
+            out += latch.line_pts(out[-1], tuple(target), seg)
+        return out
+    return latch.line_pts(tuple(cur), tuple(target), seg)
+
+
+def chain_hatch(runs, lanes, lane_ctr, hole_block, start, seg, angle_deg):
+    """One-stroke chain: monotone-column serpentines; short neighbour links straight, long
+    transitions as rotated lane walks (a straight cross-region link floated 42.8mm on the
+    first emission; a rail walk piled 4 deep on the second). Returns pts EXCLUDING start."""
     cols = monotone_columns(runs, angle_deg)
     out = []
     cur = np.array(start)
     todo = [c for c in cols if c]
     while todo:
-        # nearest column by its nearest END row
         best = None
         for ci, col in enumerate(todo):
             for rev in (False, True):
@@ -505,27 +601,19 @@ def chain_hatch(runs, region, hole_block, start, seg, angle_deg):
         col = todo.pop(ci)
         if rev:
             col = col[::-1]
-        first = True
         for (x0, x1, a, b) in col:
             if math.dist(cur, b) < math.dist(cur, a):
                 a, b = b, a
             link = LineString([tuple(cur), tuple(a)])
             if link.length > 1e-9:
-                if first and (link.length > 6.0 or link.intersects(hole_block)):
-                    out += walk_boundary(region, tuple(cur), tuple(a), seg)
-                    if out and math.dist(out[-1], tuple(a)) > 1e-9:
-                        out += latch.line_pts(out[-1], tuple(a), seg)
-                elif link.length > 6.0 or link.intersects(hole_block):
-                    # a long hop INSIDE a column means the rows shifted under the hatch --
-                    # rail-walk it too rather than float it
-                    out += walk_boundary(region, tuple(cur), tuple(a), seg)
+                if link.length > 6.0 or link.intersects(hole_block):
+                    out += lane_walk(lanes, lane_ctr, cur, a, seg)
                     if out and math.dist(out[-1], tuple(a)) > 1e-9:
                         out += latch.line_pts(out[-1], tuple(a), seg)
                 else:
                     out += latch.line_pts(tuple(cur), tuple(a), seg)
             out += latch.line_pts(tuple(a), tuple(b), seg)
             cur = np.array(b)
-            first = False
     return out
 
 
@@ -773,13 +861,17 @@ def main():
     nh, nh1 = 3, 2
     net1_pitch = a.net_pitch_1 if a.net_pitch_1 else round(w1 / FLOOR1_OVERLAP, 3)
 
+    o_wedges = wedge_loops(o_cs, o_mu, r_t, toff)
+    i_wedges = wedge_loops(i_cs, i_mu, r_t, toff)
+
     def floor_parts(lpx, nrx, nhx, netp, ang):
         rings = ring_loops_out(FR, [lpx * (1 + i) for i in range(nrx)])
         hrings = ring_loops_in(HR, [lpx * (1 + i) for i in range(nhx)])
         N = FR.buffer(-lpx * nrx, quad_segs=24).difference(
             HR.buffer(lpx * nhx, quad_segs=24))
         runs = hatch_runs(N, netp, ang)
-        return rings, hrings, N, runs
+        lanes = [N.buffer(-1.2 * (i + 1), quad_segs=16) for i in range(3)]
+        return rings, hrings, N, runs, lanes
 
     # exit rib: nearest inner tip to outer post 0's trailing tip, gated off the hole
     start0 = trailing(0)
@@ -796,7 +888,8 @@ def main():
         raise SystemExit("REFUSING TO EMIT: the floor exit rib crosses the art hole.")
 
     def inner_rim_circuit(entry_pt, start_k):
-        """Inner posts + EXTRUDED chords starting at start_k's trailing tip, full circuit."""
+        """Inner posts + EXTRUDED chords starting at start_k's trailing tip, full circuit.
+        Each chord carries its wedge loops (chord_with_wedges)."""
         pts, kinds = [], []
         t0 = tips_of(i_cs[start_k], i_mu[start_k], r_t, toff)[1]
         pts += latch.line_pts(entry_pt, t0, SEG)
@@ -807,9 +900,9 @@ def main():
             pts += arc
             kinds += ["E"] * len(arc)
             nxt = tips_of(i_cs[(k2 + 1) % n_in], i_mu[(k2 + 1) % n_in], r_t, toff)[1]
-            lnk = latch.line_pts(pts[-1], nxt, SEG)
-            pts += lnk
-            kinds += ["R"] * len(lnk)
+            cp, ck = chord_with_wedges(pts[-1], nxt, i_wedges.get(k2, []), SEG)
+            pts += cp
+            kinds += ck
         return pts, kinds
 
     def floor_layer(li, entry):
@@ -819,7 +912,8 @@ def main():
         nhx = nh1 if li == 0 else nh
         netp = net1_pitch if li == 0 else a.net_pitch
         ang = 90.0 * (li % 2)
-        rings, hrings, N, runs = floor_parts(lpx, nrx, nhx, netp, ang)
+        rings, hrings, N, runs, lanes = floor_parts(lpx, nrx, nhx, netp, ang)
+        lane_ctr = [li]                              # rotate lane choice per layer too
         pts, kinds = [], []
         cur = entry
 
@@ -838,7 +932,7 @@ def main():
             go(lnk)
             go(loop[j0 + 1:] + loop[:j0 + 1])
         net_start = cur
-        go(chain_hatch(runs, N, hole_block, net_start, SEG, ang))
+        go(chain_hatch(runs, lanes, lane_ctr, hole_block, net_start, SEG, ang))
         for hi, (_, loop) in enumerate(hrings):                  # hole rings, outermost first
             j0 = min(range(len(loop)), key=lambda j2: math.dist(loop[j2], cur))
             if LineString([cur, loop[j0]]).intersects(hole_block):
@@ -855,12 +949,15 @@ def main():
         kinds += rk
         cur = pts[-1]
         go(latch.line_pts(cur, start0, SEG))                     # the exit rib
-        # outer posts + extruded rim chords
+        # outer posts + extruded rim chords, each chord carrying its wedge loops
         for k in range(n_out):
             arc = post_arc(o_cs[k], o_mu[k], r_t, None, toff, SEG)
             go(arc)
             nxt = trailing((k + 1) % n_out)
-            go(latch.line_pts(cur, nxt, SEG), "R")
+            cp, ck = chord_with_wedges(cur, nxt, o_wedges.get(k, []), SEG)
+            pts += cp
+            kinds += ck
+            cur = pts[-1]
         return pts, kinds
 
     # ---------------------------------------------------------------- z ladder + schedule
@@ -1236,7 +1333,9 @@ def main():
     w(f"; FLOOR_WELD=lap {1-FLOOR1_OVERLAP:.2f}xbead at every interface; brim {n_rings} rings "
       f"(L1 {n_rings1} at {lp1:g}), hole {nh} rings (L1 {nh1}), net {a.net_pitch:g}mm "
       f"(L1 {net1_pitch:g}mm, OPEN by design: '20% of floor only as solid brim'); "
-      f"gate tools/qa_weld.py")
+      f"{sum(len(v) for v in o_wedges.values())}+{sum(len(v) for v in i_wedges.values())} "
+      f"tip-wedge loops stitching shallow-graze chords to their arcs (hung off the chords, "
+      f"0.4mm each side); gate tools/qa_weld.py")
     w(f"; BRIM measured {brim_frac_real*100:.0f}% of floor area solid "
       f"(asked {a.brim_frac*100:g}%), band {w_brim:.1f}mm")
     w(f"; HOLE {hole_area/area*100:.0f}% of floor, area {hole_area/100:.0f} cm2")

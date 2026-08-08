@@ -138,7 +138,8 @@ def border_path_art(g):
     """Border samples for the two-ring part: every post's MATERIAL arc + every chord.
     Steps INSIDE the cut outline are EXEMPT-BY-DESIGN and marked: the hole-facing side of an
     inner post's arc faces a void, and nothing can ever lap a void's side. Returns
-    [(pt, exempt)]."""
+    [(pt, exempt, kind)] with kind 'arc'|'chord' -- the mutual-weld clause needs to know which
+    element a sample sits ON, so a bead can never hold itself."""
     pts = []
     for c, mu in zip(g['cs'], g['phis']):
         a0 = mu - g['toff']
@@ -147,12 +148,12 @@ def border_path_art(g):
         for t in range(steps + 1):
             a = a0 + sweep * t / steps
             p = (c[0] + g['r_t'] * math.cos(a), c[1] + g['r_t'] * math.sin(a))
-            pts.append((p, bool(g['hole']) and _in_poly(p, g['hole'])))
+            pts.append((p, bool(g['hole']) and _in_poly(p, g['hole']), 'arc'))
     for a, b in g['chords']:
         m = max(1, int(math.dist(a, b) / STEP))
         for t in range(m + 1):
             p = (a[0] + (b[0] - a[0]) * t / m, a[1] + (b[1] - a[1]) * t / m)
-            pts.append((p, bool(g['hole']) and _in_poly(p, g['hole'])))
+            pts.append((p, bool(g['hole']) and _in_poly(p, g['hole']), 'chord'))
     return pts
 
 
@@ -409,14 +410,14 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
             print(f"{path}\n  DECLINE: no stagger stamp; the border cannot be placed.")
             return 2
         g = geometry(cmd, float(m.group(1)), parse_stamps(path))
-        border_x = [(p, False) for p in border_path(g)]
+        border_x = [(p, False, None) for p in border_path(g)]
     layers = floor_layers(path, g)
     if not layers:
         print(f"{path}\n  DECLINE: no '(floor latch' layers -- nothing here is a floor.")
         return 2
     max_run = max_run_flag if max_run_flag is not None else g['floor_pitch']
-    border = [p for p, _ in border_x]
-    n_bexempt = sum(1 for _, e in border_x if e)
+    border = [p for p, _, _ in border_x]
+    n_bexempt = sum(1 for _, e, _ in border_x if e)
     print(f"{path}")
     if art:
         print(f"  geometry: {g['n']} posts (two rings) r_t {g['r_t']:.2f}, from ART_POST "
@@ -470,18 +471,29 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
 
         # ATTACH -- the border walk. Exempt steps (the cut-facing side of an inner-ring arc,
         # art parts only) neither hold nor extend a run: nothing can lap a void's side.
+        # THE MUTUAL-WELD CLAUSE (art parts): where a crossing grazes its own post at a
+        # shallow angle, the wedge between chord bead and arc bead is under a bead wide for
+        # 8-10mm -- no fill can exist there, and none is needed: the chord is welded to the
+        # wall DIRECTLY. A chord sample is therefore also held by a WALL bead and an arc
+        # sample by a RIM bead -- opposite classes only, so a bead can never hold itself.
+        # Measured before this clause: 29% of a floor's border read unwelded, every failing
+        # stretch a tip-adjacent wedge whose two beads overlap each other by construction.
+        _mutual = {'chord': 'WALL', 'arc': 'RIM'}
         held = []
-        for bp, ex in border_x:
+        for bp, ex, bkind in border_x:
             if ex:
                 held.append(None)
                 continue
             ok = False
             for o in near(grid, cell, bp, bp, bead):
+                d = None
                 if o[4] in ('FILL', 'RASTER'):
                     d = seg_dist(bp, bp, o[0], o[1])
-                    if d <= (bead + o[2]) / 2.0 - margin:
-                        ok = True
-                        break
+                elif bkind is not None and o[4] == _mutual.get(bkind):
+                    d = seg_dist(bp, bp, o[0], o[1])
+                if d is not None and d <= (bead + o[2]) / 2.0 - margin:
+                    ok = True
+                    break
             held.append(ok)
         runs, cur_run, worst = [], 0.0, 0.0
         for h in held + [True]:
