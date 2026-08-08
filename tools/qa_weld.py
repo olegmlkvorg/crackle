@@ -437,6 +437,20 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
             print(f"  {label}: DECLINE -- re-derived geometry finds NO wall arcs in the emitted "
                   f"moves; the frame is wrong and nothing below could be trusted.")
             return 2
+        # EVERY post individually: a single wrong stamp must DECLINE, not dilute. Without
+        # this, one corrupted ART_POST line left 41 of 42 posts matching and the whole-layer
+        # any() above stayed green -- 'a wrong stamp DECLINES' was only true wholesale.
+        if g.get('mode') == 'art':
+            for pi, (c, mu) in enumerate(zip(g['cs'], g['phis'])):
+                probe = (c[0] + g['r_t'] * math.cos(mu + math.pi),
+                         c[1] + g['r_t'] * math.sin(mu + math.pi))   # mid-material point
+                ok_post = any(seg_dist(probe, probe, s[0], s[1]) < 0.45 * g['bw']
+                              for s in raw)
+                if not ok_post:
+                    print(f"  {label}: DECLINE -- stamped post {pi} at ({c[0]:.1f},{c[1]:.1f}) "
+                          f"has no emitted bead on its material arc; the stamps and the file "
+                          f"disagree and the border cannot be trusted.")
+                    return 2
         grid, cell = hash_segs(segs)
         bead = sorted(s[2] for s in segs)[len(segs) // 2]
 
