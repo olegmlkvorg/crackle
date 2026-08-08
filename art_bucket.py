@@ -426,10 +426,10 @@ def wedge_loops(rail_boundary, cs, mus, r_t, toff, d_lo=0.70, d_hi=16.0, seg=1.0
     stays 0.656 from BOTH sides, so near the vertex the rail runs up the bisector and its
     distance from the chord grows to 0.656/sin(theta/2) -- the chord's last 5-15mm has no
     rail within weld reach (qa_weld: 17.5mm unwelded, every run the landing stretch of one
-    chord). So the loop is laid where distance(chord, FIRST RAIL) > d_lo: out 0.55mm off the
-    CHORD, back 0.55mm off the RAIL, joined at the ends -- each side welds its bead, and the
-    loop is HUNG OFF THE CHORD so no stub ever crosses a bead (a stub from the rails reads
-    3.0 deep; this reads ~2.4 at the pinch end).
+    chord). Where distance(chord, FIRST RAIL) > d_lo a single PASS is laid (midline of the
+    gap, or a rib 0.65 off the chord for deep retreats -- regimes and the arithmetic that
+    picked them are at the emit site below), spliced into the chord walk so no stub ever
+    crosses a bead.
 
     d_hi is the BRIDGE LEDGER's territory, not a taste ceiling: the loop's open end closes
     with one strand across the full gap, so the widest gap a wedge may span is bounded by
@@ -464,21 +464,41 @@ def wedge_loops(rail_boundary, cs, mus, r_t, toff, d_lo=0.70, d_hi=16.0, seg=1.0
             while j <= m and d_lo < ds[j][2] <= d_hi:
                 j += 1
             if j - i >= 2:
-                sub = ds[i:j]
-                # 0.55 OFF EACH BEAD, not 0.4: past the capsule half-width (0.41), so the
-                # wedge side's centerline no longer stacks on the chord's or rail's own
-                # depth (qa_weld's ellipse model reads two centerlines 0.4 apart as 1.87
-                # bead-heights, and run 16's recurring 2.9-3.6 pile zones were exactly
-                # wedge + one incidental strand). At 0.55 the pair reads ~1.5 and the weld
-                # still holds: 0.55 <= the 0.77 reach with 0.22mm of margin.
-                W_OFF = 0.55
-                near_chord, near_bound = [], []
-                for pt, bp, d in sub:
-                    vx, vy = (bp[0] - pt[0]) / d, (bp[1] - pt[1]) / d
-                    near_chord.append((pt[0] + W_OFF * vx, pt[1] + W_OFF * vy))
-                    near_bound.append((bp[0] - W_OFF * vx, bp[1] - W_OFF * vy))
-                loop = near_chord + near_bound[::-1]
-                out.setdefault(k, []).append((sub[0][0], loop))
+                # SINGLE PASSES, NEVER LOOPS. Three two-sided constructions in a row read
+                # 2.9-3.6 on qa_weld's depth model, each a different face of one fact: in
+                # a corridor 0.8-1.8mm wide bounded by the chord and the rail, ANY second
+                # wedge line is within half a bead of something. The model's own arithmetic
+                # picks the shape (a bead at distance x contributes sqrt(1-(2x/w)^2), zero
+                # past w/2 = 0.41):
+                #   gap (0.70,0.77]  NOTHING -- the rail itself is inside the 0.77 reach
+                #   gap (0.77,1.54]  MIDLINE -- welds chord AND rail at once (d/2 <= 0.77);
+                #                    reads 1.44-1.75 alone, worst at the narrow end
+                #   gap (1.54,16]    RIB 0.65 off the CHORD -- the border weld is what
+                #                    ATTACH demands and the rib sits on L1's 3.94 rim bead;
+                #                    pair with the chord reads 1.22. The rail side of a
+                #                    deep retreat stays unstitched, on purpose: a return
+                #                    side is the pinch-crossing disease again.
+                W_WELD, W_SPLIT, W_RIB = 0.77, 1.54, 0.65
+                i2 = i
+                while i2 < j:
+                    reg = (0 if ds[i2][2] <= W_WELD else
+                           1 if ds[i2][2] <= W_SPLIT else 2)
+                    j2 = i2
+                    while j2 < j and (0 if ds[j2][2] <= W_WELD else
+                                      1 if ds[j2][2] <= W_SPLIT else 2) == reg:
+                        j2 += 1
+                    sub = ds[i2:j2]
+                    if reg > 0 and len(sub) >= 2:
+                        if reg == 1:
+                            rib = [((pt[0] + bp[0]) / 2, (pt[1] + bp[1]) / 2)
+                                   for pt, bp, d in sub]
+                        else:
+                            rib = []
+                            for pt, bp, d in sub:
+                                vx, vy = (bp[0] - pt[0]) / d, (bp[1] - pt[1]) / d
+                                rib.append((pt[0] + W_RIB * vx, pt[1] + W_RIB * vy))
+                        out.setdefault(k, []).append((sub[0][0], rib))
+                    i2 = j2
             i = j
     return out
 
@@ -607,96 +627,170 @@ def monotone_columns(runs, angle_deg):
 
 STITCH_TRIGGER = 8.0
 STITCH_REACH = 3.6
+STITCH_TOUCH = 0.45          # riding this close to support already counts as held
+STITCH_RIDE = 0.8            # the tooth tip RIDES the support bead this far and returns
+                             # from the far end -- a tooth that retraced its own leg read
+                             # 2.0 deep on itself and was run 17's worst pile (3.5)
+
+
+def _seg_hash(segs2, cell=4.0):
+    """Spatial hash of support segments, sampled every `cell` along each segment so a
+    100mm rail straight is findable from every cell it passes through."""
+    grid = {}
+    for s in segs2:
+        (ax, ay), (bx, by) = s
+        n2 = max(1, int(math.hypot(bx - ax, by - ay) / cell))
+        for k2 in range(n2 + 1):
+            t = k2 / n2
+            key = (int((ax + (bx - ax) * t) // cell), int((ay + (by - ay) * t) // cell))
+            grid.setdefault(key, []).append(s)
+    return grid, cell
+
+
+def _near_seg(grid, cell, p2, r):
+    """(dist, seg) of the nearest support segment within r of p2, else (None, None)."""
+    gx, gy = int(p2[0] // cell), int(p2[1] // cell)
+    best, bseg = None, None
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            for s in grid.get((gx + dx, gy + dy), ()):
+                (ax, ay), (bx, by) = s
+                ux, uy = bx - ax, by - ay
+                L2 = ux * ux + uy * uy
+                t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((p2[0] - ax) * ux
+                                                           + (p2[1] - ay) * uy) / L2))
+                d = math.hypot(p2[0] - (ax + t * ux), p2[1] - (ay + t * uy))
+                if d <= r and (best is None or d < best):
+                    best, bseg = d, s
+    return best, bseg
+
+
+def dense_path(path, seg):
+    """Resample a path so no step exceeds ~1.5*seg. thin() legitimately leaves 10mm+
+    straight segments in walk outputs, and every point-based consumer -- the laid grid,
+    overlap, repulsion, rib yield -- is blind to a segment's interior: run 21's immune
+    3.0 zones were 11mm collinear hops whose interiors no grid ever saw."""
+    if len(path) < 2:
+        return [tuple(p) for p in path]
+    out2 = [tuple(path[0])]
+    for p2 in path[1:]:
+        p2 = tuple(p2)
+        if math.dist(out2[-1], p2) > seg * 1.5:
+            out2 += latch.line_pts(out2[-1], p2, seg)
+        else:
+            out2.append(p2)
+    return out2
 
 
 def stitch_to_grid(pts, sup, seg):
     """Teeth: no stretch of a net-region walk runs past STITCH_TRIGGER mm without touching
-    the layer BELOW's net. validate's overhang frame is run length along the path, so a walk
-    riding PARALLEL to the strands below it hangs (metrically) for its whole length even
-    though the physical gap under it is one strand pitch -- measured on run 15: an 18.0mm
-    lane-walk stretch beside the art hole, 1.9mm of y-drift over 17mm of x. The tooth is an
-    out-and-back to the nearest strand of `sup` = (runs, angle), the ACTUAL hatch the layer
-    below laid (same code path, cached -- never re-derived). Worst metric run between
-    touches is a back leg + trigger + an out leg = 3.6 + 8 + 3.6 = 15.2mm, inside
-    machine.PROVEN_AIR_MM with margin; physically each tooth welds the walk to the grid."""
+    what the layer BELOW actually laid. validate's overhang frame is run length along the
+    path, so a walk riding PARALLEL to the support below hangs (metrically) for its whole
+    length even though the physical gap under it is one strand pitch -- measured on run 15:
+    an 18.0mm lane-walk stretch beside the art hole, 1.9mm of y-drift over 17mm of x.
+
+    `sup` is a _seg_hash of the layer below's hatch RUNS AND RAIL LOOPS, from the same
+    cached floor_parts that laid them. The first version knew only the hatch rows, so
+    walks near the hole -- fully supported by the layer below's own hole rings, which
+    validate sees -- grew teeth anyway, and each tooth retraced its own leg: run 17's
+    worst pile (3.5) was one tooth's two legs plus the two walks it stitched. Now a tooth
+    lands on the support, rides it STITCH_RIDE, and returns from the far end to the walk's
+    NEXT point -- no cell ever carries two of its legs. Worst metric hang between touches:
+    a return leg + trigger + an out leg = 3.6 + 8 + 3.6 = 15.2mm < machine.PROVEN_AIR_MM."""
     if not sup or len(pts) < 2:
         return list(pts)
-    runs, ang = sup
-    horiz = abs(math.sin(math.radians(ang))) < 0.5      # strands run along x (rows at one y)
-    rows = {}
-    for a2, b2 in runs:
-        v = a2[1] if horiz else a2[0]
-        u0, u1 = (a2[0], b2[0]) if horiz else (a2[1], b2[1])
-        rows.setdefault(round(v, 3), []).append((min(u0, u1), max(u0, u1)))
-    vs = sorted(rows)
-
-    def crosses(p2, q2):
-        pv, qv = (p2[1], q2[1]) if horiz else (p2[0], q2[0])
-        pu, qu = (p2[0], q2[0]) if horiz else (p2[1], q2[1])
-        vlo, vhi = min(pv, qv), max(pv, qv)
-        for v in vs:
-            if v < vlo - 1e-9:
-                continue
-            if v > vhi + 1e-9:
-                break
-            t = 0.5 if abs(qv - pv) < 1e-9 else (v - pv) / (qv - pv)
-            u = pu + (qu - pu) * max(0.0, min(1.0, t))
-            if any(u0 - 0.5 <= u <= u1 + 0.5 for u0, u1 in rows[v]):
-                return True
-        return False
-
+    grid, cell = sup
     out = [tuple(pts[0])]
     run = 0.0
+    pend = None                      # tooth tip still to be joined to the walk's next point
     for p2 in pts[1:]:
         p2 = tuple(p2)
+        if pend is not None:
+            out += latch.line_pts(pend, p2, seg)
+            run = math.dist(pend, p2)
+            pend = None
+            continue
         q2 = out[-1]
-        run = 0.0 if crosses(q2, p2) else run + math.dist(q2, p2)
+        mx, my = (q2[0] + p2[0]) / 2, (q2[1] + p2[1]) / 2
+        held = (_near_seg(grid, cell, p2, STITCH_TOUCH)[0] is not None
+                or _near_seg(grid, cell, (mx, my), STITCH_TOUCH)[0] is not None)
+        run = 0.0 if held else run + math.dist(q2, p2)
         out.append(p2)
         if run > STITCH_TRIGGER:
-            pv = p2[1] if horiz else p2[0]
-            pu = p2[0] if horiz else p2[1]
-            best = None
-            for v in vs:
-                if abs(v - pv) <= STITCH_REACH and any(u0 - 0.3 <= pu <= u1 + 0.3
-                                                       for u0, u1 in rows[v]):
-                    if best is None or abs(v - pv) < abs(best - pv):
-                        best = v
-            if best is not None:
-                tp = (p2[0], best) if horiz else (best, p2[1])
-                out += latch.line_pts(p2, tp, seg) + latch.line_pts(tp, p2, seg)
-                run = abs(best - pv)          # the back leg hangs until the next crossing
+            d3, s3 = _near_seg(grid, cell, p2, STITCH_REACH)
+            if s3 is not None:
+                (ax, ay), (bx, by) = s3
+                ux, uy = bx - ax, by - ay
+                L3 = math.hypot(ux, uy)
+                ux, uy = ((ux / L3, uy / L3) if L3 > 1e-12 else (1.0, 0.0))
+                s4 = max(0.0, min(L3, (p2[0] - ax) * ux + (p2[1] - ay) * uy))
+                np1 = (ax + ux * s4, ay + uy * s4)
+                s5 = s4 + STITCH_RIDE if s4 + STITCH_RIDE <= L3 else max(0.0, s4 - STITCH_RIDE)
+                np2 = (ax + ux * s5, ay + uy * s5)
+                out += latch.line_pts(p2, np1, seg)
+                if math.dist(np1, np2) > 1e-9:
+                    out += latch.line_pts(np1, np2, seg)
+                pend = np2
+                run = 0.0
     return out
 
 
-def lane_walk(lanes, lane_ctr, cur, target, seg, hole_block=None, stitch=None):
+def lane_walk(lanes, lane_ctr, cur, target, seg, hole_block=None, stitch=None, avoid=None,
+              repel=None):
     """A LONG transition rides a LANE -- a closed track buffered INSIDE the net region, so
     its stubs cross only strand rows (point crossings, 2.0 deep, pass). Walking the rails
     themselves stacked every transition onto the same neck stretches beside the art hole:
-    qa_weld read 4 passes deep. Lanes at three depths are used in ROTATION so two walks in
-    one layer land on different tracks and cannot stack. Returns pts."""
+    qa_weld read 4 passes deep. Lanes at several depths rotate so consecutive walks land on
+    different tracks -- but rotation alone still reuses a lane every len(lanes) transitions,
+    and two same-lane walks (sampled from different phases, so 0.1mm apart, never welded as
+    one) plus one stitch tooth read 3.0 on run 19. So `avoid` measures each candidate walk's
+    overlap with material this layer ALREADY laid, and the first lane under 3mm of overlap
+    wins; if none qualifies, the least-overlapping. Returns pts."""
+    best_fb = None
     for tries in range(len(lanes)):
         lane = lanes[(lane_ctr[0] + tries) % len(lanes)]
         if not poly_parts(lane):
             continue
-        lane_ctr[0] += 1 + tries
         out = list(walk_boundary(lane, tuple(cur), tuple(target), seg))
         if out and math.dist(out[-1], tuple(target)) > 1e-9:
             out += latch.line_pts(out[-1], tuple(target), seg)
+        out = dense_path(out, seg)
+        ov = avoid(out) if avoid else 0.0
+        if ov < 3.0:
+            lane_ctr[0] += 1 + tries
+            out = repel(out) if repel else out
+            return stitch(out) if stitch else out
+        if best_fb is None or ov < best_fb[0]:
+            best_fb = (ov, tries, out)
+    if best_fb is not None:
+        lane_ctr[0] += 1 + best_fb[1]
+        out = best_fb[2]
+        out = repel(out) if repel else out
         return stitch(out) if stitch else out
     if hole_block is not None and LineString(
             [tuple(cur), tuple(target)]).intersects(hole_block):
         raise SystemExit("REFUSING TO EMIT: no lane exists and the straight fallback for a "
                          "net transition crosses the art hole.")
     out = latch.line_pts(tuple(cur), tuple(target), seg)
+    out = repel(out) if repel else out
     return stitch(out) if stitch else out
 
 
-def chain_hatch(runs, lanes, lane_ctr, hole_block, start, seg, angle_deg, stitch=None):
+def chain_hatch(runs, lanes, lane_ctr, hole_block, start, seg, angle_deg, stitch=None,
+                mark=None, avoid=None, repel=None):
     """One-stroke chain: monotone-column serpentines; short neighbour links straight, long
     transitions as rotated lane walks (a straight cross-region link floated 42.8mm on the
-    first emission; a rail walk piled 4 deep on the second). Returns pts EXCLUDING start."""
+    first emission; a rail walk piled 4 deep on the second). `mark` records each piece into
+    the layer's laid-material grid AS IT IS BUILT, so `avoid` sees this net's own strands
+    and earlier walks, not just what preceded the net. Returns pts EXCLUDING start."""
     cols = monotone_columns(runs, angle_deg)
     out = []
+
+    def emit(newpts):
+        out.extend(newpts)
+        if mark and newpts:
+            mark(newpts)
+
     cur = np.array(start)
     todo = [c for c in cols if c]
     while todo:
@@ -718,13 +812,15 @@ def chain_hatch(runs, lanes, lane_ctr, hole_block, start, seg, angle_deg, stitch
             link = LineString([tuple(cur), tuple(a)])
             if link.length > 1e-9:
                 if link.length > 6.0 or link.intersects(hole_block):
-                    out += lane_walk(lanes, lane_ctr, cur, a, seg,
-                                     hole_block=hole_block, stitch=stitch)
+                    emit(lane_walk(lanes, lane_ctr, cur, a, seg,
+                                   hole_block=hole_block, stitch=stitch, avoid=avoid,
+                                   repel=repel))
                     if out and math.dist(out[-1], tuple(a)) > 1e-9:
-                        out += latch.line_pts(out[-1], tuple(a), seg)
+                        emit(latch.line_pts(out[-1], tuple(a), seg))
                 else:
-                    out += latch.line_pts(tuple(cur), tuple(a), seg)
-            out += latch.line_pts(tuple(a), tuple(b), seg)
+                    lk = latch.line_pts(tuple(cur), tuple(a), seg)
+                    emit(repel(lk) if repel else lk)
+            emit(latch.line_pts(tuple(a), tuple(b), seg))
             cur = np.array(b)
     return out
 
@@ -988,7 +1084,9 @@ def main():
         N = FR.buffer(-lpx * nrx, quad_segs=24).difference(
             HR.buffer(lpx * nhx, quad_segs=24))
         runs = hatch_runs(N, netp, ang)
-        lanes = [N.buffer(-1.2 * (i + 1), quad_segs=16) for i in range(3)]
+        # five depths, not three: rotation reuses a lane every len(lanes) transitions, and
+        # the avoid() check needs somewhere else to go when it refuses a collision
+        lanes = [N.buffer(-1.2 * (i + 1), quad_segs=16) for i in range(5)]
         return rings, hrings, N, runs, lanes
 
     _fp_cache = {}
@@ -1029,9 +1127,11 @@ def main():
     if _rib_body.intersects(hole_block):
         raise SystemExit("REFUSING TO EMIT: the floor exit rib crosses the art hole.")
 
-    def inner_rim_circuit(entry_pt, start_k, wedges):
+    def inner_rim_circuit(entry_pt, start_k, wedges_fn, mark=None):
         """Inner posts + EXTRUDED chords starting at start_k's trailing tip, full circuit.
-        Each chord carries its wedge loops (chord_with_wedges)."""
+        Each chord carries its wedge ribs (chord_with_wedges); `wedges_fn(k2)` is asked at
+        splice time so a rib can yield to material laid earlier in this same circuit, and
+        `mark` records each chord's output so the NEXT chord's ribs see it."""
         pts, kinds = [], []
         t0 = tips_of(i_cs[start_k], i_mu[start_k], r_t, toff)[1]
         pts += latch.line_pts(entry_pt, t0, SEG)
@@ -1042,21 +1142,145 @@ def main():
             pts += arc
             kinds += ["E"] * len(arc)
             nxt = tips_of(i_cs[(k2 + 1) % n_in], i_mu[(k2 + 1) % n_in], r_t, toff)[1]
-            cp, ck = chord_with_wedges(pts[-1], nxt, wedges.get(k2, []), SEG)
+            cp, ck = chord_with_wedges(pts[-1], nxt, wedges_fn(k2), SEG)
             pts += cp
             kinds += ck
+            if mark:
+                mark(cp)
         return pts, kinds
 
     def floor_layer(li, entry):
         """One whole floor layer from `entry` (== starts[0]) back to starts[0]."""
         ang = 90.0 * (li % 2)
         rings, hrings, N, runs, lanes = _fp(li)
-        # stitch teeth target the layer BELOW's actual strands; layer 1 sits on the plate
-        sup = (_fp(li - 1)[3], 90.0 * ((li - 1) % 2)) if li > 0 else None
-        st = (lambda pp: stitch_to_grid(pp, sup, SEG)) if sup else None
+        # stitch teeth target what the layer BELOW actually laid -- its hatch runs AND its
+        # rail loops (rows alone grew teeth over ring-supported ground); layer 1 sits on
+        # the plate and needs none
+        if li > 0:
+            prin, phrin, _, pruns, _ = _fp(li - 1)
+            ssegs = [(tuple(a2), tuple(b2)) for a2, b2 in pruns]
+            for _, lp2 in prin + phrin:
+                ssegs += list(zip([tuple(v) for v in lp2[:-1]],
+                                  [tuple(v) for v in lp2[1:]]))
+            _sup = _seg_hash(ssegs)
+            st = lambda pp: stitch_to_grid(pp, _sup, SEG)
+        else:
+            st = None
         lane_ctr = [li]                              # rotate lane choice per layer too
         pts, kinds = [], []
         cur = entry
+
+        # THE LAYER'S LAID-MATERIAL GRID -- separate from go_rail's dedup grid on purpose
+        # (that one holds rail points only; feeding it links would re-open the seam gap the
+        # closure fix just closed). Two consumers: ribs YIELD to fill that already welds
+        # their border stretch, and lane walks AVOID stretches another transition laid.
+        _laid_all = {}
+
+        def _mark_all(newpts):
+            # marks interpolate ALONG each segment: thin() leaves 10mm+ straights whose
+            # interiors a vertex-only grid never records (run 21's immune zones)
+            prev = None
+            for p2 in newpts:
+                if prev is not None:
+                    n2 = int(math.dist(prev, p2))
+                    for k2 in range(1, n2 + 1):
+                        t2 = k2 / (n2 + 1)
+                        q2 = (prev[0] + (p2[0] - prev[0]) * t2,
+                              prev[1] + (p2[1] - prev[1]) * t2)
+                        _laid_all.setdefault((int(q2[0] // 2.0), int(q2[1] // 2.0)),
+                                             []).append(q2)
+                _laid_all.setdefault((int(p2[0] // 2.0), int(p2[1] // 2.0)), []).append(p2)
+                prev = p2
+
+        def _overlap_mm(walk_pts):
+            tot = 0.0
+            for p2 in walk_pts:
+                gx, gy = int(p2[0] // 2.0), int(p2[1] // 2.0)
+                if any(math.dist(p2, q2) < 0.5
+                       for dx2 in (-1, 0, 1) for dy2 in (-1, 0, 1)
+                       for q2 in _laid_all.get((gx + dx2, gy + dy2), ())):
+                    tot += 1.0                       # walk points are ~1mm apart
+            return tot
+
+        def rib_yield(entries, ch_pq):
+            """Drop rib stretches whose border is ALREADY welded by laid fill. Run 19's
+            two worst zones were transition hops welding the border themselves with the
+            rib doubled over them. The qualifying annulus honours the classifier:
+            material within 0.68 of the border sample welds it (reach 0.77), but only if
+            it sits farther than 0.45 off the chord LINE -- closer classifies RIM, and a
+            RIM bead holds no chord sample (the entry-link lesson). Two qualifying
+            vertices required, so one stray point cannot delete a rib the border then
+            misses; a kept rib is the status quo, never a regression."""
+            if not entries:
+                return []
+            (cpx, cpy), (cqx, cqy) = ch_pq
+            ux, uy = cqx - cpx, cqy - cpy
+            LL = math.hypot(ux, uy)
+            if LL < 1e-9:
+                return entries
+            ux, uy = ux / LL, uy / LL
+            out2 = []
+            for _attach, rib in entries:
+                keep = []
+                for r2 in rib:
+                    t2 = (r2[0] - cpx) * ux + (r2[1] - cpy) * uy
+                    fx, fy = cpx + ux * t2, cpy + uy * t2
+                    nq = 0
+                    gx, gy = int(fx // 2.0), int(fy // 2.0)
+                    for dx2 in (-1, 0, 1):
+                        for dy2 in (-1, 0, 1):
+                            for q2 in _laid_all.get((gx + dx2, gy + dy2), ()):
+                                if math.dist(q2, (fx, fy)) <= 0.68:
+                                    dperp = abs(-(q2[0] - cpx) * uy + (q2[1] - cpy) * ux)
+                                    if dperp > 0.45:
+                                        nq += 1
+                    keep.append(nq < 2)
+                i3 = 0
+                while i3 < len(rib):
+                    if not keep[i3]:
+                        i3 += 1
+                        continue
+                    j3 = i3
+                    while j3 < len(rib) and keep[j3]:
+                        j3 += 1
+                    if j3 - i3 >= 2:
+                        r0 = rib[i3]
+                        t2 = (r0[0] - cpx) * ux + (r0[1] - cpy) * uy
+                        out2.append(((cpx + ux * t2, cpy + uy * t2), rib[i3:j3]))
+                    i3 = j3
+            return out2
+
+        def _repel(path):
+            """Nudge a transition's mid-course off material this layer already laid, to
+            0.85mm clearance (past capsule half-width, so neither bead reads on the
+            other's depth). Run 20's stubborn 3.0 zones were four near-parallel transition
+            passes 0.1-0.7 apart beside the hole band -- avoidance can pick another lane,
+            but every hop CONVERGES on its target, so spacing has to be enforced on the
+            path itself. First/last ~2 points stay put (they weld to their anchors, and
+            endpoint contact is path-adjacent, which the depth model merges anyway); a
+            nudge that would enter the hole guard is dropped."""
+            if len(path) < 5:
+                return path
+            out2 = [path[0]]
+            for i2 in range(1, len(path)):
+                p2 = tuple(path[i2])
+                if 2 <= i2 <= len(path) - 3:
+                    gx, gy = int(p2[0] // 2.0), int(p2[1] // 2.0)
+                    best = None
+                    for dx2 in (-1, 0, 1):
+                        for dy2 in (-1, 0, 1):
+                            for q2 in _laid_all.get((gx + dx2, gy + dy2), ()):
+                                d2 = math.dist(p2, q2)
+                                if d2 < 0.85 and (best is None or d2 < best[0]):
+                                    best = (d2, q2)
+                    if best and best[0] > 1e-9:
+                        d2, q2 = best
+                        ux2, uy2 = (p2[0] - q2[0]) / d2, (p2[1] - q2[1]) / d2
+                        cand = (q2[0] + ux2 * 0.85, q2[1] + uy2 * 0.85)
+                        if not hole_block.contains(Point(cand)):
+                            p2 = cand
+                out2.append(p2)
+            return out2
 
         def go(newpts, kind="E"):
             nonlocal cur
@@ -1064,6 +1288,7 @@ def main():
             kinds.extend([kind] * len(newpts))
             if newpts:
                 cur = newpts[-1]
+                _mark_all(newpts)
 
         # NECK DEDUP. At a tapering neck (the ear junctions) a rail's two sides sweep through
         # coincidence with the next rail's -- 2-3 rail beads inside a third of a millimetre,
@@ -1127,7 +1352,8 @@ def main():
                 raise SystemExit("REFUSING TO EMIT: a brim link crosses the art hole.")
             go_rail(rot_closed(loop, j0))
         net_start = cur
-        go(chain_hatch(runs, lanes, lane_ctr, hole_block, net_start, SEG, ang, stitch=st))
+        go(chain_hatch(runs, lanes, lane_ctr, hole_block, net_start, SEG, ang, stitch=st,
+                       mark=_mark_all, avoid=_overlap_mm, repel=_repel))
         for hi, (_, loop) in enumerate(hrings):                  # hole rings, outermost first
             j0 = min(range(len(loop)), key=lambda j2: math.dist(loop[j2], cur))
             if LineString([cur, loop[j0]]).intersects(hole_block):
@@ -1135,8 +1361,10 @@ def main():
             if hi == 0 and math.dist(cur, loop[j0]) > 6.0:
                 # the approach from the net's last strand to the hole rings: a straight hop
                 # here floats over sparse net and draws a line across the art -- walk N's
-                # hole-side boundary, which IS the outermost hole rail
-                go(walk_boundary(N, tuple(cur), loop[j0], SEG))
+                # hole-side boundary, which IS the outermost hole rail. Densified and
+                # repelled like every other transition: it was the third pass at several
+                # of run 20's boundary-crowding zones.
+                go(_repel(dense_path(walk_boundary(N, tuple(cur), loop[j0], SEG), SEG)))
                 if math.dist(cur, loop[j0]) > 1e-9:
                     go(latch.line_pts(cur, loop[j0], SEG))
             go_rail(rot_closed(loop, j0))
@@ -1156,7 +1384,10 @@ def main():
             if LineString([tuple(cur), _stop]).intersects(hole_block):
                 raise SystemExit("REFUSING TO EMIT: the rim-circuit entry crosses the art "
                                  "hole.")
-        rp, rk = inner_rim_circuit(cur, exK, i_wedges if li > 0 else {})
+        rp, rk = inner_rim_circuit(cur, exK,
+                                   (lambda k2: rib_yield(i_wedges.get(k2, []), i_ch[k2]))
+                                   if li > 0 else (lambda k2: []),
+                                   mark=_mark_all)
         pts += rp
         kinds += rk
         cur = pts[-1]
@@ -1166,10 +1397,11 @@ def main():
             arc = post_arc(o_cs[k], o_mu[k], r_t, None, toff, SEG)
             go(arc)
             nxt = trailing((k + 1) % n_out)
-            cp, ck = chord_with_wedges(cur, nxt,
-                                       o_wedges.get(k, []) if li > 0 else [], SEG)
+            ow = rib_yield(o_wedges.get(k, []), o_ch[k]) if li > 0 else []
+            cp, ck = chord_with_wedges(cur, nxt, ow, SEG)
             pts += cp
             kinds += ck
+            _mark_all(cp)
             cur = pts[-1]
         return pts, kinds
 
@@ -1538,8 +1770,10 @@ def main():
       f"THROUGH the cut, ungated -- three link gates each guarded their own construct and "
       f"this entry was nobody's)")
     w(f"; NET_STITCH=teeth every {STITCH_TRIGGER:g}mm on net-region walks, reach "
-      f"{STITCH_REACH:g}mm, to the layer below's own strands; worst metric hang "
-      f"{STITCH_TRIGGER + 2*STITCH_REACH:g}mm < {PROVEN_AIR_MM:g} proven air")
+      f"{STITCH_REACH:g}mm, to the layer below's own strands AND rails; each tooth rides "
+      f"the support {STITCH_RIDE:g}mm and returns from the far end (a retraced leg reads "
+      f"2.0 deep on itself); worst metric hang {STITCH_TRIGGER + 2*STITCH_REACH:g}mm "
+      f"< {PROVEN_AIR_MM:g} proven air")
     w(f"; TRANSIT gap {TJ}->{TJ+1} routes through inner post {TK}: legs {tr_len1:.1f} + "
       f"{tr_len2:.1f}mm, landing MID-ARC (az {math.degrees(t_az):.0f} deg) on the post's "
       f"continuous face -- not a lip, so the mouth budget is untouched; the landing zone "
@@ -1554,8 +1788,9 @@ def main():
       f"(L1 {n_rings1} at {lp1:g}), hole {nh} rings (L1 {nh1}), net {a.net_pitch:g}mm "
       f"(L1 {net1_pitch:g}mm, OPEN by design: '20% of floor only as solid brim'); "
       f"{sum(len(v) for v in o_wedges.values())}+{sum(len(v) for v in i_wedges.values())} "
-      f"tip-wedge loops stitching shallow-graze chords to their arcs (hung off the chords, "
-      f"0.55mm each side); gate tools/qa_weld.py")
+      f"tip-wedge RIBS welding shallow-graze chords (single pass: gap midline to 1.54mm, "
+      f"a rib 0.65 off the chord beyond -- every two-sided loop read 2.9+ on the depth "
+      f"model somewhere along its pinch); gate tools/qa_weld.py")
     w(f"; BRIM measured {brim_frac_real*100:.0f}% of floor area solid "
       f"(asked {a.brim_frac*100:g}%), band {w_brim:.1f}mm")
     w(f"; HOLE {hole_area/area*100:.0f}% of floor, area {hole_area/100:.0f} cm2")
