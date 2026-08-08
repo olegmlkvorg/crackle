@@ -19,7 +19,7 @@ Usage:
   python3 tools/art_bucket_plan.py --outer A.png --hole B.png [--size 330] [--pitch 40]
                                    [--smooth 4] [--hole-frac 0.5] [--out out/plan.png]
 """
-import argparse, math, os, sys
+import argparse, math, os, shlex, sys
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -158,6 +158,94 @@ def offset_inward(pts, d, resmooth=6.0):
     return resample(o, 1.0)
 
 
+# MOUTH-CENTRE angle per post is phi + stag; MATERIAL is centred opposite it (phi + stag + pi)
+# and spans WRAP degrees, so the tips flank the mouth at phi + stag +- tip_off.
+tip_off = math.radians((360.0 - WRAP) / 2.0)
+
+
+def ring_posts(poly, pitch):
+    """Equal-arc post centres + outward-normal angles along a closed CCW polyline.
+
+    MODULE LEVEL since 2026-08-08 (was nested in main): the emitter art_bucket.py imports this,
+    and two implementations of one placement is the drift this repo keeps paying for."""
+    dd = np.hypot(*np.diff(poly, axis=0).T)
+    ss = np.concatenate([[0], np.cumsum(dd)])
+    n = max(6, int(round(ss[-1] / pitch)))
+    qs = np.linspace(0, ss[-1], n, endpoint=False)
+    cx = np.interp(qs, ss, poly[:, 0])
+    cy = np.interp(qs, ss, poly[:, 1])
+    cs = np.column_stack([cx, cy])
+    onn = normals(poly)
+    ph = np.empty(n)
+    for i, q in enumerate(qs):
+        j = np.searchsorted(ss, q) % len(onn)
+        ph[i] = math.atan2(onn[j, 1], onn[j, 0])
+    return cs, ph
+
+
+def dip(p, q, c, phi, stag=0.0, n=64):
+    """dip DEPTH: how far chord p->q passes inside a post's MATERIAL sector (mouth at phi+stag).
+
+    Module level for the same reason as ring_posts. `n` is the sample count -- the emitter's
+    gate re-measures at its own finer resolution; 64 is the planner's render-cost setting."""
+    worst = 0.0
+    for t in np.linspace(0, 1, n):
+        x, y = p + (q - p) * t
+        r = math.hypot(x - c[0], y - c[1])
+        if r >= R_T:
+            continue
+        off = (math.atan2(y - c[1], x - c[0]) - (phi + stag + math.pi)) % (2 * math.pi)
+        off = off - 2 * math.pi if off > math.pi else off
+        if abs(off) <= HALF:
+            worst = max(worst, R_T - r)
+    return worst
+
+
+def solve_ring(cs, ph):
+    """PER-POST MOUTH ROTATION -- the bucket's stagger window, localized. Each post's mouth
+    turns within +-40 deg of its outward normal so its two crossings clear the material;
+    greedy sweeps, measured not argued. Returns (stag[], chords, violations[(k,j,depth)])."""
+    n = len(cs)
+    stag = np.zeros(n)
+
+    def tips(i):
+        L2 = cs[i] + R_T * np.array([math.cos(ph[i] + stag[i] + tip_off),
+                                     math.sin(ph[i] + stag[i] + tip_off)])
+        T2 = cs[i] + R_T * np.array([math.cos(ph[i] + stag[i] - tip_off),
+                                     math.sin(ph[i] + stag[i] - tip_off)])
+        return L2, T2
+
+    def gap_cost(k):
+        p2 = tips(k)[0]
+        q2 = tips((k + 1) % n)[1]
+        c0 = 0.0
+        for j in (k - 1, k, (k + 1) % n, (k + 2) % n):
+            c0 += dip(p2, q2, cs[j % n], ph[j % n], stag[j % n])
+        return c0
+
+    for _sweep in range(4):
+        for i in range(n):
+            best, bestd = stag[i], None
+            for cand in np.radians(np.arange(-40, 41, 5)):
+                stag[i] = cand
+                dcur = gap_cost(i - 1) + gap_cost(i)
+                if bestd is None or dcur < bestd - 1e-12:
+                    bestd, best = dcur, cand
+            stag[i] = best
+    ch = []
+    for k in range(n):
+        p2 = tips(k)[0]
+        q2 = tips((k + 1) % n)[1]
+        ch.append((p2, q2, float(np.hypot(*(q2 - p2)))))
+    vv = []
+    for k, (p2, q2, L2) in enumerate(ch):
+        for j in range(n):
+            dpt = dip(p2, q2, cs[j], ph[j], stag[j])
+            if dpt > 0.05:                    # a bead-scale graze, not a float epsilon
+                vv.append((k, j, dpt))
+    return stag, ch, vv
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--outer", required=True)
@@ -178,22 +266,6 @@ def main():
     ap.add_argument("--out", default="out/art_bucket_plan.png")
     a = ap.parse_args()
 
-    def ring_posts(poly, pitch):
-        """Equal-arc post centres + outward-normal angles along a closed CCW polyline."""
-        dd = np.hypot(*np.diff(poly, axis=0).T)
-        ss = np.concatenate([[0], np.cumsum(dd)])
-        n = max(6, int(round(ss[-1] / pitch)))
-        qs = np.linspace(0, ss[-1], n, endpoint=False)
-        cx = np.interp(qs, ss, poly[:, 0])
-        cy = np.interp(qs, ss, poly[:, 1])
-        cs = np.column_stack([cx, cy])
-        onn = normals(poly)
-        ph = np.empty(n)
-        for i, q in enumerate(qs):
-            j = np.searchsorted(ss, q) % len(onn)
-            ph[i] = math.atan2(onn[j, 1], onn[j, 0])
-        return cs, ph
-
     outer = prep(a.outer, a.size - BW, a.smooth, dilate_mm=a.dilate)
     per = float(np.hypot(*np.diff(np.vstack([outer, outer[:1]]), axis=0).T).sum())
     area = abs(shoelace(outer))
@@ -211,69 +283,6 @@ def main():
         j = np.searchsorted(s, ps) % len(on)
         nrm[i] = on[j]
     phis = np.arctan2(nrm[:, 1], nrm[:, 0])              # outward normal angle per post
-
-    # mouth OUT: material centred INWARD (phi+pi), tips at phi +- (pi - HALF)... the opening is
-    # (360-wrap) wide centred on +normal, so tips sit at phi +- (360-wrap)/2.
-    tip_off = math.radians((360.0 - WRAP) / 2.0)
-
-
-    # dip DEPTH: how far a chord passes inside a post's MATERIAL sector (mouth at phi+stag).
-    def dip(p, q, c, phi, stag=0.0):
-        worst = 0.0
-        for t in np.linspace(0, 1, 64):
-            x, y = p + (q - p) * t
-            r = math.hypot(x - c[0], y - c[1])
-            if r >= R_T:
-                continue
-            off = (math.atan2(y - c[1], x - c[0]) - (phi + stag + math.pi)) % (2 * math.pi)
-            off = off - 2 * math.pi if off > math.pi else off
-            if abs(off) <= HALF:
-                worst = max(worst, R_T - r)
-        return worst
-
-    def solve_ring(cs, ph):
-        """PER-POST MOUTH ROTATION -- the bucket's stagger window, localized. Each post's mouth
-        turns within +-40 deg of its outward normal so its two crossings clear the material;
-        greedy sweeps, measured not argued. Returns (stag[], chords, violations[(k,j,depth)])."""
-        n = len(cs)
-        stag = np.zeros(n)
-
-        def tips(i):
-            L2 = cs[i] + R_T * np.array([math.cos(ph[i] + stag[i] + tip_off),
-                                         math.sin(ph[i] + stag[i] + tip_off)])
-            T2 = cs[i] + R_T * np.array([math.cos(ph[i] + stag[i] - tip_off),
-                                         math.sin(ph[i] + stag[i] - tip_off)])
-            return L2, T2
-
-        def gap_cost(k):
-            p2 = tips(k)[0]
-            q2 = tips((k + 1) % n)[1]
-            c0 = 0.0
-            for j in (k - 1, k, (k + 1) % n, (k + 2) % n):
-                c0 += dip(p2, q2, cs[j % n], ph[j % n], stag[j % n])
-            return c0
-
-        for _sweep in range(4):
-            for i in range(n):
-                best, bestd = stag[i], None
-                for cand in np.radians(np.arange(-40, 41, 5)):
-                    stag[i] = cand
-                    dcur = gap_cost(i - 1) + gap_cost(i)
-                    if bestd is None or dcur < bestd - 1e-12:
-                        bestd, best = dcur, cand
-                stag[i] = best
-        ch = []
-        for k in range(n):
-            p2 = tips(k)[0]
-            q2 = tips((k + 1) % n)[1]
-            ch.append((p2, q2, float(np.hypot(*(q2 - p2)))))
-        vv = []
-        for k, (p2, q2, L2) in enumerate(ch):
-            for j in range(n):
-                dpt = dip(p2, q2, cs[j], ph[j], stag[j])
-                if dpt > 0.05:                    # a bead-scale graze, not a float epsilon
-                    vv.append((k, j, dpt))
-        return stag, ch, vv
 
     stags, chords, viol = solve_ring(centres, phis)
     max_chord = max(c[2] for c in chords)
@@ -323,10 +332,15 @@ def main():
     hole_area = abs(shoelace(hole))
 
     # THE INNER WALL (Oleg, mid-render: "since we are having the middle cut, lets have walls
-    # there as well but only 2 inch, while outer wall is 6 inch"). Posts along the cut's outline,
-    # mouths facing INTO the void (sticks visible from inside the cut; default, flippable), the
-    # continuous face toward the net -- which the net then laps onto, so the cut's edge ring is
-    # also the inner wall's foundation and nothing about the hole floats.
+    # there as well but only 2 inch, while outer wall is 6 inch"). Posts along the cut's outline.
+    # MOUTHS TOWARD THE NET (the bucket interior; sticks clip in from inside the bucket), the
+    # CONTINUOUS face toward the cut, so the art hole's edge reads as an unbroken line and the
+    # crossings run on the net side, buried against the floor rather than across the art.
+    # RETRACTION 2026-08-08: the first caption on this render said "mouths INTO the cut" while
+    # the arcs as DRAWN (and as solved -- mouth = phi + stag, phi the outward normal, which for
+    # the hole polygon points into the net) faced the net. The drawing was right, the words were
+    # wrong, and Oleg approved the DRAWING. Flippable at the emitter if he wants sticks showing
+    # through the cut instead (--inner-mouth).
     in_centres = in_phis = None
     in_chords, in_viol = [], []
     if a.inner_wall_h > 0:
@@ -419,8 +433,14 @@ def main():
         font = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", 15)
     except Exception:
         font = None
+    # THE INVOCATION, VERBATIM, ON THE ARTIFACT. Learned the hard way TODAY: plan D was approved
+    # off a render whose exact flags nobody recorded, and reproducing them took a parameter sweep
+    # against the render's own numbers panel. Same law as bucket_towers' '; CMD=' stamp.
+    cmd_line = "CMD: " + " ".join(shlex.quote(s)
+                                  for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])
     lines = [
         "ART BUCKET — PLAN (no gcode yet; render checkpoint)",
+        cmd_line,
         f"heights                outer wall {a.wall_h:.0f} mm (6 in)   "
         f"inner cut wall {a.inner_wall_h:.0f} mm (2 in)",
         f"wall material extent   {a.size:.0f} mm   perimeter {per:.0f} mm",
@@ -436,7 +456,7 @@ def main():
         f"art hole               {(a.size - BW) * frac:.0f} mm (auto-fit), area {hole_area / 100:.0f} cm2 "
         f"({hole_area / area * 100:.0f}% of floor)",
         f"net                    {len(hatch)} strands at {a.net_pitch:g} mm, {net_len / 1000:.1f} m",
-        (f"inner wall             {len(in_centres)} posts, mouths INTO the cut; "
+        (f"inner wall             {len(in_centres)} posts, mouths toward the NET (as drawn; flippable); "
          f"max chord {max(c[2] for c in in_chords):.1f} mm; violations {len(in_viol)}"
          + (f" worst {max(v[2] for v in in_viol):.2f} mm" if in_viol else "")
          if in_centres is not None else "inner wall             none"),
@@ -450,6 +470,7 @@ def main():
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     img.save(a.out)
     print(a.out)
+    print(f"  {cmd_line}")
     print(f"  posts {n_posts}  max chord {max_chord:.1f} (proven {PROVEN_CHORD:.1f})  "
           f"violations {len(viol)}  min width {minw:.1f}  brim {w_brim:.1f}mm/{n_rings} rings  "
           f"hole {hole_area / area * 100:.0f}% of floor  net {net_len / 1000:.1f}m")
