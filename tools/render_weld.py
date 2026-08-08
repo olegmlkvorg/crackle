@@ -23,9 +23,20 @@ the picture is making, and refuses to draw if any is not true of the files:
   the AFTER file's stitch crosses the border at --expect-pitch (default 0.66mm, +-10%).
 None of the three is a flag you can turn off, because a figure that needs one off is a lie.
 
+--json PATH additionally emits the same window as data for bucket.html's in-browser sim: the
+border walk points and every bead (endpoints, measured width, class) in frame coordinates, plus
+the in-frame held counts as the expected result. The rounded bytes are PROVEN before they ship:
+the tool re-runs the held walk on exactly the numbers the JSON carries and requires the same
+flag at every border step as the full-precision walk, escalating decimal places until they agree
+and refusing if they never do -- so a browser that mirrors qa_weld's arithmetic on this data must
+land on the gate's own verdict. --json-ref PATH writes those per-step flags beside it, so the
+page's shipped script can be executed against them in a test.
+
 Usage: python3 tools/render_weld.py --before A.gcode --after B.gcode --out fig.svg
+                                    [--json PATH] [--json-ref PATH]
 Exit: 0 drawn, 1 the artifact disagrees with what the figure would claim, 2 cannot measure.
 """
+import json
 import argparse, math, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -116,6 +127,130 @@ def border_held(g, segs, uv, tan_half, lo, hi):
     return held, tot
 
 
+def frame_beads(segs, uv, tan_half, lo, hi):
+    """The physics set for the JSON: every bead within 3.0mm of the window, in frame
+    coordinates, full precision. 3.0 is border_held's own grid margin, for the same reason:
+    a border step inside the window must never be judged against a cropped bead."""
+    return [(uv(p), uv(q), w, cls) for (p, q, w, i, cls) in segs
+            if in_win(uv(p), uv(q), tan_half, lo, hi, 3.0)]
+
+
+def frame_border(g, uv, tan_half, lo, hi):
+    """qa_weld's border walk, restricted to the window, in frame coordinates and walk order.
+    Refuses a discontinuous subset: the run counter under the walk assumes one unbroken path,
+    and a window that sliced the walk into fragments would make that counter lie at the cuts."""
+    pts, idxs = [], []
+    for i, bp in enumerate(qa_weld.border_path(g)):
+        u = uv(bp)
+        if abs(u[0]) <= tan_half and lo <= u[1] <= hi:
+            pts.append(u)
+            idxs.append(i)
+    if idxs and idxs[-1] - idxs[0] + 1 != len(idxs):
+        sys.exit("REFUSE: the border walk enters this window %d times; the longest-run counter "
+                 "is only true of one contiguous walk." % (sum(1 for a, b in zip(idxs, idxs[1:])
+                                                               if b - a > 1) + 1))
+    return pts
+
+
+def held_flags(border_pts, beads, median, margin=qa_weld.MARGIN):
+    """One held flag per border step, by the same test qa_weld.check runs: some FILL or RASTER
+    capsule overlaps the border bead by at least the margin. Brute force on purpose -- this is
+    the arithmetic the page's script mirrors, so it must not need the spatial hash."""
+    out = []
+    for (u, v) in border_pts:
+        h = False
+        for (a, b, w, cls) in beads:
+            if cls in ('FILL', 'RASTER') and \
+                    qa_weld.seg_dist((u, v), (u, v), a, b) <= (median + w) / 2.0 - margin:
+                h = True
+                break
+        out.append(h)
+    return out
+
+
+def worst_unheld_run(flags, step=qa_weld.STEP):
+    """qa_weld's own run counting over a flag sequence."""
+    worst = cur = 0.0
+    for h in list(flags) + [True]:
+        if h:
+            worst = max(worst, cur)
+            cur = 0.0
+        else:
+            cur += step
+    return worst
+
+
+def emit_json(path, ref_path, gb, sb, sa, labb, zb, a, uv, tan_half, lo, hi, counts):
+    """The window as data, PROVEN before it ships. Full-precision flags are computed off the
+    frame itself; the payload's rounded bytes are then re-walked and must reproduce them at
+    every step, escalating precision until they do. counts = (hb, tb, ha, ta) from the panel's
+    own border_held, and the full-precision walk must agree with those too, or the data would
+    disagree with the figure beside it."""
+    border_full = frame_border(gb, uv, tan_half, lo, hi)
+    names = [os.path.basename(a.before), os.path.basename(a.after)]
+    files_full = []
+    for segs in (sb, sa):
+        beads = frame_beads(segs, uv, tan_half, lo, hi)
+        median = sorted(s[2] for s in segs)[len(segs) // 2]
+        files_full.append((beads, median))
+    flags_full = [held_flags(border_full, b, m) for b, m in files_full]
+    hb, tb, ha, ta = counts
+    got = [(sum(f), len(f)) for f in flags_full]
+    if got != [(hb, tb), (ha, ta)]:
+        sys.exit("REFUSE: the JSON walk reads %s in this window against border_held's "
+                 "%s; the data would disagree with the figure beside it."
+                 % (got, [(hb, tb), (ha, ta)]))
+    classes = ['WALL', 'RIM', 'RASTER', 'FILL']
+    for prec in (2, 3, 4):
+        border_r = [[round(u, prec), round(v, prec)] for (u, v) in border_full]
+        files_r = []
+        for (beads, median) in files_full:
+            files_r.append(([[round(p[0], prec), round(p[1], prec),
+                              round(q[0], prec), round(q[1], prec),
+                              round(w, 3), classes.index(cls)]
+                             for (p, q, w, cls) in beads], round(median, 4)))
+        flags_r = [held_flags([tuple(p) for p in border_r],
+                              [((b[0], b[1]), (b[2], b[3]), b[4], classes[b[5]])
+                               for b in beads_r], median_r)
+                   for (beads_r, median_r) in files_r]
+        if flags_r == flags_full:
+            break
+    else:
+        sys.exit("REFUSE: no rounding down to 4 decimals reproduces the full-precision walk "
+                 "step for step; the JSON would ship a different physics than the figure.")
+    payload = {
+        "source": "tools/render_weld.py --json: the same window, beads and walk as the figure, "
+                  "measured off the emitted gcode with tools/qa_weld.py's own reading",
+        "layer": labb, "z": zb, "gap": a.gap,
+        "step": qa_weld.STEP, "margin": qa_weld.MARGIN, "precision": prec,
+        "decimated": False,
+        "window": {"tanHalf": round(tan_half, 3), "lo": round(lo, 3), "hi": round(hi, 3)},
+        "classes": classes,
+        "border": border_r,
+        "files": [
+            {"key": k, "name": n, "medianBead": files_r[j][1],
+             "beads": files_r[j][0],
+             "expect": {"held": got[j][0], "total": got[j][1],
+                        "worstRun": round(worst_unheld_run(flags_full[j]), 1)}}
+            for j, (k, n) in enumerate(zip(("before", "after"), names))],
+    }
+    blob = json.dumps(payload, separators=(',', ':'))
+    open(path, 'w').write(blob)
+    sys.stderr.write("wrote %s: %d bytes at %d decimals, %d border steps, %d + %d beads, "
+                     "held %d/%d and %d/%d\n"
+                     % (path, len(blob), prec, len(border_r),
+                        len(files_r[0][0]), len(files_r[1][0]),
+                        got[0][0], got[0][1], got[1][0], got[1][1]))
+    if ref_path:
+        open(ref_path, 'w').write(json.dumps(
+            {"before": [int(x) for x in flags_full[0]],
+             "after": [int(x) for x in flags_full[1]],
+             "worstRun": [round(worst_unheld_run(f), 4) for f in flags_full]},
+            separators=(',', ':')))
+        sys.stderr.write("wrote %s: the per-step flags the page's script must reproduce\n"
+                         % ref_path)
+
+
 def stitch_pitch(g, segs, uv, tan_half, lo, hi):
     """Median spacing of the stitch where it crosses the border's own radius -- measured off the
     path, not read off a flag: every FILL crossing of r_poly minus one bead, sorted along the
@@ -200,6 +335,8 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--gap', type=int, default=8, help='draw the gap between post k and post k+1')
     ap.add_argument('--expect-pitch', type=float, default=0.66)
+    ap.add_argument('--json', help='also emit the window as data for the in-browser sim')
+    ap.add_argument('--json-ref', help='sidecar of per-step held flags, for testing that sim')
     a = ap.parse_args()
 
     gb, sb, labb, zb = load(a.before)
@@ -229,6 +366,9 @@ def main():
     if ha <= hb:
         sys.exit(f"REFUSE: the AFTER file holds {ha}/{ta} border steps against the BEFORE file's "
                  f"{hb}/{tb}; there is no fix here to draw.")
+    if a.json:
+        emit_json(a.json, a.json_ref, gb, sb, sa, labb, zb, a, uv, tan_half, lo, hi,
+                  (hb, tb, ha, ta))
 
     W, H = 2 * tan_half, hi - lo
     loc_h = 2 * LOC_R + 1.4
@@ -259,7 +399,7 @@ def main():
              f'{pitch:.2f} mm', 1.6, 'var(--ink)'),
            panel(ca, tan_half, lo, hi, PAD, y1),
            # the same probe on both panels, or the pair would be a comparison of two questions
-           t(PAD + tan_half, y1 + hi - bare_ay + 0.55,
+           t(PAD + tan_half, y1 + hi - bare_ay - 0.5,
              f'{bare_a:.1f} mm', 1.35, 'var(--dim)', 'middle'),
            f'<line x1="{sbx:.2f}" y1="{th - 2.2:.2f}" x2="{sbx + 10:.2f}" y2="{th - 2.2:.2f}" '
            f'stroke="var(--dim)" stroke-width="0.3"/>',
