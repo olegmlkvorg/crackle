@@ -312,35 +312,45 @@ def refine_to_zero(poly, cs, ph, stag, r_t, half_rad, toff, pitch, label, phase=
 
 
 # ------------------------------------------------------------------------- floor geometry
-def tip_polygon(cs, mus, r_t, toff):
-    """The rim polygon: every post's two tips in walk order, chords implicit between them."""
-    pts = []
-    for c, mu in zip(cs, mus):
-        lead, trail = tips_of(c, mu, r_t, toff)
-        pts.append(trail)
-        pts.append(lead)
-    return Polygon(pts).buffer(0)
+# THE FLOOR REGION IS THE INTERIOR RING OF THE MATERIAL CHAIN, and the third construction
+# is the one that cannot lie. History, measured each time off the emitted plate:
+#   1  a polygon DETOURING around each material arc -- its arc-vs-chord slivers
+#      self-intersected and buffer(0)'s heal rewrote the border (18.5mm unwelded).
+#   2  the tip polygon minus grown disks -- BOWTIES under big mouth rotations (a trailing
+#      tip rotated past -90 deg flips the vertex order), heal again, rails retreating from
+#      whole chords and the net region overshooting 3-4 rails deep into the brim (the 1300
+#      pile spots were net strands crossing rails).
+#   3  THIS: union every post disk (r_t) with every chord strip -- a valid closed CHAIN by
+#      construction (union of valid geometries; endpoints touch the circles). The chain's
+#      largest INTERIOR ring is the floor border exactly: inner faces of the material
+#      circles + inner edges of the chords, notches included. Rails are then plain inward
+#      buffers of that region -- distance d from chords AND feet everywhere, no healing,
+#      nothing to bowtie.
+def floor_region_outer(cs, mus, r_t, toff):
+    chords = ring_chords(cs, mus, r_t, toff)
+    chain = unary_union([Point(tuple(c)).buffer(r_t, quad_segs=48) for c in cs]
+                        + [LineString(ch).buffer(0.05, quad_segs=8) for ch in chords])
+    best = None
+    for part in (chain.geoms if isinstance(chain, MultiPolygon) else [chain]):
+        for ring in part.interiors:
+            pl = Polygon(ring)
+            if best is None or pl.area > best.area:
+                best = pl
+    if best is None:
+        raise SystemExit("REFUSING TO EMIT: the outer material chain encloses no interior -- "
+                         "the ring is not closed.")
+    return best
 
 
-def rail_region_out(TC, cs, r_t, d):
-    """The floor region whose BOUNDARY is the rail at depth d inside an outer ring:
-    (tip polygon inset by d) minus (every post disk grown to r_t + d).
-
-    This is bucket_towers.boundary_rings' arithmetic -- inset chords + circles at rho = r_t+d
-    -- done by shapely, so it survives a non-convex outline. The first construction offset a
-    polygon that DETOURED around each material arc, and buffer(0)'s healing of its kinks
-    quietly rewrote the border at convex extremities: measured on the emitted plate, the
-    rails stopped 4mm short of the feet chords and skipped every mouth notch (qa_weld read
-    18.5mm of unwelded border)."""
-    disks = unary_union([Point(c).buffer(r_t + d, quad_segs=32) for c in cs])
-    return TC.buffer(-d, quad_segs=16).difference(disks)
-
-
-def rail_region_in(TC, cs, r_t, d):
-    """Same law around the cut: (inner tip polygon grown by d) union (disks at r_t + d).
-    The boundary is the hole-ring rail at depth d outside the inner rim."""
-    disks = unary_union([Point(c).buffer(r_t + d, quad_segs=32) for c in cs])
-    return TC.buffer(d, quad_segs=16).union(disks)
+def hole_region_inner(cs, mus, r_t, toff):
+    """The cut plus its rim band, filled: the largest part's EXTERIOR ring of the inner
+    chain. Outward buffers of this are the hole-ring rails."""
+    chords = ring_chords(cs, mus, r_t, toff)
+    chain = unary_union([Point(tuple(c)).buffer(r_t, quad_segs=48) for c in cs]
+                        + [LineString(ch).buffer(0.05, quad_segs=8) for ch in chords])
+    part = max((chain.geoms if isinstance(chain, MultiPolygon) else [chain]),
+               key=lambda p: p.area)
+    return Polygon(part.exterior)
 
 
 def poly_parts(g):
@@ -366,20 +376,20 @@ def thin(pts, min_seg=0.30):
     return out
 
 
-def ring_loops_out(TC, cs, r_t, depths):
-    """[(depth_index, loop_pts)] -- outer brim rails, exact lap law (see rail_region_out)."""
+def ring_loops_out(FR, depths):
+    """[(depth_index, loop_pts)] -- brim rails: inward buffers of the floor region."""
     out = []
     for i, d in enumerate(depths):
-        for part in poly_parts(rail_region_out(TC, cs, r_t, d)):
+        for part in poly_parts(FR.buffer(-d, quad_segs=24)):
             out.append((i, thin([(x, y) for x, y in part.exterior.coords])))
     return out
 
 
-def ring_loops_in(TC, cs, r_t, depths):
-    """[(depth_index, loop_pts)] -- hole-ring rails, outermost depth first."""
+def ring_loops_in(HR, depths):
+    """[(depth_index, loop_pts)] -- hole-ring rails: outward buffers, outermost first."""
     out = []
     for i, d in enumerate(sorted(depths, reverse=True)):
-        for part in poly_parts(rail_region_in(TC, cs, r_t, d)):
+        for part in poly_parts(HR.buffer(d, quad_segs=24)):
             out.append((i, thin([(x, y) for x, y in part.exterior.coords])))
     return out
 
@@ -756,18 +766,18 @@ def main():
     _, TJ, TK, t_az, M1, tr_len1, tr_len2 = best_tr
 
     # ---------------------------------------------------------------- floor construction
-    TC_out = tip_polygon(o_cs, o_mu, r_t, toff)
-    TC_in = tip_polygon(i_cs, i_mu, r_t, toff)
+    FR = floor_region_outer(o_cs, o_mu, r_t, toff)
+    HR = hole_region_inner(i_cs, i_mu, r_t, toff)
     lp1 = FLOOR1_OVERLAP * w1
     n_rings1 = max(2, int(round(w_brim / lp1)))
     nh, nh1 = 3, 2
     net1_pitch = a.net_pitch_1 if a.net_pitch_1 else round(w1 / FLOOR1_OVERLAP, 3)
 
     def floor_parts(lpx, nrx, nhx, netp, ang):
-        rings = ring_loops_out(TC_out, o_cs, r_t, [lpx * (1 + i) for i in range(nrx)])
-        hrings = ring_loops_in(TC_in, i_cs, r_t, [lpx * (1 + i) for i in range(nhx)])
-        N = rail_region_out(TC_out, o_cs, r_t, lpx * nrx).difference(
-            rail_region_in(TC_in, i_cs, r_t, lpx * nhx))
+        rings = ring_loops_out(FR, [lpx * (1 + i) for i in range(nrx)])
+        hrings = ring_loops_in(HR, [lpx * (1 + i) for i in range(nhx)])
+        N = FR.buffer(-lpx * nrx, quad_segs=24).difference(
+            HR.buffer(lpx * nhx, quad_segs=24))
         runs = hatch_runs(N, netp, ang)
         return rings, hrings, N, runs
 
@@ -1150,9 +1160,8 @@ def main():
     sha_h = hashlib.sha256(open(a.hole, "rb").read()).hexdigest()[:16]
     _bmoves = sorted({m / bpass[m] for m in bpass})
     _mm2s = sorted({round(m * bw * lh, 4) for m in _bmoves})
-    brim_frac_real = (sum(p.area for p in poly_parts(rail_region_out(TC_out, o_cs, r_t, 0.0)))
-                      - sum(p.area for p in poly_parts(
-                            rail_region_out(TC_out, o_cs, r_t, lp * n_rings)))) / area
+    brim_frac_real = (FR.area - sum(p.area for p in poly_parts(
+        FR.buffer(-lp * n_rings, quad_segs=24)))) / area
 
     L = []
     w = L.append
