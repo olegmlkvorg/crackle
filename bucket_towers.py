@@ -650,32 +650,49 @@ def floor_check(r_h, bw, r_ring, bore_r, wrap_deg, mouth="in", r_t_wall=None):
     return edge, inner
 
 
-def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg, pitch=None, wbead=None):
+def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg, pitch=None, wbead=None,
+                   max_rings=None):
     """Closed loops hugging the floor's border: chord-parallel segments welded to arcs around
-    every post foot, stepped inward by ~0.9 bead until they overlap the lattice disc.
+    every post foot, stepped inward at the FLOOR1_OVERLAP pitch.
 
     Oleg, 2026-08-08 ~03:30, off the v11 plate: "fix floor geometry it has to touch wals
     eveywhere". The raster lattice fills an inscribed CIRCLE, so it meets the border only where
-    raster lines happen to end: scalloped gaps up to half a pitch along the rim chords, and bays
-    at every post where neither raster nor rim reaches the wall. These rings ARE the border:
-    the outermost runs 0.55 bead inside the chords and 0.55 bead off every post wall (beads
-    touching = welded), the innermost overlaps the lattice disc, and every layer of the floor
-    lays them, so the floor touches walls and rim EVERYWHERE by construction, not where the
-    raster luck lands. Measured and reported, ring by ring.
+    raster lines happen to end; these rings hug the border so the floor reaches it everywhere.
+
+    RETRACTION, 2026-08-08 (v16), and it is a double one. This function used to lay rings at
+    EXACT bead pitch and call the result "butt-welded neighbours" -- a zero-margin joint, which
+    beads landing narrower than commanded (the reason FLOOR1_OVERLAP exists) turn into a gap.
+    Worse: tools/qa_weld.py, comparing bead counts across v15 and its successor, proved these
+    rings NEVER REACHED A PLATE AT ALL -- build() handed the layer-1 ring list (empty, its own
+    stop test kills w1-pitch rings immediately) to EVERY floor layer, so every floor since the
+    feature was written printed with NO border fill, while the filename advertised r6. That
+    absence is what qa_weld measures on v15 as 0% of the border welded and a 1241.5mm unwelded
+    run, and it is the plate Oleg read: "the net and the outer wall line do not have sufficient
+    connection points." So: every joint now LAPS by (1 - FLOOR1_OVERLAP) of a bead -- the same
+    0.2-bead margin as the only floor that has ever welded -- and the same tool that condemned
+    v15 gates every successor.
+
+    THE CLAMP IS GONE by arithmetic, not by plate evidence (it never printed -- see above):
+    projecting every sagging ring interior onto one _lim circle lays every deep ring on the SAME
+    centreline, and on layer 1 that circle (r_h + w1 = 169.2 on the v15 geometry) sits OUTSIDE
+    the 169.05 rim polygon, so the "detour" would ride the rim line itself. A ring family now
+    STOPS at the first ring that would dip inside the lattice disc, and the band it cannot reach
+    belongs to stitch_comb() below. `max_rings` caps the family for exactly that architecture.
     """
     n = len(centres)
-    # PER-LAYER LINE WIDTH. Layer 1 lays w1-wide beads (3.94 here), so its rings pitch at
-    # 0.8 x w1 like its own lattice -- six bead-pitch rings under w1 metering crammed five beads
-    # of filament into every bead of space: the mounded outer line and the cracking extruder of
-    # the v14 plate ("why so much filament on outer line? the head started cracking on second
-    # loop"). Upper floors keep exact bead pitch.
-    pitch = pitch or bw
     wbead = wbead or bw
+    # THE PITCH IS THE OVERLAP LAW, NOT THE BEAD. A default of `bw` here is the zero-margin butt
+    # this function just retracted; deriving it from FLOOR1_OVERLAP means a caller that forgets
+    # the flag gets the proven law, not the disproven one.
+    pitch = pitch or FLOOR1_OVERLAP * wbead
+    lap_lim = r_h + FLOOR1_OVERLAP * wbead   # rings stop where they would DIP into the raster
+                                             # disc; at this limit they LAP its edge bead by
+                                             # (1-FLOOR1_OVERLAP) x wbead instead of butting it
     rings = []
     i = 0
     while True:
-        d = (1.0 + 1.0 * i) * pitch    # first ring one line-pitch inside the border, then pitch:
-        rho = r_t + d                  # edges butt -- welded neighbours, never overlapped
+        d = (1.0 + 1.0 * i) * pitch    # first ring one lap-pitch inside the border, then pitch:
+        rho = r_t + d                  # neighbours LAP by (1-FLOOR1_OVERLAP) of a bead
         segs = []                     # per gap: (A, B) endpoints of the inset chord segment
         ok = True
         for k in range(n):
@@ -710,14 +727,6 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg, pitch=None,
                 break
             segs.append(((P0[0] + ux * tA, P0[1] + uy * tA),
                          (P0[0] + ux * tB, P0[1] + uy * tB)))
-        # the stop measure is the CHORD SEGMENTS' radius, not the loop minimum: the post arcs
-        # legitimately dip toward the centre to fill the pockets a circular raster cannot reach,
-        # and killing the ring for that dip is what emitted ZERO rings on the first no-overlap
-        # regen (caught in the report before the plate).
-        if ok and segs:
-            _minsegr = min(math.hypot(P[0] - cx, P[1] - cy) for AB2 in segs for P in AB2)
-            if _minsegr < r_h + wbead:
-                ok = False
         if not ok:
             break
         loop = []
@@ -725,18 +734,8 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg, pitch=None,
             A, B = segs[k]
             m = max(2, int(math.ceil(math.dist(A, B) / seg)))
             for t in range(m + 1):
-                px = A[0] + (B[0] - A[0]) * t / m
-                py = A[1] + (B[1] - A[1]) * t / m
-                # the same no-overlap clamp as the arcs: on sagging-chord gaps a deep ring's
-                # SEGMENT interior dips inside the raster disc (perpendicular foot 164.1 vs edge
-                # 165.7 here) while its endpoints stay outside -- caught by measuring the emitted
-                # radii, invisible to an endpoint test.
-                _pr = math.hypot(px - cx, py - cy)
-                _lim = r_h + wbead
-                if _pr < _lim and _pr > 1e-9:
-                    px = cx + (px - cx) * _lim / _pr
-                    py = cy + (py - cy) * _lim / _pr
-                loop.append((px, py))
+                loop.append((A[0] + (B[0] - A[0]) * t / m,
+                             A[1] + (B[1] - A[1]) * t / m))
             c1 = centres[(k + 1) % n]
             a1 = math.atan2(B[1] - c1[1], B[0] - c1[0])
             A2 = segs[(k + 1) % n][0]
@@ -752,23 +751,113 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg, pitch=None,
             sweep = sP if rP < rN else sN
             steps = max(2, int(math.ceil(abs(sweep) * rho / seg)))
             for t in range(1, steps + 1):
-                px = c1[0] + rho * math.cos(a1 + sweep * t / steps)
-                py = c1[1] + rho * math.sin(a1 + sweep * t / steps)
-                # NO OVERLAP with the raster: a deep ring's post arc dives inside the lattice
-                # disc near each post (down to 162mm on this geometry, 3mm into the raster).
-                # Clamp those points to the disc edge: the arc detours ALONG the raster boundary,
-                # butt beside it, and rejoins the true arc where it re-emerges.
-                _pr = math.hypot(px - cx, py - cy)
-                _lim = r_h + wbead
-                if _pr < _lim:
-                    px = cx + (px - cx) * _lim / _pr
-                    py = cy + (py - cy) * _lim / _pr
-                loop.append((px, py))
+                loop.append((c1[0] + rho * math.cos(a1 + sweep * t / steps),
+                             c1[1] + rho * math.sin(a1 + sweep * t / steps)))
+        # THE STOP IS THE WHOLE LOOP'S MINIMUM RADIUS, and a ring that dips is DROPPED, never
+        # clamped. The clamp piled every dipping ring onto one circle (measured on v15, see the
+        # docstring); the band a full ring cannot reach is stitch_comb()'s jurisdiction.
+        if min(math.hypot(px - cx, py - cy) for px, py in loop) < lap_lim:
+            break
         rings.append(loop)
         i += 1
+        if max_rings is not None and i >= max_rings:
+            break
         if i > 8:
             break
     return rings
+
+
+def stitch_comb(cx, cy, centres, starts, ends, r_t, bw, r_h, seg, n_rings):
+    """ONE closed square-wave loop stitching the boundary ring to the raster disc: radial strokes
+    every FLOOR1_OVERLAP x bead of arc, dwells alternating between the two rails.
+
+    Oleg, 2026-08-08, off the v15 plate: "the net and the outer wall line do not have sufficient
+    connection points. i think you need to add hilpers in empty spaces to connect it properly",
+    then "fix my last complaint with hilpert perhaps". This is that helper -- a first-order
+    Hilbert-style meander, not the recursive curve, because the band is 1-6 beads wide and has no
+    room for recursion levels; at this width the meander IS the curve's first order.
+
+    WHY STROKES AND NOT MORE RINGS. A ring welds to its neighbour along one circumferential lap
+    -- every joint PARALLEL to the border -- so one delaminated interface frees the whole floor
+    from the walls as a disc. A stroke crosses the band RADIALLY: to pull the net off the wall
+    you now have to BREAK a stroke every {pitch} of arc, not peel a lap. And the strokes tile
+    solid (pitch < bead), so this also FILLS the empty spaces, which is the half of the v11
+    instruction ("fill in all empty spaces between outer line and inner grid") the dropped ring
+    clamp used to fake by piling.
+
+    RAILS, both lapped at the proven margin:
+      inner   the circle r_h + FLOOR1_OVERLAP x bead: stroke ends and inner dwells lap the
+              raster's own edge arcs and chord ends by (1-FLOOR1_OVERLAP) x bead.
+      outer   the border inset (1 + n_rings) x FLOOR1_OVERLAP x bead -- one lap-pitch inside the
+              innermost boundary ring, computed as the min-envelope of the inset rim chords and
+              the post circles, so the comb follows chords mid-gap and wraps the post feet.
+    Where the envelope dips under the inner rail (the post inward faces, where wall and raster
+    are barely a bead apart), the stroke degenerates and the comb rides the inner rail as a
+    single bead -- there it laps ring and raster BOTH, a deliberately fatter weld at the feet.
+    """
+    n = len(centres)
+    lap = FLOOR1_OVERLAP * bw
+    r_in = r_h + lap
+    d_out = (1 + n_rings) * lap
+    rho = r_t + d_out
+    # the inset chord lines, precomputed relative to the bucket centre
+    lines = []
+    for k in range(n):
+        p, q = ends[k], starts[(k + 1) % n]
+        ex, ey = q[0] - p[0], q[1] - p[1]
+        L = math.hypot(ex, ey)
+        ex, ey = ex / L, ey / L
+        nx, ny = -ey, ex
+        mx, my = (p[0] + q[0]) / 2 - cx, (p[1] + q[1]) / 2 - cy
+        if nx * mx + ny * my > 0:
+            nx, ny = -nx, -ny
+        lines.append(((p[0] + nx * d_out - cx, p[1] + ny * d_out - cy), (ex, ey)))
+    circ = [(c[0] - cx, c[1] - cy) for c in centres]
+
+    def r_out(th):
+        """Radius of the outer rail along the ray at `th`: the innermost envelope of every inset
+        chord line and every post circle. The inset chords form a convex polygon and the post
+        circles bulge inward from it, so min() over all positive-t intersections IS the border."""
+        ux, uy = math.cos(th), math.sin(th)
+        best = None
+        for (ax, ay), (ex, ey) in lines:
+            den = ux * ey - uy * ex
+            if abs(den) < 1e-12:
+                continue
+            t = (ax * ey - ay * ex) / den
+            if t > 0 and (best is None or t < best):
+                best = t
+        for (kx, ky) in circ:
+            uc = ux * kx + uy * ky
+            disc = uc * uc - (kx * kx + ky * ky - rho * rho)
+            if disc >= 0:
+                t = uc - math.sqrt(disc)
+                if t > 0 and (best is None or t < best):
+                    best = t
+        return best if best is not None else r_in
+
+    N = int(math.ceil(2 * math.pi * r_in / (FLOOR1_OVERLAP * bw)))
+    if N % 2:
+        N += 1
+
+    def P(th, r):
+        return (cx + r * math.cos(th), cy + r * math.sin(th))
+
+    def stroke(th, r0, r1):
+        m = max(1, int(math.ceil(abs(r1 - r0) / seg)))
+        return [P(th, r0 + (r1 - r0) * t / m) for t in range(1, m + 1)]
+
+    loop = [P(0.0, r_in)]
+    for i in range(N):
+        th_j = 2 * math.pi * ((i + 1) % N) / N
+        ro_j = max(r_in, r_out(th_j))
+        if i % 2 == 0:
+            loop.append(P(th_j, r_in))            # inner dwell, then stroke OUT
+            loop += stroke(th_j, r_in, ro_j)
+        else:
+            loop.append(P(th_j, ro_j))            # outer dwell along the envelope, stroke IN
+            loop += stroke(th_j, ro_j, r_in)
+    return loop
 
 
 def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg, rings=None):
@@ -882,9 +971,15 @@ def build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay, n_fl
                 entry = layers[-1]["pts"][-1] if layers else None
                 # Layer 1 keeps its own derived pitch: the plate weld. See floor_pitch_1.
                 pitch_here = floor_pitch_1 if (li == 0 and floor_pitch_1) else floor_pitch
+                # PER-LAYER, NOT PER-CALL: `rings_l1 if rings_l1 is not None else rings` handed
+                # the LAYER-1 ring list to EVERY single-circuit floor layer, so v15's upper
+                # floors drew the w1-pitch clamped loops while its filename advertised six
+                # bw-pitch rings that never existed. Found by tools/qa_weld.py reading the same
+                # bead counts off both files when the geometry was supposed to differ.
                 first, fp, fk = floor_path(cx, cy, r_h, pitch_here, (math.pi / 2.0) * (li % 2),
                                            starts[0], entry, SEG,
-                                           rings=(rings_l1 if rings_l1 is not None else rings))
+                                           rings=(rings_l1 if (li == 0 and rings_l1 is not None)
+                                                  else rings))
                 pts = [first] + fp
                 kind = fk
             elif is_floor:
@@ -1788,12 +1883,24 @@ def main():
                 f"REFUSING TO EMIT: bridge mult {_m9:g}x cannot get under the proven rod "
                 f"({machine.PROVEN_ROD_MM:g}mm) at any odd pass count -- arithmetic is broken.")
     _fab_np = a.fabric_passes
-    _rings = (boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG)
+    # THE BORDER WELD (v16). One boundary ring lapping wall and rim, then the stitch comb tying
+    # that ring to the raster with radial strokes. tools/qa_weld.py measured v15's border at 0%
+    # welded with a 1241.5mm unwelded run -- because the ring feature had never reached the
+    # emitter at all (see boundary_rings' RETRACTION). The law here is FLOOR1_OVERLAP at EVERY
+    # interface, and the same tool that condemned v15 gates every emitted floor.
+    _rings = (boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG, max_rings=1)
               if a.floor_layers else [])
-    # LAYER 1'S OWN RINGS: w1-wide lines at the 0.8 x w1 overlap law its lattice already obeys.
-    _rings_l1 = (boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG,
-                                pitch=0.8 * w1, wbead=w1)
-                 if a.floor_layers else [])
+    _n_ring0 = len(_rings)
+    _comb = (stitch_comb(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG, _n_ring0)
+             if a.floor_layers else None)
+    if _comb:
+        _rings = _rings + [_comb]
+    # LAYER 1 GETS NO BORDER FILL, and now that is CHOSEN rather than accidental. Its own
+    # boundary_rings call always returned [] (the stop test kills w1-pitch rings on this
+    # geometry immediately), and had one emitted, its clamp circle sits outside the rim polygon.
+    # What holds layer 1 to the border instead is measured by qa_weld on the artifact: the
+    # w1-wide raster laps the rim mid-gap and the post walls at the feet by construction.
+    _rings_l1 = []
     # THE SKIRT IS GONE ("remove brim") -- git history holds it if it ever earns a return.
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
                    a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1,
@@ -2259,15 +2366,32 @@ def main():
         if _rings:
             _rmins = [min(math.hypot(px - cx, py - cy) for px, py in r9) for r9 in _rings]
             _rmaxs = [max(math.hypot(px - cx, py - cy) for px, py in r9) for r9 in _rings]
-            w(f"; FLOOR_RINGS={len(_rings)} FILL loops per floor layer, radii "
-              f"{min(_rmins):.1f}..{max(_rmaxs):.1f}mm: chord-parallels and post arcs at exact "
-              f"one-bead pitch,")
-            w(f";   butt-welded neighbours from one bead inside the border down to the lattice "
-              f"disc (edge {r_h + bw/2:.1f}).")
-            w(f";   Oleg 2026-08-08, fourth floor read: 'do not overlap, but do proper math and "
-              f"fill in all empty")
-            w(f";   spaces between outer line and inner grid with filament. remove brim.' "
-              f"Nothing crosses anything.")
+            w(f"; FLOOR_WELD=lap {1-FLOOR1_OVERLAP:.2f}xbead at every interface; ring {_n_ring0} "
+              f"+ stitch comb, radii {min(_rmins):.1f}..{max(_rmaxs):.1f}mm; "
+              f"gate tools/qa_weld.py")
+            w(f";   Oleg 2026-08-08, v15 read: 'the net and the outer wall line do not have "
+              f"sufficient connection")
+            w(f";   points. i think you need to add hilpers in empty spaces to connect it "
+              f"properly' / 'with hilpert")
+            w(f";   perhaps. you need to physically simulate and check how well bottom attached "
+              f"to walls'.")
+            w(f";   SO: one boundary ring laps wall and rim by {(1-FLOOR1_OVERLAP)*bw:.2f}mm, "
+              f"and a square-wave STITCH")
+            w(f";   COMB (first-order Hilbert meander -- the 1-6 bead band has no room for "
+              f"recursion) runs a radial")
+            w(f";   stroke every {FLOOR1_OVERLAP*bw:.2f}mm of arc between the ring and the "
+              f"raster edge, lapping both.")
+            w(f";   Pulling the net off the wall now means BREAKING a stroke per "
+              f"{FLOOR1_OVERLAP*bw:.2f}mm, not peeling one")
+            w(f";   circumferential butt seam.")
+            w(f";   NAMED DEVIATION from 'do not overlap' (v11): qa_weld measured v15's border "
+              f"at 0% welded (its")
+            w(f";   fill never reached the emitter), and a zero-margin butt is a GAP at landed "
+              f"width. The lap here")
+            w(f";   is the SAME {1-FLOOR1_OVERLAP:.1f}-bead margin as layer 1's own "
+              f"FLOOR1_OVERLAP, the only floor that has")
+            w(f";   ever welded. Crossing at full height (what v10 mounded) is still absent: "
+              f"nothing crosses anything.")
         w(f"; GATE 5 the latch disc's outer bead reaches radius {floor_edge:.3f}mm and the bamboo "
           f"channel's bore")
         w(f";        starts at {bore_inner:.3f}mm: {bore_inner-floor_edge:+.3f}mm of clearance. "
@@ -2663,10 +2787,13 @@ def main():
     # name"). Suffix only when it is off the stock height, so every filename written before
     # --layer-h existed still names the same file.
     lz = "" if abs(lh - machine.SLICER_LAYER_H) < 1e-9 else f"_z{lh:g}"
+    # 'c' MARKS THE STITCH COMB for the reason every other suffix exists: a lap-welded ring+comb
+    # border and v15's butted six-ring border are different parts and may not share a name.
+    _rsuf = f"r{_n_ring0}c" if _comb else (f"r{len(_rings)}" if _rings else "")
     fn = os.path.join(a.out, f"bucket_towers_{a.printer}_{a.material}_d{a.dia:g}_h{a.height:g}_"
                              f"n{n_tow}t{a.tower_d:g}{wf}_b{a.bridge_every}{bb}{mf}_"
                              f"f{a.floor_layers}x{a.floor_pitch:g}"
-                             f"{'r' + str(len(_rings)) if _rings else ''}{xf}{jf}{lz}.gcode")
+                             f"{_rsuf}{xf}{jf}{lz}.gcode")
     open(fn, "w").write("\n".join(L) + "\n")
 
     print(fn)
