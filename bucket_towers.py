@@ -667,8 +667,8 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
     rings = []
     i = 0
     while True:
-        d = (0.55 + 0.9 * i) * bw
-        rho = r_t + d
+        d = (1.0 + 1.0 * i) * bw       # first ring one bead inside the border, then bead pitch:
+        rho = r_t + d                  # edges butt -- welded neighbours, never overlapped
         segs = []                     # per gap: (A, B) endpoints of the inset chord segment
         ok = True
         for k in range(n):
@@ -703,14 +703,33 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
                 break
             segs.append(((P0[0] + ux * tA, P0[1] + uy * tA),
                          (P0[0] + ux * tB, P0[1] + uy * tB)))
+        # the stop measure is the CHORD SEGMENTS' radius, not the loop minimum: the post arcs
+        # legitimately dip toward the centre to fill the pockets a circular raster cannot reach,
+        # and killing the ring for that dip is what emitted ZERO rings on the first no-overlap
+        # regen (caught in the report before the plate).
+        if ok and segs:
+            _minsegr = min(math.hypot(P[0] - cx, P[1] - cy) for AB2 in segs for P in AB2)
+            if _minsegr < r_h + bw:
+                ok = False
         if not ok:
             break
         loop = []
         for k in range(n):
             A, B = segs[k]
             m = max(2, int(math.ceil(math.dist(A, B) / seg)))
-            loop += [(A[0] + (B[0] - A[0]) * t / m, A[1] + (B[1] - A[1]) * t / m)
-                     for t in range(m + 1)]
+            for t in range(m + 1):
+                px = A[0] + (B[0] - A[0]) * t / m
+                py = A[1] + (B[1] - A[1]) * t / m
+                # the same no-overlap clamp as the arcs: on sagging-chord gaps a deep ring's
+                # SEGMENT interior dips inside the raster disc (perpendicular foot 164.1 vs edge
+                # 165.7 here) while its endpoints stay outside -- caught by measuring the emitted
+                # radii, invisible to an endpoint test.
+                _pr = math.hypot(px - cx, py - cy)
+                _lim = r_h + 0.5 * bw
+                if _pr < _lim and _pr > 1e-9:
+                    px = cx + (px - cx) * _lim / _pr
+                    py = cy + (py - cy) * _lim / _pr
+                loop.append((px, py))
             c1 = centres[(k + 1) % n]
             a1 = math.atan2(B[1] - c1[1], B[0] - c1[0])
             A2 = segs[(k + 1) % n][0]
@@ -725,12 +744,20 @@ def boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, seg):
             rN, sN = mid_r(a1, a2, -1)
             sweep = sP if rP < rN else sN
             steps = max(2, int(math.ceil(abs(sweep) * rho / seg)))
-            loop += [(c1[0] + rho * math.cos(a1 + sweep * t / steps),
-                      c1[1] + rho * math.sin(a1 + sweep * t / steps)) for t in range(1, steps + 1)]
+            for t in range(1, steps + 1):
+                px = c1[0] + rho * math.cos(a1 + sweep * t / steps)
+                py = c1[1] + rho * math.sin(a1 + sweep * t / steps)
+                # NO OVERLAP with the raster: a deep ring's post arc dives inside the lattice
+                # disc near each post (down to 162mm on this geometry, 3mm into the raster).
+                # Clamp those points to the disc edge: the arc detours ALONG the raster boundary,
+                # butt beside it, and rejoins the true arc where it re-emerges.
+                _pr = math.hypot(px - cx, py - cy)
+                _lim = r_h + 0.5 * bw
+                if _pr < _lim:
+                    px = cx + (px - cx) * _lim / _pr
+                    py = cy + (py - cy) * _lim / _pr
+                loop.append((px, py))
         rings.append(loop)
-        # stop once this ring dips into the lattice disc (overlap achieved)
-        if min(math.hypot(px - cx, py - cy) for px, py in loop) <= r_h - 0.25 * bw:
-            break
         i += 1
         if i > 8:
             break
@@ -765,12 +792,11 @@ def floor_path(cx, cy, r_h, pitch, phi, seam0, entry, seg, rings=None):
         out += latch.arc_to(cx, cy, r_h, th, latch.ang(cx, cy, cand[0]), seg)
         out += cand[1:]
     out += latch.arc_to(cx, cy, r_h, latch.ang(cx, cy, out[-1]), th, seg)
-    # THE BORDER RINGS AND SKIRT, walked skirt-first then inner-to-outer (reversed list order:
-    # the skirt is appended last). Every link crosses only zones not yet laid this layer -- the
-    # bay, the wall toolpath before the walls print -- and the exit rib from the outermost border
-    # ring crosses the inner ring once, the same class of same-height weld crossing the lattice
-    # raster makes at every perpendicular layer.
-    for ring in reversed(rings or []):
+    # THE FILL RINGS, outer to inner (generation order): each link steps one bead inward across
+    # unlaid bay, the exit leaves from the innermost ring beside the raster edge, and only the
+    # final rib to seam0 crosses the laid fill -- one radial line, the same rib this floor has
+    # always exited on.
+    for ring in (rings or []):
         j0 = min(range(len(ring)), key=lambda j: math.dist(ring[j], out[-1]))
         out += latch.line_pts(out[-1], ring[j0], seg)
         out += ring[j0 + 1:] + ring[:j0 + 1]
@@ -1529,13 +1555,16 @@ def main():
     r_poly = min(math.hypot(ends[k][0] + (starts[(k+1) % n_tow][0]-ends[k][0])*t/64.0 - cx,
                             ends[k][1] + (starts[(k+1) % n_tow][1]-ends[k][1])*t/64.0 - cy)
                  for k in range(n_tow) for t in range(65))
-    # THE RASTER MUST OVERLAP THE BORDER, NOT MEET IT. Oleg 2026-08-08 ~04:00, third floor
-    # read: "still not touching the walls. make the first layer of internal lines overlap the
-    # round line". So the lattice disc reaches the POST KEEP-IN radius (post wall minus a lap of
-    # bead): its lines CROSS both boundary rings' chord-parallels instead of scalloping a bead
-    # short, and the rings' post arcs carry the last stretch to the walls. Bounded only by the
-    # keep-in -- the old bead-short-of-everything bound is what kept leaving gaps.
-    r_h = r_ring - r_t - 0.55 * bw
+    # NO OVERLAP -- FILL. Oleg 2026-08-08 ~05:15, fourth floor read: "seems we failed having
+    # overlapping layers, do not overlap, but do proper math and fill in all empty spaces
+    # between outer line and inner grid with filament. remove brim." Same-height bead crossings
+    # mound instead of welding, so the raster goes back INSIDE (a bead short of chords and
+    # walls) and the bay between it and the border is FILLED by adjacent rings at exact
+    # one-bead pitch -- butt-welded neighbours, nothing crossing anything.
+    r_h = min(r_poly, r_ring - r_t) - 2.0 * bw   # one bead of border + one bead of fill ring:
+    # raster bead edge, fill-ring bead, and rim/wall beads then BUTT in an unbroken sequence
+    # (measured on this geometry: 165.69 / 165.67-166.49 / 166.49+), which is the no-overlap
+    # fill the read demands.
     if a.floor_layers and r_h <= a.floor_pitch:
         ap.error(f"--dia {a.dia:g} leaves a {r_h:.1f} mm latch disc, which does not fit a "
                  f"{a.floor_pitch:g} mm pitch")
@@ -1755,26 +1784,8 @@ def main():
     _rings = (boundary_rings(cx, cy, centres, starts, ends, r_t, bw, r_h, SEG)
               if a.floor_layers else [])
     _rings_l1 = _rings
-    if _rings:
-        # THE SKIRT (same read: "and give a skirt, do like that for all layers of the base"): one
-        # loop OUTSIDE the post ring on every floor layer, so each wall's foot is welded from
-        # BOTH faces -- raster and rings inside, skirt outside -- and the two lips of every
-        # outward mouth are tied together at the base. Drawn before the walls each layer, so the
-        # radial link out crosses only bare plate and the wall then prints ONTO the crossing.
-        # TWO RADII, because layer 1's bead is w1-wide: at the wall-hugging offset its edge runs
-        # 0.4mm off the 350 plate (gate 2 refused it), so layer 1's skirt pulls in to the last
-        # sliver the plate carries -- deep-overlapping the wall foot, which is the point -- while
-        # the upper floor layers sit at the clean 0.55-bead weld offset. Both are ~3mm past the
-        # probed mesh's 345 edge: extrapolated bed there, the accepted-risk class this part's
-        # own edge already carries.
-        def _skirt(rr):
-            _nsk = max(64, int(math.ceil(2 * math.pi * rr / SEG)))
-            return [(cx + rr * math.cos(2 * math.pi * t / _nsk),
-                     cy + rr * math.sin(2 * math.pi * t / _nsk)) for t in range(_nsk + 1)]
-        _sk_up = r_ring + r_t + 0.55 * bw
-        _sk_l1 = min(_sk_up, min(bedx, bedy) / 2.0 - w1 / 2.0 - 0.05)
-        _rings_l1 = _rings + [_skirt(_sk_l1)]
-        _rings = _rings + [_skirt(_sk_up)]
+    # THE SKIRT IS GONE (same read: "remove brim") -- it lived from 04:15 to 05:15 and its git
+    # history holds the geometry if it ever earns a return.
     layers = build(cx, cy, centres, phis, r_t, stagger, half_rad, nseg, narc, n_lay,
                    a.floor_layers, a.floor_pitch, r_h, bridges, a.merge_mm, floor_pitch_1,
                    wdir=wdir, fabric_passes=_fab_np, bpass=bpass, rings=_rings,
@@ -2239,15 +2250,15 @@ def main():
         if _rings:
             _rmins = [min(math.hypot(px - cx, py - cy) for px, py in r9) for r9 in _rings]
             _rmaxs = [max(math.hypot(px - cx, py - cy) for px, py in r9) for r9 in _rings]
-            w(f"; FLOOR_RINGS={len(_rings)} border loops per floor layer, radii "
-              f"{min(_rmins):.1f}..{max(_rmaxs):.1f}mm: chord-parallels 0.55 bead inside the rim "
-              f"+ arcs 0.55 bead")
-            w(f";   off every post wall, stepping 0.9 bead inward until overlapping the lattice "
+            w(f"; FLOOR_RINGS={len(_rings)} FILL loops per floor layer, radii "
+              f"{min(_rmins):.1f}..{max(_rmaxs):.1f}mm: chord-parallels and post arcs at exact "
+              f"one-bead pitch,")
+            w(f";   butt-welded neighbours from one bead inside the border down to the lattice "
               f"disc (edge {r_h + bw/2:.1f}).")
-            w(f";   Oleg 2026-08-08: 'fix floor geometry it has to touch wals eveywhere' -- the "
-              f"border is now DRAWN,")
-            w(f";   every floor layer, so floor-to-wall and floor-to-rim contact is by "
-              f"construction, not raster luck.")
+            w(f";   Oleg 2026-08-08, fourth floor read: 'do not overlap, but do proper math and "
+              f"fill in all empty")
+            w(f";   spaces between outer line and inner grid with filament. remove brim.' "
+              f"Nothing crosses anything.")
         w(f"; GATE 5 the latch disc's outer bead reaches radius {floor_edge:.3f}mm and the bamboo "
           f"channel's bore")
         w(f";        starts at {bore_inner:.3f}mm: {bore_inner-floor_edge:+.3f}mm of clearance. "
