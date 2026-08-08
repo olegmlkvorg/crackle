@@ -87,7 +87,7 @@ def parse_art(path):
     return dict(posts=posts, wrap=wrap, tower_d=tower_d, exit_seg=exit_seg, hole=hole)
 
 
-def geometry_art(cmd, art):
+def geometry_art(cmd, art, stamps):
     """The two-ring border, from the emitter's stamps (see parse_art for what that trades)."""
     bw = machine.SLICER_LINE_W
     r_t = (art['tower_d'] - bw) / 2.0
@@ -114,8 +114,10 @@ def geometry_art(cmd, art):
     return dict(mode='art', bw=bw, cx=bedx / 2.0, cy=bedy / 2.0, n=len(cs), cs=cs, phis=mus,
                 r_t=r_t, half=half, toff=toff, wdir=1, chords=chords, r_h=None,
                 seam_th=None, exit_seg=art['exit_seg'], hole=art['hole'],
-                w1=float(cmd.get('w1', 0)) or None, h1=float(cmd.get('h1', 0)) or None,
-                lh_f=float(cmd.get('floor_layer_h', 0)) or float(cmd.get('layer_h', 0.24)),
+                w1=float(cmd.get('w1', 0)) or None,
+                h1=stamps.get('H1') or float(cmd.get('h1', 0)) or None,
+                lh_f=(stamps.get('LAYER_H_FLOOR') or float(cmd.get('floor_layer_h', 0))
+                     or stamps.get('LAYER_H') or float(cmd.get('layer_h', 0.24))),
                 floor_pitch=float(cmd.get('net_pitch', 4.0)))
 
 
@@ -154,11 +156,36 @@ def border_path_art(g):
     return pts
 
 
+def parse_stamps(path):
+    """Header DECLARATIONS ('; LAYER_H_FLOOR=', '; LAYER_H='), read because the CMD stamp
+    records only what a human TYPED -- a flag left at its default is absent there by design,
+    and guessing it here misread every floor capsule 2.33x wide on the first art file (8-9k
+    phantom piles at 5.2 bead-heights, all of them the instrument)."""
+    out = {}
+    for ln in open(path):
+        for key in ('LAYER_H_FLOOR', 'LAYER_H'):
+            if ln.startswith(f'; {key}='):
+                try:
+                    out[key] = float(ln.split('=', 1)[1].split()[0])
+                except ValueError:
+                    pass
+        if ln.startswith('; LAYER1_WIDTH='):
+            m = re.search(r'into the ([\d.]+) gap', ln)
+            if m:
+                out['H1'] = float(m.group(1))
+        if 'BODY_START' in ln:
+            break
+    return out
+
+
 def parse_cmd(path):
     """The generator's own invocation, from the '; CMD=' stamp. Returns {flag: value}."""
     for ln in open(path):
         if ln.startswith('; CMD='):
-            toks = shlex.split(ln[7:].strip())
+            # len('; CMD='), not 7: the old 7 silently ate the generator name's first byte
+            # ('ucket_towers.py'), harmless while nothing keyed on toks[0] and load-bearing
+            # the day the art branch dispatched on it.
+            toks = shlex.split(ln[len('; CMD='):].strip())
             out = {'_gen': toks[0] if toks else ''}
             i = 1
             while i < len(toks):
@@ -178,7 +205,7 @@ def parse_cmd(path):
     return None
 
 
-def geometry(cmd, stag_deg):
+def geometry(cmd, stag_deg, stamps):
     """The border, re-derived with bucket_towers' own arithmetic from the CMD flags."""
     bw = machine.SLICER_LINE_W
     dia = float(cmd.get('dia', 100.0))
@@ -212,8 +239,10 @@ def geometry(cmd, stag_deg):
     return dict(bw=bw, cx=cx, cy=cy, n=n, cs=cs, phis=phis, r_t=r_t, r_ring=r_ring,
                 stag=stag, half=half, wdir=wdir, chords=chords, r_poly=r_poly, r_h=r_h,
                 seam_th=seam_th,
-                w1=float(cmd.get('w1', 0)) or None, h1=float(cmd.get('h1', 0)) or None,
-                lh_f=float(cmd.get('floor_layer_h', 0)) or float(cmd.get('layer_h', 0.24)),
+                w1=float(cmd.get('w1', 0)) or None,
+                h1=stamps.get('H1') or float(cmd.get('h1', 0)) or None,
+                lh_f=(stamps.get('LAYER_H_FLOOR') or float(cmd.get('floor_layer_h', 0))
+                     or stamps.get('LAYER_H') or float(cmd.get('layer_h', 0.24))),
                 floor_pitch=float(cmd.get('floor_pitch', 2.5)))
 
 
@@ -368,7 +397,7 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
               f"cannot be placed.")
         return 2
     if art:
-        g = geometry_art(cmd, art)
+        g = geometry_art(cmd, art, parse_stamps(path))
         border_x = border_path_art(g)
     else:
         m = None
@@ -379,7 +408,7 @@ def check(path, max_run_flag=None, margin=MARGIN, seam_deg=1.5):
         if not m:
             print(f"{path}\n  DECLINE: no stagger stamp; the border cannot be placed.")
             return 2
-        g = geometry(cmd, float(m.group(1)))
+        g = geometry(cmd, float(m.group(1)), parse_stamps(path))
         border_x = [(p, False) for p in border_path(g)]
     layers = floor_layers(path, g)
     if not layers:

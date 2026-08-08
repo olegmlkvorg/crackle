@@ -312,18 +312,35 @@ def refine_to_zero(poly, cs, ph, stag, r_t, half_rad, toff, pitch, label, phase=
 
 
 # ------------------------------------------------------------------------- floor geometry
-def border_polygon(cs, mus, r_t, toff, seg):
-    """The rim border as a simple closed polygon: crossing chords + each post's MATERIAL arc.
-    At each post the boundary detours around the material the long way, so inward offsets of
-    this polygon wrap the post feet -- boundary_rings' geometry, done by shapely."""
-    n = len(cs)
+def tip_polygon(cs, mus, r_t, toff):
+    """The rim polygon: every post's two tips in walk order, chords implicit between them."""
     pts = []
-    for k in range(n):
-        lead, trail = tips_of(cs[k], mus[k], r_t, toff)
+    for c, mu in zip(cs, mus):
+        lead, trail = tips_of(c, mu, r_t, toff)
         pts.append(trail)
-        pts += post_arc(cs[k], mus[k], r_t, None, toff, seg)     # trailing -> leading, material
-        # chord to next trailing tip happens implicitly by appending next post's trail
-    return Polygon(pts).buffer(0)                                # buffer(0) heals residual kinks
+        pts.append(lead)
+    return Polygon(pts).buffer(0)
+
+
+def rail_region_out(TC, cs, r_t, d):
+    """The floor region whose BOUNDARY is the rail at depth d inside an outer ring:
+    (tip polygon inset by d) minus (every post disk grown to r_t + d).
+
+    This is bucket_towers.boundary_rings' arithmetic -- inset chords + circles at rho = r_t+d
+    -- done by shapely, so it survives a non-convex outline. The first construction offset a
+    polygon that DETOURED around each material arc, and buffer(0)'s healing of its kinks
+    quietly rewrote the border at convex extremities: measured on the emitted plate, the
+    rails stopped 4mm short of the feet chords and skipped every mouth notch (qa_weld read
+    18.5mm of unwelded border)."""
+    disks = unary_union([Point(c).buffer(r_t + d, quad_segs=32) for c in cs])
+    return TC.buffer(-d, quad_segs=16).difference(disks)
+
+
+def rail_region_in(TC, cs, r_t, d):
+    """Same law around the cut: (inner tip polygon grown by d) union (disks at r_t + d).
+    The boundary is the hole-ring rail at depth d outside the inner rim."""
+    disks = unary_union([Point(c).buffer(r_t + d, quad_segs=32) for c in cs])
+    return TC.buffer(d, quad_segs=16).union(disks)
 
 
 def poly_parts(g):
@@ -334,13 +351,36 @@ def poly_parts(g):
     return [g] if g.area > 3.0 else []
 
 
-def ring_loops(region, depths):
-    """[(depth_index, loop_pts)] of inward offsets of `region` at each depth (mm)."""
+def thin(pts, min_seg=0.30):
+    """Drop vertices closer than min_seg to the last kept one, keeping the final point.
+    shapely's round joins emit ~0.03mm vertices at tight post-foot corners; at the floor's
+    21.4 mm/s that is ~676 moves/s against the ~300 where Klipper freezes (validate's own
+    moves/s gate caught it on the first emission)."""
+    if len(pts) < 3:
+        return list(pts)
+    out = [pts[0]]
+    for p in pts[1:-1]:
+        if math.dist(p, out[-1]) >= min_seg:
+            out.append(p)
+    out.append(pts[-1])
+    return out
+
+
+def ring_loops_out(TC, cs, r_t, depths):
+    """[(depth_index, loop_pts)] -- outer brim rails, exact lap law (see rail_region_out)."""
     out = []
     for i, d in enumerate(depths):
-        for part in poly_parts(region.buffer(-d, quad_segs=32)):
-            ext = list(part.exterior.coords)
-            out.append((i, [(x, y) for x, y in ext]))
+        for part in poly_parts(rail_region_out(TC, cs, r_t, d)):
+            out.append((i, thin([(x, y) for x, y in part.exterior.coords])))
+    return out
+
+
+def ring_loops_in(TC, cs, r_t, depths):
+    """[(depth_index, loop_pts)] -- hole-ring rails, outermost depth first."""
+    out = []
+    for i, d in enumerate(sorted(depths, reverse=True)):
+        for part in poly_parts(rail_region_in(TC, cs, r_t, d)):
+            out.append((i, thin([(x, y) for x, y in part.exterior.coords])))
     return out
 
 
@@ -387,30 +427,95 @@ def walk_boundary(region, p, q, seg):
     else:
         s0, s1, n = sp, back, max(1, int(back / seg))
         pts = [ring.interpolate((s0 - s1 * i / n) % L) for i in range(1, n + 1)]
-    return [(pt.x, pt.y) for pt in pts]
+    return thin([(pt.x, pt.y) for pt in pts])
 
 
-def chain_hatch(runs, region, hole_block, start, seg):
-    """One-stroke chain through every hatch run: greedy nearest end, connectors either a
-    straight extruded link (if it does not cross the art hole) or a walk along the net
-    region's boundary. Returns points EXCLUDING `start`."""
-    todo = [(np.array(a), np.array(b)) for a, b in runs]
+def monotone_columns(runs, angle_deg):
+    """Split hatch runs into serpentine-able COLUMNS: consecutive rows whose runs overlap
+    one-to-one. A split (one run facing two in the next row: the art hole starting), a merge,
+    or a gap closes the column. Inside a column every row-to-row hop is a short neighbour
+    connector; only column-to-column transitions need a rail walk -- which is the entire
+    point. The first chaining was greedy nearest-end, and its walks stacked on the popular
+    rail stretches until qa_weld read 4-5 bead-heights of pile."""
+    ca, sa = math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg))
+    rows = {}
+    for a, b in runs:
+        r = round(-sa * a[0] + ca * a[1], 3)
+        x0, x1 = ca * a[0] + sa * a[1], ca * b[0] + sa * b[1]
+        if x0 > x1:
+            x0, x1, a, b = x1, x0, b, a
+        rows.setdefault(r, []).append((x0, x1, a, b))
+    cols = []
+    open_cols = []                                   # [(last_x0, last_x1, col_index)]
+    for r in sorted(rows):
+        row = sorted(rows[r])
+        pairs = []
+        for i, run in enumerate(row):
+            for j, (lx0, lx1, _) in enumerate(open_cols):
+                if run[0] <= lx1 and lx0 <= run[1]:
+                    pairs.append((i, j))
+        from collections import Counter
+        ci = Counter(p[1] for p in pairs)
+        ri = Counter(p[0] for p in pairs)
+        used_r, used_c = set(), set()
+        for i, j in pairs:
+            if ci[j] == 1 and ri[i] == 1:
+                cols[open_cols[j][2]].append(row[i])
+                open_cols[j] = (row[i][0], row[i][1], open_cols[j][2])
+                used_r.add(i)
+                used_c.add(j)
+        open_cols = [oc for j, oc in enumerate(open_cols) if j in used_c]
+        for i, run in enumerate(row):
+            if i not in used_r:
+                cols.append([run])
+                open_cols.append((run[0], run[1], len(cols) - 1))
+    return cols
+
+
+def chain_hatch(runs, region, hole_block, start, seg, angle_deg):
+    """One-stroke chain: monotone-column serpentines, columns joined by rail walks (the rail
+    beads repeat at the same XY every floor layer, so a walk is supported and welded; a
+    straight cross-region link is neither -- it floated 42.8mm on the first emission and drew
+    stray lines across the art). Returns points EXCLUDING `start`."""
+    cols = monotone_columns(runs, angle_deg)
     out = []
     cur = np.array(start)
+    todo = [c for c in cols if c]
     while todo:
-        di = [(min(np.hypot(*(a - cur)), np.hypot(*(b - cur))), i) for i, (a, b) in enumerate(todo)]
-        _, i = min(di)
-        a, b = todo.pop(i)
-        if np.hypot(*(b - cur)) < np.hypot(*(a - cur)):
-            a, b = b, a
-        link = LineString([tuple(cur), tuple(a)])
-        if link.length > 1e-9:
-            if link.intersects(hole_block):
-                out += walk_boundary(region, tuple(cur), tuple(a), seg)
-            else:
-                out += latch.line_pts(tuple(cur), tuple(a), seg)
-        out += latch.line_pts(tuple(a), tuple(b), seg)
-        cur = b
+        # nearest column by its nearest END row
+        best = None
+        for ci, col in enumerate(todo):
+            for rev in (False, True):
+                run = col[-1] if rev else col[0]
+                for pt in (run[2], run[3]):
+                    d = math.dist(cur, pt)
+                    if best is None or d < best[0]:
+                        best = (d, ci, rev, pt)
+        _, ci, rev, _ = best
+        col = todo.pop(ci)
+        if rev:
+            col = col[::-1]
+        first = True
+        for (x0, x1, a, b) in col:
+            if math.dist(cur, b) < math.dist(cur, a):
+                a, b = b, a
+            link = LineString([tuple(cur), tuple(a)])
+            if link.length > 1e-9:
+                if first and (link.length > 6.0 or link.intersects(hole_block)):
+                    out += walk_boundary(region, tuple(cur), tuple(a), seg)
+                    if out and math.dist(out[-1], tuple(a)) > 1e-9:
+                        out += latch.line_pts(out[-1], tuple(a), seg)
+                elif link.length > 6.0 or link.intersects(hole_block):
+                    # a long hop INSIDE a column means the rows shifted under the hatch --
+                    # rail-walk it too rather than float it
+                    out += walk_boundary(region, tuple(cur), tuple(a), seg)
+                    if out and math.dist(out[-1], tuple(a)) > 1e-9:
+                        out += latch.line_pts(out[-1], tuple(a), seg)
+                else:
+                    out += latch.line_pts(tuple(cur), tuple(a), seg)
+            out += latch.line_pts(tuple(a), tuple(b), seg)
+            cur = np.array(b)
+            first = False
     return out
 
 
@@ -651,23 +756,18 @@ def main():
     _, TJ, TK, t_az, M1, tr_len1, tr_len2 = best_tr
 
     # ---------------------------------------------------------------- floor construction
-    B_out = border_polygon(o_cs, o_mu, r_t, toff, SEG)
-    B_in = border_polygon(i_cs, i_mu, r_t, toff, SEG)
+    TC_out = tip_polygon(o_cs, o_mu, r_t, toff)
+    TC_in = tip_polygon(i_cs, i_mu, r_t, toff)
     lp1 = FLOOR1_OVERLAP * w1
     n_rings1 = max(2, int(round(w_brim / lp1)))
     nh, nh1 = 3, 2
     net1_pitch = a.net_pitch_1 if a.net_pitch_1 else round(w1 / FLOOR1_OVERLAP, 3)
 
     def floor_parts(lpx, nrx, nhx, netp, ang):
-        rings = ring_loops(B_out, [lpx * (1 + i) for i in range(nrx)])
-        hrings = []
-        for i in range(nhx):
-            gg = B_in.buffer(lpx * (nhx - i), quad_segs=32)      # outermost first
-            for part in poly_parts(gg):
-                hrings.append((i, [(x, y) for x, y in part.exterior.coords]))
-        net_out = B_out.buffer(-lpx * nrx, quad_segs=32)
-        net_in = B_in.buffer(lpx * nhx, quad_segs=32)
-        N = net_out.difference(net_in)
+        rings = ring_loops_out(TC_out, o_cs, r_t, [lpx * (1 + i) for i in range(nrx)])
+        hrings = ring_loops_in(TC_in, i_cs, r_t, [lpx * (1 + i) for i in range(nhx)])
+        N = rail_region_out(TC_out, o_cs, r_t, lpx * nrx).difference(
+            rail_region_in(TC_in, i_cs, r_t, lpx * nhx))
         runs = hatch_runs(N, netp, ang)
         return rings, hrings, N, runs
 
@@ -728,11 +828,16 @@ def main():
             go(lnk)
             go(loop[j0 + 1:] + loop[:j0 + 1])
         net_start = cur
-        go(chain_hatch(runs, N, hole_block, net_start, SEG))
-        for _, loop in hrings:                                   # hole rings, outermost first
+        go(chain_hatch(runs, N, hole_block, net_start, SEG, ang))
+        for hi, (_, loop) in enumerate(hrings):                  # hole rings, outermost first
             j0 = min(range(len(loop)), key=lambda j2: math.dist(loop[j2], cur))
             if LineString([cur, loop[j0]]).intersects(hole_block):
                 raise SystemExit("REFUSING TO EMIT: a hole-ring link crosses the art hole.")
+            if hi == 0 and math.dist(cur, loop[j0]) > 6.0:
+                # the approach from the net's last strand to the hole rings: a straight hop
+                # here floats over sparse net and draws a line across the art -- walk N's
+                # hole-side boundary, which IS the outermost hole rail
+                go(walk_boundary(N, tuple(cur), loop[j0], SEG))
             go(latch.line_pts(cur, loop[j0], SEG))
             go(loop[j0 + 1:] + loop[:j0 + 1])
         rp, rk = inner_rim_circuit(cur, exK)
@@ -1045,9 +1150,9 @@ def main():
     sha_h = hashlib.sha256(open(a.hole, "rb").read()).hexdigest()[:16]
     _bmoves = sorted({m / bpass[m] for m in bpass})
     _mm2s = sorted({round(m * bw * lh, 4) for m in _bmoves})
-    brim_frac_real = (sum(p.area for p in poly_parts(B_out))
-                      - sum(p.area for p in poly_parts(B_out.buffer(-lp * n_rings,
-                                                                    quad_segs=32)))) / area
+    brim_frac_real = (sum(p.area for p in poly_parts(rail_region_out(TC_out, o_cs, r_t, 0.0)))
+                      - sum(p.area for p in poly_parts(
+                            rail_region_out(TC_out, o_cs, r_t, lp * n_rings)))) / area
 
     L = []
     w = L.append
