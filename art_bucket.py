@@ -37,7 +37,7 @@ import bucket_latch as latch
 import art_bucket_plan as plan
 
 from shapely.geometry import Polygon, LineString, Point, MultiPolygon
-from shapely.ops import unary_union
+from shapely.ops import unary_union, nearest_points
 
 A_FIL = machine.A_FIL
 SEG = 1.0
@@ -320,18 +320,34 @@ def refine_to_zero(poly, cs, ph, stag, r_t, half_rad, toff, pitch, label, phase=
 #      tip rotated past -90 deg flips the vertex order), heal again, rails retreating from
 #      whole chords and the net region overshooting 3-4 rails deep into the brim (the 1300
 #      pile spots were net strands crossing rails).
-#   3  THIS: union every post disk (r_t) with every chord strip -- a valid closed CHAIN by
-#      construction (union of valid geometries; endpoints touch the circles). The chain's
-#      largest INTERIOR ring is the floor border exactly: inner faces of the material
-#      circles + inner edges of the chords, notches included. Rails are then plain inward
-#      buffers of that region -- distance d from chords AND feet everywhere, no healing,
-#      nothing to bowtie.
+#   3  union every post DISK with every chord strip -- valid chain, but a disk covers the
+#      open mouth too: near shallow grazes the boundary followed a phantom bulge and the
+#      rails ran just past weld reach of the chord for 17.5mm stretches.
+#   4  THIS: union every post MATERIAL SECTOR (arc + tip chord, material_sector) with every
+#      chord strip. The chain's largest INTERIOR ring is the floor border exactly, notches
+#      included; rails are plain inward buffers -- distance d from chords and feet
+#      everywhere, no healing, nothing to bowtie, no phantom material.
+def material_sector(c, mu, r_t, toff, seg=0.4):
+    """The post's MATERIAL silhouette as a polygon: the toolpath arc trailing->leading
+    through the material, auto-closed by the tip chord across the mouth.
+
+    SECTORS, NOT DISKS -- the emitter's own instance of the arc-aware lesson dip() and
+    seam_window learned on 2026-08-07: near a shallow graze the crossing chord passes
+    legally OVER the open mouth, a full disk bulges past it, the region boundary followed
+    the phantom bulge, and the first rail (an offset of that boundary) ran 0.70-0.94mm off
+    the chord -- just past the 0.77 weld reach, for exactly the 17.5mm unwelded runs
+    qa_weld kept reporting through three wedge models."""
+    trail = (c[0] + r_t * math.cos(mu - toff), c[1] + r_t * math.sin(mu - toff))
+    return Polygon([trail] + post_arc(c, mu, r_t, None, toff, seg)).buffer(0)
+
+
 def floor_region_outer(cs, mus, r_t, toff):
     # the chord strips are TOPOLOGICAL GLUE, 0.01mm: a 0.05 strip pushed every rail 0.05
     # further from the border, and 0.656+0.05+join noise landed the whole brim ring ON the
     # weld test's 0.77 threshold -- qa_weld read 36% of the border unwelded by microns.
     chords = ring_chords(cs, mus, r_t, toff)
-    chain = unary_union([Point(tuple(c)).buffer(r_t, quad_segs=48) for c in cs]
+    chain = unary_union([material_sector(tuple(c), mu, r_t, toff)
+                         for c, mu in zip(cs, mus)]
                         + [LineString(ch).buffer(0.01, quad_segs=8) for ch in chords])
     best = None
     for part in (chain.geoms if isinstance(chain, MultiPolygon) else [chain]):
@@ -347,9 +363,11 @@ def floor_region_outer(cs, mus, r_t, toff):
 
 def hole_region_inner(cs, mus, r_t, toff):
     """The cut plus its rim band, filled: the largest part's EXTERIOR ring of the inner
-    chain. Outward buffers of this are the hole-ring rails."""
+    chain. Outward buffers of this are the hole-ring rails. Sectors, not disks -- see
+    material_sector."""
     chords = ring_chords(cs, mus, r_t, toff)
-    chain = unary_union([Point(tuple(c)).buffer(r_t, quad_segs=48) for c in cs]
+    chain = unary_union([material_sector(tuple(c), mu, r_t, toff)
+                         for c, mu in zip(cs, mus)]
                         + [LineString(ch).buffer(0.01, quad_segs=8) for ch in chords])
     part = max((chain.geoms if isinstance(chain, MultiPolygon) else [chain]),
                key=lambda p: p.area)
@@ -397,53 +415,57 @@ def ring_loops_in(HR, depths):
     return out
 
 
-def wedge_loops(cs, mus, r_t, toff, w_lo=0.80, w_hi=2.30, seg=1.0):
-    """One elongated LOOP per tip WEDGE, hung off the crossing chord itself.
+def wedge_loops(rail_boundary, cs, mus, r_t, toff, d_lo=0.70, d_hi=8.0, seg=1.0):
+    """One elongated LOOP per stretch of a crossing chord that the FIRST RAIL pulls away
+    from, hung off the chord itself.
 
-    Where a crossing grazes its own post at a shallow angle, the chord runs 0.8-2.3mm off
-    the arc for 8-20mm: too far for the chord and arc beads to weld each other (0.77 is the
-    weld reach), and on the AIR side of the border where no rail can ever sit -- qa_weld
-    measured 17.5mm unwelded runs there, all of them this wedge. The loop goes out along a
-    line 0.4mm off the CHORD and back along a line 0.4mm off the ARC, joined at the far end:
-    each side welds its wall (0.4 < 0.77) and the crossover ties the sides, so the chord is
-    stitched to the arc along the whole wedge. Depth stays under the 2.7 pile limit
-    everywhere: at the narrow end the two sides nearly merge (2.0) beside wall edges at ~0.2
-    each = 2.4; mid-wedge each side reads ~1.0 + its own wall edge. It is ATTACHED TO THE
-    CHORD (a 0.4mm hop over air), never through a bead -- a stub from the brim rails would
-    cross the arc at 3.0 deep.
+    THIRD MODEL, and this one measures the failing quantity directly. The first modelled
+    the gap as radial to the post: zero wedges found. The second measured distance to the
+    REGION boundary: zero again, because the chord IS that boundary. What actually strands
+    the chord is offset corner-cutting: at a shallow chord-arc junction the inward offset
+    stays 0.656 from BOTH sides, so near the vertex the rail runs up the bisector and its
+    distance from the chord grows to 0.656/sin(theta/2) -- the chord's last 5-15mm has no
+    rail within weld reach (qa_weld: 17.5mm unwelded, every run the landing stretch of one
+    chord). So the loop is laid where distance(chord, FIRST RAIL) > d_lo: out 0.4mm off the
+    CHORD, back 0.4mm off the RAIL, joined at the ends -- each side welds its bead, and the
+    loop is HUNG OFF THE CHORD so no stub ever crosses a bead (a stub from the rails reads
+    3.0 deep; this reads ~2.4 at the pinch end).
 
-    Returns {chord_index: (attach_pt, loop_pts)}: attach ON the chord, loop starting and
-    ending within a hop of it."""
+    L2+ floors only: layer 1's w1-wide beads reach its border already (measured 100%).
+    Returns {chord_index: [(attach_pt, loop_pts)]}."""
     n = len(cs)
     ch = ring_chords(cs, mus, r_t, toff)
     out = {}
     for k, (p, q) in enumerate(ch):
         L = math.dist(p, q)
+        if L < 2 * seg:
+            continue
         ux, uy = (q[0] - p[0]) / L, (q[1] - p[1]) / L
-        for c, from_p in ((cs[k], True), (cs[(k + 1) % n], False)):
-            samples = []
-            s = 0.0
-            while s <= L:
-                x = (p[0] + ux * s) if from_p else (q[0] - ux * s)
-                y = (p[1] + uy * s) if from_p else (q[1] - uy * s)
-                d0 = math.hypot(x - c[0], y - c[1])
-                w = d0 - r_t
-                if w > w_hi:
-                    break
-                if w >= w_lo:
-                    samples.append(((x, y), d0, w))
-                s += seg
-            if len(samples) < 3:
+        m = int(L / seg)
+        ds = []
+        for i in range(m + 1):
+            s = i * seg
+            pt = (p[0] + ux * s, p[1] + uy * s)
+            np_ = nearest_points(rail_boundary, Point(pt))[0]
+            ds.append((pt, (np_.x, np_.y), math.dist(pt, (np_.x, np_.y))))
+        i = 0
+        while i <= m:
+            if ds[i][2] <= d_lo or ds[i][2] > d_hi:
+                i += 1
                 continue
-            near_chord = [(c[0] + (pt[0] - c[0]) * (d0 - 0.4) / d0,
-                           c[1] + (pt[1] - c[1]) * (d0 - 0.4) / d0)
-                          for pt, d0, w in samples]
-            near_arc = [(c[0] + (pt[0] - c[0]) * (r_t + 0.4) / d0,
-                         c[1] + (pt[1] - c[1]) * (r_t + 0.4) / d0)
-                        for pt, d0, w in samples]
-            attach = samples[0][0]
-            loop = near_chord + near_arc[::-1]
-            out.setdefault(k, []).append((attach, loop))
+            j = i
+            while j <= m and d_lo < ds[j][2] <= d_hi:
+                j += 1
+            if j - i >= 2:
+                sub = ds[i:j]
+                near_chord, near_bound = [], []
+                for pt, bp, d in sub:
+                    vx, vy = (bp[0] - pt[0]) / d, (bp[1] - pt[1]) / d
+                    near_chord.append((pt[0] + 0.4 * vx, pt[1] + 0.4 * vy))
+                    near_bound.append((bp[0] - 0.4 * vx, bp[1] - 0.4 * vy))
+                loop = near_chord + near_bound[::-1]
+                out.setdefault(k, []).append((sub[0][0], loop))
+            i = j
     return out
 
 
@@ -861,8 +883,14 @@ def main():
     nh, nh1 = 3, 2
     net1_pitch = a.net_pitch_1 if a.net_pitch_1 else round(w1 / FLOOR1_OVERLAP, 3)
 
-    o_wedges = wedge_loops(o_cs, o_mu, r_t, toff)
-    i_wedges = wedge_loops(i_cs, i_mu, r_t, toff)
+    # the finder measures against the rails AS EMITTED (poly_parts-filtered ring loops):
+    # `.boundary` of the raw buffer still sees sliver parts that poly_parts drops before
+    # emission, so it reported a rail at 0.666 that no plate would ever carry.
+    from shapely.geometry import MultiLineString
+    _rails_out = MultiLineString([r9 for _, r9 in ring_loops_out(FR, [lp])])
+    _rails_in = MultiLineString([r9 for _, r9 in ring_loops_in(HR, [lp])])
+    o_wedges = wedge_loops(_rails_out, o_cs, o_mu, r_t, toff)
+    i_wedges = wedge_loops(_rails_in, i_cs, i_mu, r_t, toff)
 
     def floor_parts(lpx, nrx, nhx, netp, ang):
         rings = ring_loops_out(FR, [lpx * (1 + i) for i in range(nrx)])
@@ -887,7 +915,7 @@ def main():
     if _rib_body.intersects(hole_block):
         raise SystemExit("REFUSING TO EMIT: the floor exit rib crosses the art hole.")
 
-    def inner_rim_circuit(entry_pt, start_k):
+    def inner_rim_circuit(entry_pt, start_k, wedges):
         """Inner posts + EXTRUDED chords starting at start_k's trailing tip, full circuit.
         Each chord carries its wedge loops (chord_with_wedges)."""
         pts, kinds = [], []
@@ -900,7 +928,7 @@ def main():
             pts += arc
             kinds += ["E"] * len(arc)
             nxt = tips_of(i_cs[(k2 + 1) % n_in], i_mu[(k2 + 1) % n_in], r_t, toff)[1]
-            cp, ck = chord_with_wedges(pts[-1], nxt, i_wedges.get(k2, []), SEG)
+            cp, ck = chord_with_wedges(pts[-1], nxt, wedges.get(k2, []), SEG)
             pts += cp
             kinds += ck
         return pts, kinds
@@ -924,13 +952,50 @@ def main():
             if newpts:
                 cur = newpts[-1]
 
+        # NECK DEDUP. At a tapering neck (the ear junctions) a rail's two sides sweep through
+        # coincidence with the next rail's -- 2-3 rail beads inside a third of a millimetre,
+        # by offset geometry, and qa_weld reads 3.0 bead-heights there. A deeper rail SKIPS
+        # stretches within 0.5mm of already-laid rail material (0.5 < the 0.656 pitch, so a
+        # normal neighbour is never dropped) and bridges along the laid path instead:
+        # deliberate coincidence at 2.0 in place of jittered triples at 3.0.
+        _laid = {}
+
+        def _mark(p2):
+            _laid.setdefault((int(p2[0] // 2.0), int(p2[1] // 2.0)), []).append(p2)
+
+        def _near_laid(p2, r=0.5):
+            gx, gy = int(p2[0] // 2.0), int(p2[1] // 2.0)
+            for dx2 in (-1, 0, 1):
+                for dy2 in (-1, 0, 1):
+                    for q2 in _laid.get((gx + dx2, gy + dy2), ()):
+                        if math.dist(p2, q2) < r:
+                            return True
+            return False
+
+        def go_rail(loop_r):
+            keep = [not _near_laid(p2) for p2 in loop_r]
+            segs2 = []
+            for j2, p2 in enumerate(loop_r):
+                if keep[j2]:
+                    if segs2 and segs2[-1][-1] == j2 - 1:
+                        segs2[-1].append(j2)
+                    else:
+                        segs2.append([j2])
+            if not segs2:
+                return
+            for sub in segs2:
+                block = [loop_r[j2] for j2 in sub]
+                lnk = latch.line_pts(cur, block[0], SEG)
+                go(lnk)
+                go(block)
+                for p2 in block:
+                    _mark(p2)
+
         for _, loop in rings:                                    # brim, outermost first
             j0 = min(range(len(loop)), key=lambda j2: math.dist(loop[j2], cur))
-            lnk = latch.line_pts(cur, loop[j0], SEG)
             if LineString([cur, loop[j0]]).intersects(hole_block):
                 raise SystemExit("REFUSING TO EMIT: a brim link crosses the art hole.")
-            go(lnk)
-            go(loop[j0 + 1:] + loop[:j0 + 1])
+            go_rail(loop[j0 + 1:] + loop[:j0 + 1])
         net_start = cur
         go(chain_hatch(runs, lanes, lane_ctr, hole_block, net_start, SEG, ang))
         for hi, (_, loop) in enumerate(hrings):                  # hole rings, outermost first
@@ -942,9 +1007,10 @@ def main():
                 # here floats over sparse net and draws a line across the art -- walk N's
                 # hole-side boundary, which IS the outermost hole rail
                 go(walk_boundary(N, tuple(cur), loop[j0], SEG))
-            go(latch.line_pts(cur, loop[j0], SEG))
-            go(loop[j0 + 1:] + loop[:j0 + 1])
-        rp, rk = inner_rim_circuit(cur, exK)
+                if math.dist(cur, loop[j0]) > 1e-9:
+                    go(latch.line_pts(cur, loop[j0], SEG))
+            go_rail(loop[j0 + 1:] + loop[:j0 + 1])
+        rp, rk = inner_rim_circuit(cur, exK, i_wedges if li > 0 else {})
         pts += rp
         kinds += rk
         cur = pts[-1]
@@ -954,7 +1020,8 @@ def main():
             arc = post_arc(o_cs[k], o_mu[k], r_t, None, toff, SEG)
             go(arc)
             nxt = trailing((k + 1) % n_out)
-            cp, ck = chord_with_wedges(cur, nxt, o_wedges.get(k, []), SEG)
+            cp, ck = chord_with_wedges(cur, nxt,
+                                       o_wedges.get(k, []) if li > 0 else [], SEG)
             pts += cp
             kinds += ck
             cur = pts[-1]
