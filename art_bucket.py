@@ -777,7 +777,7 @@ def lane_walk(lanes, lane_ctr, cur, target, seg, hole_block=None, stitch=None, a
 
 
 def chain_hatch(runs, lanes, lane_ctr, hole_block, start, seg, angle_deg, stitch=None,
-                mark=None, avoid=None, repel=None):
+                mark=None, avoid=None, repel=None, fat_region=None):
     """One-stroke chain: monotone-column serpentines; short neighbour links straight, long
     transitions as rotated lane walks (a straight cross-region link floated 42.8mm on the
     first emission; a rail walk piled 4 deep on the second). `mark` records each piece into
@@ -792,8 +792,26 @@ def chain_hatch(runs, lanes, lane_ctr, hole_block, start, seg, angle_deg, stitch
             mark(newpts)
 
     cur = np.array(start)
-    todo = [c for c in cols if c]
-    while todo:
+    # TWO-PHASE ORDER: columns in PINCHED throats go LAST, as one cluster. The global
+    # greedy bounced in and out of the throat between the outer border and the cut, and
+    # every re-entry laid another transit through cells already carrying the serpentine's
+    # own out-and-back -- run 22's stubborn 3.0 cells were exactly one early transit plus
+    # that pair, where the hole guard leaves repulsion nowhere to push. Fat first, then
+    # each pinched cluster in a single visit: the removable pass never gets laid.
+    if fat_region is not None:
+        fat, pinched = [], []
+        for c in cols:
+            if not c:
+                continue
+            ends = [p for r in c for p in (r[2], r[3])]
+            cx2 = sum(p[0] for p in ends) / len(ends)
+            cy2 = sum(p[1] for p in ends) / len(ends)
+            (fat if fat_region.contains(Point((cx2, cy2))) else pinched).append(c)
+        phases = [ph for ph in (fat, pinched) if ph]
+    else:
+        phases = [[c for c in cols if c]]
+    for todo in phases:
+      while todo:
         best = None
         for ci, col in enumerate(todo):
             for rev in (False, True):
@@ -1276,9 +1294,28 @@ def main():
                     if best and best[0] > 1e-9:
                         d2, q2 = best
                         ux2, uy2 = (p2[0] - q2[0]) / d2, (p2[1] - q2[1]) / d2
-                        cand = (q2[0] + ux2 * 0.85, q2[1] + uy2 * 0.85)
-                        if not hole_block.contains(Point(cand)):
-                            p2 = cand
+                        cands = [(q2[0] + ux2 * 0.85, q2[1] + uy2 * 0.85)]
+                        # VETO-AWARE: in the throat the natural push lands in the hole
+                        # guard and was silently dropped -- run 22's 3.0 cells sat 0.01
+                        # off their neighbour with repel formally 'on'. Second try pushes
+                        # AWAY FROM THE HOLE (one consistent direction, no zigzag). Any
+                        # candidate must keep >= 0.6 clearance from all OTHER laid
+                        # material: landing 0.3 off the next rail just moves the pile.
+                        rr2 = math.hypot(p2[0] - hc[0], p2[1] - hc[1])
+                        if rr2 > 1e-9:
+                            cands.append((q2[0] + (p2[0] - hc[0]) / rr2 * 0.85,
+                                          q2[1] + (p2[1] - hc[1]) / rr2 * 0.85))
+                        for cand in cands:
+                            if hole_block.contains(Point(cand)):
+                                continue
+                            gx2, gy2 = int(cand[0] // 2.0), int(cand[1] // 2.0)
+                            dmin = min((math.dist(cand, q3)
+                                        for dx3 in (-1, 0, 1) for dy3 in (-1, 0, 1)
+                                        for q3 in _laid_all.get((gx2 + dx3, gy2 + dy3), ())),
+                                       default=9.9)
+                            if dmin >= 0.6:
+                                p2 = cand
+                                break
                 out2.append(p2)
             return out2
 
@@ -1323,11 +1360,34 @@ def main():
                 return
             for sub in segs2:
                 block = [loop_r[j2] for j2 in sub]
-                # a dedup split can put consecutive kept stretches far apart; the straight
-                # link between them gets the same refusal every other floor link has
-                if LineString([tuple(cur), tuple(block[0])]).intersects(hole_block):
-                    raise SystemExit("REFUSING TO EMIT: a rail dedup link crosses the art "
-                                     "hole.")
+                # a dedup split can put consecutive kept stretches far apart; a straight
+                # link that would cross the cut instead FOLLOWS THE RING's own points to
+                # the next block (the deliberate-coincidence idiom, 2.0 deep and
+                # gate-visible -- run 23's reordered net shifted a hole-ring walk until
+                # its dedup link cut the guard, and the refusal fired as designed).
+                # Sub-2.5mm links are exempt: two ring points legitimately inside the
+                # 1mm guard band joined by a 0.74mm step tripped this three times (the
+                # exit rib documented the same anchor-point trap); a bar across the cut
+                # is many mm, never a vertex step.
+                if (math.dist(cur, block[0]) > 2.5 and
+                        LineString([tuple(cur), tuple(block[0])]).intersects(hole_block)):
+                    # nearest vertex BEFORE the block, not globally nearest: at a neck the
+                    # loop passes close to itself and the global nearest snaps to the far
+                    # side, past the block (run 23b's refusal). Consecutive ring vertices
+                    # never cross the guard, so reaching loop_r[sub[0]-1] settles it.
+                    if sub[0] > 0:
+                        j9 = min(range(sub[0]), key=lambda j2: math.dist(loop_r[j2], cur))
+                        if not LineString([tuple(cur),
+                                           tuple(loop_r[j9])]).intersects(hole_block):
+                            go(latch.line_pts(cur, loop_r[j9], SEG))
+                            go(loop_r[j9 + 1:sub[0]])
+                    if LineString([tuple(cur), tuple(block[0])]).intersects(hole_block):
+                        raise SystemExit(
+                            f"REFUSING TO EMIT: a rail dedup link crosses the art hole "
+                            f"even along the ring. cur=({cur[0]:.2f},{cur[1]:.2f}) -> "
+                            f"block0=({block[0][0]:.2f},{block[0][1]:.2f}), sub[0]={sub[0]}"
+                            f"/{len(loop_r)}, kept_runs={len(segs2)}, "
+                            f"first_kept={segs2[0][0]}, li={li}")
                 lnk = latch.line_pts(cur, block[0], SEG)
                 go(lnk)
                 go(block)
@@ -1352,12 +1412,16 @@ def main():
                 raise SystemExit("REFUSING TO EMIT: a brim link crosses the art hole.")
             go_rail(rot_closed(loop, j0))
         net_start = cur
+        # two-phase order only where the strands run PERPENDICULAR to the throat's long
+        # axis: run 23 measured it on both -- ang=90 (L2) cleared the throat 66->33 worst
+        # 3.0->2.9, ang=0 (L3) regressed 38->105 worst 2.9->3.7, because for parallel
+        # strands the pinched columns ARE the throat rows and clustering them last stacks
+        # their own transitions
         go(chain_hatch(runs, lanes, lane_ctr, hole_block, net_start, SEG, ang, stitch=st,
-                       mark=_mark_all, avoid=_overlap_mm, repel=_repel))
+                       mark=_mark_all, avoid=_overlap_mm, repel=_repel,
+                       fat_region=N.buffer(-2.0, quad_segs=8) if ang == 90.0 else None))
         for hi, (_, loop) in enumerate(hrings):                  # hole rings, outermost first
             j0 = min(range(len(loop)), key=lambda j2: math.dist(loop[j2], cur))
-            if LineString([cur, loop[j0]]).intersects(hole_block):
-                raise SystemExit("REFUSING TO EMIT: a hole-ring link crosses the art hole.")
             if hi == 0 and math.dist(cur, loop[j0]) > 6.0:
                 # the approach from the net's last strand to the hole rings: a straight hop
                 # here floats over sparse net and draws a line across the art -- walk N's
@@ -1367,6 +1431,13 @@ def main():
                 go(_repel(dense_path(walk_boundary(N, tuple(cur), loop[j0], SEG), SEG)))
                 if math.dist(cur, loop[j0]) > 1e-9:
                     go(latch.line_pts(cur, loop[j0], SEG))
+            # gate the REMAINING link, after the approach walk that replaces the long
+            # straight -- gating before the routing decision refused the route it would
+            # never take (the reordered net ends inside the throat now). Sub-2.5mm steps
+            # between band-adjacent points are the anchor-point trap, exempt.
+            if (math.dist(cur, loop[j0]) > 2.5
+                    and LineString([cur, loop[j0]]).intersects(hole_block)):
+                raise SystemExit("REFUSING TO EMIT: a hole-ring link crosses the art hole.")
             go_rail(rot_closed(loop, j0))
         t0e = tips_of(i_cs[exK], i_mu[exK], r_t, toff)[1]
         if math.dist(cur, t0e) > 6.0:
