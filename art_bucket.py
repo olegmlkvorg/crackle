@@ -1277,12 +1277,19 @@ def main():
             path itself. First/last ~2 points stay put (they weld to their anchors, and
             endpoint contact is path-adjacent, which the depth model merges anyway); a
             nudge that would enter the hole guard is dropped."""
-            if len(path) < 5:
+            if len(path) < 4:
                 return path
             out2 = [path[0]]
             for i2 in range(1, len(path)):
                 p2 = tuple(path[i2])
-                if 2 <= i2 <= len(path) - 3:
+                # TAPERED, not hard-pinned: a link's endpoints must land on their targets,
+                # but pinning the last TWO points whole left parallel pair-stretches at
+                # every pinned approach -- run 24's residue was exactly that (12+13 zones,
+                # all 3-pass cells at 2.71-2.92). Points ramp to full displacement over
+                # ~4 steps from either end, so the approach comes in at an angle and only
+                # the final ~1mm is coincident-parallel.
+                scale = min(1.0, max(0.0, (min(i2, len(path) - 1 - i2) - 0.5) / 3.5))
+                if scale > 0.0:
                     gx, gy = int(p2[0] // 2.0), int(p2[1] // 2.0)
                     best = None
                     for dx2 in (-1, 0, 1):
@@ -1412,6 +1419,11 @@ def main():
                 raise SystemExit("REFUSING TO EMIT: a brim link crosses the art hole.")
             go_rail(rot_closed(loop, j0))
         net_start = cur
+        # seed the grid with the PLANNED runs before chaining: a run body laid late lands
+        # on a link laid early, and repel cannot avoid what is not yet in the grid --
+        # run 24's scattered residue was exactly such pairs. Run geometry is fixed here.
+        for _a3, _b3 in runs:
+            _mark_all([tuple(_a3), tuple(_b3)])
         # two-phase order only where the strands run PERPENDICULAR to the throat's long
         # axis: run 23 measured it on both -- ang=90 (L2) cleared the throat 66->33 worst
         # 3.0->2.9, ang=0 (L3) regressed 38->105 worst 2.9->3.7, because for parallel
