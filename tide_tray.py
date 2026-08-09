@@ -402,6 +402,16 @@ def gate_weld(text, parts_meta, floor_pitch_body):
             if kind in ("floor L1", "floor"):
                 ring_caps = [c for c in caps if "ring" in c[3]]
                 fill_caps = [c for c in caps if "ring" not in c[3]]
+                if not ring_caps or not fill_caps:
+                    # a check that cannot measure its name DECLINES loudly, never crashes
+                    # and never approves (lesson-check-must-measure-its-name): this fired
+                    # for real when the emitter dropped its stroke tags
+                    raise SystemExit(
+                        f"GATE weld: {pt.label} layer {li} (z {zz:g}) carries "
+                        f"{len(ring_caps)} ring-tagged and {len(fill_caps)} fill beads -- "
+                        f"the emitted file lacks the stroke tags this gate classifies by, "
+                        f"so attachment CANNOT BE MEASURED. The emitter must tag every "
+                        f"move; refusing rather than approving blind.")
                 bead = sorted(c[2] for c in ring_caps)[len(ring_caps) // 2]
                 worst_run, run = 0.0, 0.0
                 border = _sample_ring(pt.ring, ATTACH_STEP)
@@ -421,7 +431,13 @@ def gate_weld(text, parts_meta, floor_pitch_body):
                         f"{worst_run:.1f}mm of rim ring with no raster welded to it "
                         f"(limit {lim:g}mm = the raster's own pitch; margin {WELD_MARGIN}mm). "
                         f"The border must not be weaker than the lattice welds to itself.")
-            piles, seam = _pile_depths(caps, (pt.A, pt.B))
+            # the ring CLOSURE is the third declared corridor point: a closed loop's seam
+            # doubles material at exactly one spot (arrive onto the departure), and this
+            # path deliberately parks that seam at the raster junction to keep the link
+            # short -- one seam per layer by design, same idiom as the bucket's corridor
+            ring_caps_all = [c for c in caps if "ring" in c[3]]
+            seam_pts = (ring_caps_all[0][0],) if ring_caps_all else ()
+            piles, seam = _pile_depths(caps, (pt.A, pt.B) + seam_pts)
             if li == 1:
                 if piles:
                     reports.append(f"  {pt.label} layer 1: {len(piles)} spot(s) over "
@@ -473,12 +489,24 @@ def _seg_dist(p, q, a, b):
 
 def _pile_depths(caps, junctions):
     """Depth per PILE_CELL cell in bead-heights (qa_weld's elliptical-section sum; a bead
-    continuing through a cell keeps its deepest sample, never sums with itself)."""
+    continuing through a cell keeps its deepest sample, never sums with itself).
+
+    CONTINUATION means heading ONWARD: index-adjacent + shared endpoint + not doubling
+    back (dot >= -0.1 admits raster turnarounds, refuses a reversal). The first version
+    merged on index-adjacency alone, and a spoke drawn 4x as consecutive moves read ~2.0
+    deep -- the gate would have PASSED a genuinely 4-deep stack on a real plate (found
+    2026-08-09 when its own force-fire refused to fire)."""
     cells = {}
+
+    def _dir(a, b):
+        d = math.dist(a, b)
+        return ((b[0] - a[0]) / d, (b[1] - a[1]) / d) if d > 1e-9 else (0.0, 0.0)
+
     for idx, (a, b, w, raw) in enumerate(caps):
         x0, x1 = sorted((a[0], b[0]))
         y0, y1 = sorted((a[1], b[1]))
         r = w / 2.0
+        v = _dir(a, b)
         for gx in range(int((x0 - r) / PILE_CELL), int((x1 + r) / PILE_CELL) + 2):
             for gy in range(int((y0 - r) / PILE_CELL), int((y1 + r) / PILE_CELL) + 2):
                 ctr = ((gx + .5) * PILE_CELL, (gy + .5) * PILE_CELL)
@@ -487,14 +515,25 @@ def _pile_depths(caps, junctions):
                     continue
                 dep = math.sqrt(max(0.0, 1.0 - (2.0 * d / w) ** 2))
                 lst = cells.setdefault((gx, gy), [])
-                if lst and idx - lst[-1][0] <= 1:
+                # ONE BEAD = GEOMETRIC CONTINUITY, judged against this cell's last
+                # contributor: it ends exactly where this cap starts AND the head keeps
+                # going (dot >= -0.1 admits vertex turns, refuses a reversal). A closed
+                # loop's seam is the same one pass (its last cap arrives where its first
+                # departed -- index distance says nothing); a spoke redrawn A->B->A
+                # reverses and SUMS. The index-window rule this replaces failed both
+                # ways at once (measured 2026-08-09: 4 stacked spoke passes read ~2.0,
+                # a clean ring seam read ~2.9).
+                if lst and math.dist(lst[-1][2], a) < 1e-6 \
+                        and lst[-1][3][0] * v[0] + lst[-1][3][1] * v[1] >= -0.1:
                     lst[-1][0] = idx
                     lst[-1][1] = max(lst[-1][1], dep)
+                    lst[-1][2] = b
+                    lst[-1][3] = v
                 else:
-                    lst.append([idx, dep])
+                    lst.append([idx, dep, b, v])
     piles, seam = [], []
     for k, v in cells.items():
-        tot = sum(c for _, c in v)
+        tot = sum(entry[1] for entry in v)
         if tot > PILE_DEPTH:
             ctr = ((k[0] + .5) * PILE_CELL, (k[1] + .5) * PILE_CELL)
             if any(math.dist(ctr, j) <= JUNCTION_R for j in junctions):
@@ -612,11 +651,21 @@ def emit(a, parts, printer, material, temp, bed, allow_hops, inject_travel=False
         d = math.dist((x, y), (px, py))
         if d < 1e-9:
             return
-        e += d * rate
+        # SEGMENTS <= 1.5mm, uniformly: validate's overhang support is a POINT hash at
+        # one-bead cells, and a 40mm raster row emitted as one move leaves its interior
+        # invisible -- the first coupon read 485.5mm of the Moore loop "floating" over a
+        # SOLID floor whose rows had no interior vertices. 1.5mm keeps every query point
+        # within 0.8mm of a support vertex (inside the 0.82 cell reach); ~20 moves/s at
+        # body speed against the ~300 where Klipper stalls.
+        n = max(1, int(math.ceil(d / 1.5)))
+        for j in range(1, n + 1):
+            qx = x + (px - x) * j / n
+            qy = y + (py - y) * j / n
+            e += (d / n) * rate
+            fword = f"F{feed} " if feed != cur_f else ""
+            cur_f = feed
+            w(f"G1 {fword}X{qx:.3f} Y{qy:.3f} E{e:.5f}" + (f" ; {tag}" if tag else ""))
         total_mm += d
-        fword = f"F{feed} " if feed != cur_f else ""
-        cur_f = feed
-        w(f"G1 {fword}X{px:.3f} Y{py:.3f} E{e:.5f}" + (f" ; {tag}" if tag else ""))
         x, y = px, py
 
     order_fwd = list(parts)
@@ -657,9 +706,14 @@ def emit(a, parts, printer, material, temp, bed, allow_hops, inject_travel=False
             if inject_travel and k == 2 and pt is active[0]:
                 w(f"G0 F7200 X{x + 8:.3f} Y{y:.3f}")     # selftest only: an untagged dry move
                 x = x + 8
+            # EVERY move carries its stroke tag. gate_weld classifies ring vs fill by
+            # reading these tags off the emitted lines -- the first version wrote only
+            # SPOKE tags, so ring_caps came back empty on every file ever emitted and the
+            # gate crashed at its median instead of measuring (found 2026-08-09: the
+            # delivered generator had never once emitted through its own gates).
             for pts, rate, tag in strokes:
                 for p in pts:
-                    move(p[0], p[1], rate, feed, tag if tag.startswith("SPOKE") else "")
+                    move(p[0], p[1], rate, feed, tag)
             heads[id(pt)] = (x, y)
 
     top = machine.PRESS_HARD + (K - 1) * lh
@@ -716,13 +770,21 @@ def selftest(a):
     import copy
     fired = 0
 
-    def expect(name, fn):
+    def expect(name, fn, needle):
+        """The refusal must come from the NAMED gate: the first forcing of the weld gates
+        was 'proven' by one-stroke firing first on incidental hops the doctoring created
+        (checked 2026-08-09 -- the forcing-lands-in-the-wrong-jurisdiction trap)."""
         nonlocal fired
         try:
             fn()
         except SystemExit as ex:
-            print(f"  RED OK  {name}: {str(ex).splitlines()[0][:110]}")
-            fired += 1
+            msg = str(ex)
+            if needle in msg:
+                print(f"  RED OK  {name}: {msg.splitlines()[0][:110]}")
+                fired += 1
+            else:
+                print(f"  !! {name}: a DIFFERENT gate fired ({msg.splitlines()[0][:80]}) "
+                      f"-- the forcing missed its jurisdiction")
             return
         print(f"  !! {name}: DID NOT FIRE -- the gate is decoration")
 
@@ -730,13 +792,16 @@ def selftest(a):
     small.coupon = False
     small.order, small.pitch, small.ridge_layers = 1, 6.9, 2
 
-    def build(aa, spoke_passes=2, edge_lap=EDGE_LAP, inject=False):
+    def build(aa, spoke_passes=2, edge_lap=EDGE_LAP, inject=False, hops=False):
+        # hops=True: a weld forcing may legitimately shift layer entries >3mm, emitting
+        # lifted tagged hops -- the point is to reach the WELD gate's jurisdiction, so
+        # one-stroke is told to allow what the doctoring caused (never what it must catch)
         pt = Part(175, 175, aa.pitch, aa.order, aa.ridge_layers, 3, aa.floor_layers,
                   aa.w1, aa.h1, aa.layer_h, label=f"selftest p{aa.pitch:g}",
                   spoke_passes=spoke_passes, edge_lap=edge_lap)
         gate_bounds([pt], "k2plus")
         text, _ = emit(aa, [pt], "k2plus", "pla", 210, 80, False, inject_travel=inject)
-        gate_one_stroke(text, allow_hops=False)
+        gate_one_stroke(text, allow_hops=hops)
         gate_weld(text, [{"part": pt, "marker": f"; ---- part {pt.label}"}],
                   EDGE_LAP * BW)
 
@@ -744,12 +809,19 @@ def selftest(a):
     big.order = 5
     expect("bounds", lambda: gate_bounds(
         [Part(175, 175, big.pitch, big.order, 2, 3, big.floor_layers, big.w1, big.h1,
-              big.layer_h, label="order-5 tray")], "k2plus"))
-    expect("ridge-fuse", lambda: gate_fuse(1.0))
-    expect("channel-impossible", lambda: gate_channel("channel", 6.9, 8.0))
-    expect("one-stroke", lambda: build(small, inject=True))
-    expect("weld ATTACH", lambda: build(small, edge_lap=3.0))
-    expect("weld NO-PILE", lambda: build(small, spoke_passes=3))
+              big.layer_h, label="order-5 tray")], "k2plus"), "GATE bounds")
+    expect("ridge-fuse", lambda: gate_fuse(1.0), "GATE ridge-fuse")
+    expect("channel-impossible", lambda: gate_channel("channel", 6.9, 8.0),
+           "GATE channel-impossible")
+    expect("one-stroke", lambda: build(small, inject=True), "GATE one-stroke")
+    # weld forcings sized to stay INSIDE the weld gates' jurisdiction: edge_lap 1.6 pulls
+    # the raster 1.31mm off the ring (past the ~0.77 weld reach) without moving any layer
+    # entry >3mm (which would hop and fire one-stroke first); spoke_passes must stay EVEN
+    # or the layer ends at B while declaring exit A and the next entry hops
+    expect("weld ATTACH", lambda: build(small, edge_lap=1.6, hops=True),
+           "GATE weld ATTACH")
+    expect("weld NO-PILE", lambda: build(small, spoke_passes=4, hops=True),
+           "GATE weld NO-PILE")
     print(f"  {fired}/6 gates proven able to fire")
     # and the happy path must PASS, or the gates above are firing on everything:
     build(small)
@@ -919,7 +991,7 @@ def main():
     print(f"  ~{mins:.0f} min motion (+ the K2's ~10 min calibration block), ~{grams:.0f} g, "
           f"{max(pt.layers for pt in parts)} layers -- DERIVED off the emitted moves")
     print(f"  UNPROVEN: every acoustic claim; this geometry has never printed. "
-          f"validate.py + a coupon + Oleg's ear are the路 path to a plate.")
+          f"validate.py + a coupon + Oleg's ear are the path to a plate.")
 
 
 if __name__ == "__main__":
