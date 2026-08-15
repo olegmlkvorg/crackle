@@ -1422,10 +1422,12 @@ def home(w, printer):
     140 and the bed at 50 (`custom_macro.g28_ext_temp` / `default_bed_temp`), and the console prints
     `probe at X,Y is z=...` marching the 42.5mm grid from (5,5).
 
-      DURATION, corrected: about 10 to 12 MINUTES, counted off the probe points (~31 of 81 in four
-      minutes). My earlier "twenty minutes" and "about an hour" both came from reading
-      `bed_mesh.mesh_matrix`, which STAYS AT ONE ROW until the calibrate finishes and is therefore
-      useless as a progress bar. Do not estimate from it.
+      DURATION: SIX MINUTES, timed end to end on 2026-08-15 (start 15:48, first line of the part's
+      own file executing 15:54). That figure is the only one here anybody watched from both ends.
+      Three estimates preceded it and every one was wrong and too long -- "twenty minutes" and
+      "about an hour" from reading `bed_mesh.mesh_matrix`, which STAYS AT ONE ROW until the
+      calibrate finishes and is useless as a progress bar, then "10 to 12 minutes" extrapolated
+      from the probe-point rate, which over-read it by 2x. Time the whole thing or say nothing.
 
       WHAT IT IS NOT, each tested rather than argued:
         * not this LOAD, and not homing_override -- that macro holds no BED_MESH_CALIBRATE, and a
