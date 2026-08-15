@@ -909,6 +909,24 @@ def check(path):
             _mf = re.match(r'G1 F(\d+)\s*(?:;.*)?$', _ln.rstrip())
             if _mf:
                 _f = float(_mf.group(1)) / 60.0
+            # THE POSITION MUST FOLLOW EVERY MOVE, NOT ONLY THE EXTRUDING ONES. Until 2026-08-15
+            # `_pp` was updated only on lines this regex matched, so a G0 moved the head and this
+            # loop did not notice: the first extruding move after ANY travel was scored against
+            # wherever the previous EXTRUSION ended. It fails in both directions and the dangerous
+            # one is silent -- a hop away from the part leaves a stale distance LARGER than the real
+            # move, so a genuinely over-flowing first move after a travel reads low and passes. The
+            # loud direction found it: a 30-up plate of hooks whose index marks are one move each
+            # reported 77 mm3/s on moves emitting exactly 49.25, because consecutive marks sit 7mm
+            # apart and each mark is 9mm long. A flow guard whose failure text reads "a position
+            # variable is probably stale" was itself carrying one.
+            _c0 = _ln.split(';')[0]
+            if _c0.startswith(('G0 ', 'G1 ')):
+                _tx = re.search(r'X([-\d.]+)', _c0)
+                _ty = re.search(r'Y([-\d.]+)', _c0)
+                _tz = re.search(r'Z([-\d.]+)', _c0)
+                if _tx and _ty:
+                    _pp = (float(_tx.group(1)), float(_ty.group(1)),
+                           float(_tz.group(1)) if _tz else (_pp[2] if _pp else 0.0))
             continue
         if _m.group(1):
             _f = float(_m.group(1)) / 60.0
