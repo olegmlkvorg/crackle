@@ -822,7 +822,13 @@ def check(path):
                         f"a slow move probably left its feedrate set (F persists in gcode)")
     if not any(t >= 150 for t in temps): problems.append("no hotend temp >=150 commanded")
     src = open(path).read()
-    if 'G28' not in src and 'START_PRINT' not in src:
+    # HOMING IS A COMMAND, NOT A WORD IN A COMMENT. This grepped the raw source until 2026-08-15,
+    # so a file that deliberately does NOT home and explains why in a comment -- "homing here costs
+    # a full 81-point probe" -- handed itself a homing tick by naming the command it refuses to
+    # run, and the deliberate-no-home warning never printed. Read the code, not the prose: the same
+    # mistake as scoring a move against a stale position, one line further down the same file.
+    _code_src = '\n'.join(_l.split(';')[0] for _l in src.split('\n'))
+    if 'G28' not in _code_src and 'START_PRINT' not in _code_src:
         # A deliberate no-home file is a real tier (back-to-back iteration on an already-homed
         # machine). Klipper refuses to move an unhomed axis, so this fails SAFELY rather than
         # crashing — it is a warning, not a defect. Unmarked missing-home is still a failure.

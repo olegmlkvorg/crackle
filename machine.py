@@ -1402,6 +1402,28 @@ def home(w, printer):
     So the fix is his: restore what G28 cleared. `BED_MESH_PROFILE LOAD=<name>` costs nothing and
     puts back a mesh the machine already measured.
 
+    AND IT DOES NOT SAVE THE TWENTY MINUTES. MEASURED 2026-08-15 on a 2.4-minute hook plate, by
+    watching the machine rather than by reading this docstring: the rebuild runs INSIDE the homing
+    sequence, before the next line of the file is ever executed. Seven minutes after the print
+    started the K2 was on mesh ROW 1 OF 9, at nozzle 140 / bed 70 (G28's own probe temperatures),
+    with `print_duration` still 0.0 and zero filament moved. The LOAD below therefore arrives after
+    the whole 81-point PRTOUCH probe has already been paid for, and its only effect is to DISCARD
+    the mesh that probe just measured and put the saved one back.
+
+    So this function is still right about WHAT to restore and wrong about what it costs. What it
+    actually buys is correctness, not time: without it the file prints on whatever the fresh probe
+    produced instead of the profile that has been read and kept.
+
+    THE THING THAT ACTUALLY SAVES THE TIME IS NOT HOMING AT ALL -- Oleg's other half, "or dont run
+    g28 at all", which this docstring argued against on the grounds that a part with no home has no
+    Z reference. That argument holds for a COLD machine and not for the case it was applied to. On
+    a machine still homed from the previous run (`toolhead.homed_axes` == 'xyz') with a mesh already
+    in force (`bed_mesh.profile_name` == the saved profile), the Z reference is exactly the one the
+    homed file would have ended up with. Both were verified live before the first hook plate was
+    cancelled at 7 minutes and re-sent without a home; the second attempt laid its first bead in
+    under 90 seconds and completed in 171. validate.py already has the tier: a file carrying
+    '; NO HOME' warns instead of failing.
+
     WHY NOT SIMPLY DROP G28, the other half of what he offered: without homing, every commanded
     position is relative to wherever the head happened to be left, and this project's whole
     first-layer doctrine is a 0.1mm gap. A part that skips homing is a part with no Z reference at
