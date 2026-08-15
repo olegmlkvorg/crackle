@@ -1416,14 +1416,34 @@ def home(w, printer):
         homed_axes '' -> 'xy' at 13s -> 'xyz' at 34s, and `bed_mesh.profile_name` came back
         'default' with a 25-row matrix.
 
-    WHAT WAS ACTUALLY OBSERVED, kept because the observation was real even though the explanation
-    was invented: a hook plate whose file began with G28 sat for SEVEN MINUTES at nozzle 140 / bed
-    70 -- G28's own probe temperatures -- with `print_duration` 0.0, zero filament moved, and
-    PRTOUCH probe results arriving for several distinct XY points. It was cancelled at that point,
-    so nobody has ever seen how long it would have taken. THE CAUSE IS UNKNOWN. It is not this
-    LOAD, and on the evidence above it is not homing_override either. Candidates nobody has tested:
-    the machine's own print-start calibration path, or a wait on g28_ext_temp from cold. Do not
-    quote a cause here until one of them has been measured.
+    WHAT IS ACTUALLY HAPPENING, as far as anyone has MEASURED it, after three wrong explanations
+    from me in one session. Some prints on this K2 begin with a full 9x9 BED_MESH_CALIBRATE and
+    some do not. While it runs, `print_duration` stays 0.0, no filament moves, the nozzle sits at
+    140 and the bed at 50 (`custom_macro.g28_ext_temp` / `default_bed_temp`), and the console prints
+    `probe at X,Y is z=...` marching the 42.5mm grid from (5,5).
+
+      DURATION, corrected: about 10 to 12 MINUTES, counted off the probe points (~31 of 81 in four
+      minutes). My earlier "twenty minutes" and "about an hour" both came from reading
+      `bed_mesh.mesh_matrix`, which STAYS AT ONE ROW until the calibrate finishes and is therefore
+      useless as a progress bar. Do not estimate from it.
+
+      WHAT IT IS NOT, each tested rather than argued:
+        * not this LOAD, and not homing_override -- that macro holds no BED_MESH_CALIBRATE, and a
+          bare G28 from fully unhomed measured 34 seconds;
+        * not the file -- a file with no G28 and no calibrate in it triggered one anyway;
+        * NOT `START_PRINT`'s `prepare` variable. That looked exactly like the switch: START_PRINT
+          gates its preparation on `prepare|int == 0`, PRINT_PREPARED sets it to 1, END_PRINT
+          clears it, and the one fast run had followed a cancel. Tested directly -- PRINT_PREPARED
+          issued and `prepare` read back as 1 immediately before starting -- and the machine
+          calibrated anyway. The hypothesis is dead; it is recorded because it is the obvious one
+          and the next person will have it too.
+
+      WHAT SELECTS IT IS STILL UNKNOWN. Do not quote a cause here until one is measured.
+
+    ONE MORE THING THE INTERRUPTED CALIBRATE DOES, and it is a trap: cancelling mid-calibrate
+    leaves `bed_mesh.profile_name` empty with a ONE-ROW matrix. The saved mesh is gone until
+    something loads it. Always `BED_MESH_PROFILE LOAD=default` and read back 25 rows before
+    starting anything after a cancel.
 
     WHAT SURVIVES, because it was measured and not reasoned: a file carrying '; NO HOME' laid its
     first bead in under 90 seconds where the homed file had laid nothing in seven minutes, and
