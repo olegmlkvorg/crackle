@@ -1122,9 +1122,23 @@ def check(path):
         # each move stamped '; BRIDGE <n>x <mm2>mm2', and R4e below MEASURES the emitted moves
         # against the declaration. Exempt from R4 ONLY when declared, never blanket, and COUNTED.
         _isbridge = 'BRIDGE' in _raw.upper() and 'X' in _g and 'E' in _g
-        _isl1 = bool(_l1v_decl) and _fr is not None and abs(_fr/60.0 - _l1v_decl) < 0.6
-        if _pv_decl is not None and abs(_zr - _pv_decl) < 1e-6:
-            _isl1 = True
+        # WHICH MOVES ARE LAYER 1 IS A QUESTION ABOUT Z, NOT ABOUT SPEED — and keying it on speed
+        # turned R3 and R4 off entirely for this whole project. Layer 1 is held out of the speed and
+        # flow histograms because it is deliberately a different bead. The old test asked "does this
+        # move run at the declared SPEED_LAYER1", which was written when layer 1 was slower than the
+        # body. It is not slower any more: machine.py's FIRST_LAYER_SPEED = CONSTANT_SPEED, Oleg's
+        # "50 is our north star for moving", so a compliant file runs layer 1 AND the body at the
+        # same 50 -- and every move in the file then matched, so _spd and _flw were never filled and
+        # R3/R4 produced no verdict at all. Not a weakened check: an ABSENT one, on every file this
+        # project emits, and absent silently, which is the exact failure validate.py's own header
+        # condemns. PROVEN on a 2-layer hook plate: one layer-2 move starved to 40% of the declared
+        # flow passed clean with no R4 line.
+        # So ask Z when the file says where layer 1 is, and keep the speed heuristic only for files
+        # that carry no '; PRESSED_LAYER1=' to ask.
+        if _pv_decl is not None:
+            _isl1 = abs(_zr - _pv_decl) < 1e-6
+        else:
+            _isl1 = bool(_l1v_decl) and _fr is not None and abs(_fr / 60.0 - _l1v_decl) < 0.6
         if 'X' in _g and 'E' in _g and _xr is not None and _fr and not _isprime \
                 and not _isl1:
             # FLOW IS PER MM OF PATH, AND THE PATH IS 3D. F is a 3D feedrate in Klipper, so the
