@@ -1402,27 +1402,36 @@ def home(w, printer):
     So the fix is his: restore what G28 cleared. `BED_MESH_PROFILE LOAD=<name>` costs nothing and
     puts back a mesh the machine already measured.
 
-    AND IT DOES NOT SAVE THE TWENTY MINUTES. MEASURED 2026-08-15 on a 2.4-minute hook plate, by
-    watching the machine rather than by reading this docstring: the rebuild runs INSIDE the homing
-    sequence, before the next line of the file is ever executed. Seven minutes after the print
-    started the K2 was on mesh ROW 1 OF 9, at nozzle 140 / bed 70 (G28's own probe temperatures),
-    with `print_duration` still 0.0 and zero filament moved. The LOAD below therefore arrives after
-    the whole 81-point PRTOUCH probe has already been paid for, and its only effect is to DISCARD
-    the mesh that probe just measured and put the saved one back.
+    RETRACTED SAME DAY, 2026-08-15, AND THE RETRACTION STAYS VISIBLE. Hours earlier I added a block
+    here claiming this LOAD "does not save the twenty minutes" because "the rebuild runs INSIDE the
+    homing sequence" -- an 81-point PRTOUCH probe paid for before the next line of the file runs.
+    THAT MECHANISM IS FALSE and I published it to machine.py and to the printer-fleet thread before
+    testing it. Two measurements kill it:
 
-    So this function is still right about WHAT to restore and wrong about what it costs. What it
-    actually buys is correctness, not time: without it the file prints on whatever the fresh probe
-    produced instead of the profile that has been read and kept.
+      * THE K2'S OWN homing_override CONTAINS NO CALIBRATE. Read off the running machine
+        (`/printer/objects/query?configfile`): the override does `BED_MESH_CLEAR` ... then
+        `BOX_NOZZLE_CLEAN` ... then `BED_MESH_PROFILE LOAD="default"`. It clears the mesh and puts
+        the saved one back by itself. There is no BED_MESH_CALIBRATE anywhere in it.
+      * A BARE G28 FROM FULLY UNHOMED TOOK 34 SECONDS. Timed on the machine, nozzle at 34C:
+        homed_axes '' -> 'xy' at 13s -> 'xyz' at 34s, and `bed_mesh.profile_name` came back
+        'default' with a 25-row matrix.
 
-    THE THING THAT ACTUALLY SAVES THE TIME IS NOT HOMING AT ALL -- Oleg's other half, "or dont run
-    g28 at all", which this docstring argued against on the grounds that a part with no home has no
-    Z reference. That argument holds for a COLD machine and not for the case it was applied to. On
-    a machine still homed from the previous run (`toolhead.homed_axes` == 'xyz') with a mesh already
-    in force (`bed_mesh.profile_name` == the saved profile), the Z reference is exactly the one the
-    homed file would have ended up with. Both were verified live before the first hook plate was
-    cancelled at 7 minutes and re-sent without a home; the second attempt laid its first bead in
-    under 90 seconds and completed in 171. validate.py already has the tier: a file carrying
-    '; NO HOME' warns instead of failing.
+    WHAT WAS ACTUALLY OBSERVED, kept because the observation was real even though the explanation
+    was invented: a hook plate whose file began with G28 sat for SEVEN MINUTES at nozzle 140 / bed
+    70 -- G28's own probe temperatures -- with `print_duration` 0.0, zero filament moved, and
+    PRTOUCH probe results arriving for several distinct XY points. It was cancelled at that point,
+    so nobody has ever seen how long it would have taken. THE CAUSE IS UNKNOWN. It is not this
+    LOAD, and on the evidence above it is not homing_override either. Candidates nobody has tested:
+    the machine's own print-start calibration path, or a wait on g28_ext_temp from cold. Do not
+    quote a cause here until one of them has been measured.
+
+    WHAT SURVIVES, because it was measured and not reasoned: a file carrying '; NO HOME' laid its
+    first bead in under 90 seconds where the homed file had laid nothing in seven minutes, and
+    completed in 171. That tier is real and validate.py already supports it -- but note the trap
+    that goes with it, learned immediately after: a print ending in M84 releases the steppers and
+    UNHOMES the machine, so the next no-home file refuses to move. Check
+    `toolhead.homed_axes` == 'xyz' and `bed_mesh.profile_name` before sending one, and home first
+    if not -- which, at 34 seconds, costs nothing worth avoiding.
 
     WHY NOT SIMPLY DROP G28, the other half of what he offered: without homing, every commanded
     position is relative to wherever the head happened to be left, and this project's whole
