@@ -703,7 +703,14 @@ def check(path):
     _worstrun, _worstrunz = 0.0, None
     for _plab, _zs in _ogroups:
         _src = _ply[_plab] if _plab is not None else _ly
-        if len(_zs) <= 2:
+        # TWO LAYERS IS ONE PAIR, AND ONE PAIR IS THE WHOLE QUESTION. This read `<= 2` until
+        # 2026-08-15, so a part with exactly two layers -- layer 2 sitting on layer 1, which is
+        # precisely "does this layer sit on the layer below it" -- was skipped, and the file then
+        # printed "no part in this file has two layers" about a plate where every part had two.
+        # A guard that declines to look and says so in words that mean the opposite is worse than
+        # one that fails: the sentence reads like a clean bill of health. Found on the first
+        # 2-layer hooks this lane ever printed.
+        if len(_zs) < 2:
             continue
         for _a, _bz in zip(_zs, _zs[1:]):
             _A = _src[_a]
@@ -763,8 +770,8 @@ def check(path):
     elif _ogroups and not _opairs:
         # SAY IT OUT LOUD. A check that had nothing to measure must not read as a check that passed
         # — that is the same silence the missing-stamp failures were added to break.
-        print(f"  overhang: nothing to check — no part in this file has two layers "
-              f"({len(_ogroups)} part(s), so nothing is stacked on anything)")
+        print(f"  overhang: nothing to check — every one of the {len(_ogroups)} part(s) in this "
+              f"file is a SINGLE layer, so nothing is stacked on anything")
     elif _opairs:
         print(f"  overhang: worst unsupported RUN {_worstrun:.1f}mm (proven bridgeable: "
               f"{machine.PROVEN_AIR_MM:g}mm); worst layer-pair fraction {_worstf*100:.0f}% "
