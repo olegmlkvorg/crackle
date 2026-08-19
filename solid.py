@@ -1649,7 +1649,7 @@ def finish(region, a, label, fn):
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
                  f"{label.upper()} stick{a.stick:g} wall{a.wall:g}", material=a.material)
     os.makedirs(a.out, exist_ok=True)
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
     # THE SUMMARY MUST DESCRIBE THE FILE. This line printed "(with brim NNxNN)" unconditionally,
     # including on files generated with --brim 0 that contain no brim at all. A summary that
@@ -1869,7 +1869,7 @@ def emit_sequential(placed, a, counts, fn):
     # otherwise have driven the head into the frame at the end of every sequential print.
     _bx, _by = machine.BED[a.printer]
     L.append(f"G0 X{min(10.0, _bx - 10):.0f} Y{_by - 10:.0f} F9000")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
     grams = sum(st["grams"] for _, _, st in bodies)
     mins = sum(st["mins"] for _, _, st in bodies)
     print(f"{fn}")

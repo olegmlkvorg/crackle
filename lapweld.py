@@ -133,7 +133,7 @@ def main():
     print(f"  all at {flow:g} mm3/s, {speed:g} mm/s; ~{grams:.0f} g, ~{mins:.0f} min")
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"lapweld_{a.printer}_d{a.dia:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
 
 

@@ -297,7 +297,7 @@ def main():
     fn = os.path.join(a.out,
                       f"volume_marker_{a.printer}_{a.span:g}x{a.span:g}x{a.height:g}"
                       f"_p{P:g}_v{speed:.0f}_T{a.temp:.0f}.gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
     print(fn)
     print(f"  {nlay} layers, top of material at Z{top_z:g} (ceiling {zmax:g}), "
           f"post {P:g}mm square, rails {nrail} layers = {nrail*lh:g}mm tall")

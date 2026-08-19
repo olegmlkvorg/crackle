@@ -699,7 +699,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out,
                       f"towercoupon_{a.printer}_{a.material}_h{a.height:g}_n{n_tow}_b{bw:g}.gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
 
     print(fn)
     _dlist = "/".join(f"{t['d']:g}" for t in towers)

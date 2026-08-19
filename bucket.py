@@ -518,7 +518,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out,
                       f"bucket_wave_{a.printer}_d{a.dia:.0f}_h{a.height:.0f}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
 
 

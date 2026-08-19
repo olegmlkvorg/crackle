@@ -163,7 +163,7 @@ def main():
     print(f"  KNOCK TEST after it sets: dead THUD = damping works; ringing = not enough mass/contact")
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"stand_concept_{a.printer}_d{a.dia:g}_h{a.height:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(fn)
 
 

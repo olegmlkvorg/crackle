@@ -113,7 +113,9 @@ def analyze_text(text):
     ext = [m for m in body if m["de"] is not None and m["de"] > 1e-9]
     lh_s, flow_s, mat, printer = stamp(text, "LAYER_H"), stamp(text, "FLOW"), stamp(text, "MATERIAL"), stamp(text, "PRINTER")
     lh = stamped_float(text, "LAYER_H")
-    declared_flow = stamped_float(text, "FLOW")
+    flow_stamp = stamp(text, "FLOW")
+    variable_flow = bool(flow_stamp and re.fullmatch(r"VARIABLE:[\d.]+\.\.[\d.]+", flow_stamp))
+    declared_flow = None if variable_flow else stamped_float(text, "FLOW")
     out = []
 
     first = ext[:1]
@@ -162,7 +164,9 @@ def analyze_text(text):
     r4bad = not declared_flow or not flows or any(
         v < machine.R4_FLOW_MIN_RATIO * declared_flow
         or v > machine.R4_FLOW_MAX_RATIO * declared_flow for v in flows)
-    out.append(result("R4", bool(ext), "body contains deposited path", flow_moves, not r4bad,
+    out.append(result("R4", bool(ext) and not variable_flow,
+                      "explicit variable-flow calibration" if variable_flow else "body contains deposited path",
+                      [] if variable_flow else flow_moves, not r4bad,
                       "flow absent or outside declared band" if r4bad else "move flow within declared band",
                       {"declared_mm3_s": declared_flow,
                        "min_fraction": machine.R4_FLOW_MIN_RATIO,
@@ -203,7 +207,9 @@ def analyze_text(text):
     cap = machine.flow_cap(mat, printer) if mat else None
     derated = declared_flow is not None and cap and declared_flow < .8*cap
     r8ok = declared_flow is not None and cap is not None and (not derated or stamp(text, "FLOW_DERATE"))
-    out.append(result("R8", bool(ext), "deposited path declares an operating flow", flow_moves,
+    out.append(result("R8", bool(ext) and not variable_flow,
+                      "variable-flow calibration has no single operating flow" if variable_flow else "deposited path declares an operating flow",
+                      [] if variable_flow else flow_moves,
                       bool(r8ok), "flow floor declared with reason" if r8ok else "flow floor missing or silently derated",
                       {"material_printer_cap_mm3_s": cap, "min_fraction": .8}))
     return out

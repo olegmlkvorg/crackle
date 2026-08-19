@@ -427,7 +427,7 @@ def main():
     print(f"  full flow {bw*lh*speed:.0f} mm3/s at {speed:g} mm/s; ~{grams:.0f} g, ~{mins:.0f} min")
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"rotunda_{a.printer}_d{a.dia:g}_h{a.height:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
 
 

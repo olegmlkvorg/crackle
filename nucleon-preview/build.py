@@ -44,7 +44,7 @@ def main():
             sys.argv = old_argv
         gcode_path = os.path.join(OUT, spec["slug"] + ".gcode")
         svg_path = os.path.join(OUT, spec["slug"] + ".svg")
-        open(gcode_path, "w").write(gcode)
+        machine.emit_gcode(gcode_path, gcode)
         subprocess.run(
             [sys.executable, os.path.join(ROOT, "render.py"), gcode_path, svg_path,
              "--body-only"], check=True)

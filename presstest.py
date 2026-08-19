@@ -237,7 +237,7 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"presstest_{a.printer}_w{a.width:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
 
 

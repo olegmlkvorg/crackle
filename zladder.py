@@ -512,7 +512,7 @@ def main():
     L[_mat_line] = (f"; MATERIAL {vol*1.24:.1f}g / {vol:.2f}cm3, ~{mins:.0f} min of extrusion — "
                     f"measured from this file's own final E, not from a nominal bead")
 
-    open(out, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(out, "\n".join(L) + "\n")
     print(out)
     print(f"  {n} cells, first-layer heights {a.heights}")
     print(f"  Z-zero error assumed {a.zerr:+.3f}mm (MEASURED off the plate, not by feel)")

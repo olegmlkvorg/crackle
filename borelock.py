@@ -590,7 +590,7 @@ def main():
                     f"measured from this file's own final E and its own emitted moves, not from a "
                     f"nominal bead")
 
-    open(out, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(out, "\n".join(L) + "\n")
 
     print(out)
     print(f"  {len(cells)} cells: {len(bores)} bores x {len(wraps)} wraps, posts {a.post_h:g}mm "

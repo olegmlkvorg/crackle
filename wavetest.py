@@ -213,7 +213,7 @@ def main():
           " / ".join(f"{0.8*C/m:.1f}" for m in throws) + " mm")
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"wavetest_{a.printer}_d{a.dia:g}_H{H:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
 
 

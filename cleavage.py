@@ -108,7 +108,7 @@ def main():
                    material=a.material, brim=a.brim, centre=False)
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"cleavage_{a.printer}_b{a.bore:g}_w{a.walls}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
 
 

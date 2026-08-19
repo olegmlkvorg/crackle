@@ -127,7 +127,7 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"spiraldisc_{a.printer}_d{a.dia:g}_ov{a.overlap:g}_T{temp:g}.gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
     print(fn)
     print(f"  round spiral disc dia {a.dia:g}, {a.layers} layers, pitch {pitch:.2f}mm "
           f"({int((1-a.overlap)*100)}% overlap), cold bed, constant {speed:g} mm/s")

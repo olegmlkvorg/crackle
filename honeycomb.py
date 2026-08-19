@@ -498,7 +498,7 @@ if __name__ == "__main__":
     os.makedirs(a.out, exist_ok=True)
     tag = a.printer
     fn = f"{a.out}/honeycomb_{tag}_{a.cols}x{a.rows}_c{a.cell:g}_T{a.temp}.gcode"
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}\n  {a.cols}x{a.rows} cells of {a.cell}mm -> {st['size'][0]} x {st['size'][1]}mm, "
           f"{st['pts']} points, one continuous path")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, "

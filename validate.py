@@ -1084,6 +1084,7 @@ def check(path):
     _rules_txt = open(path).read()
     _decl_flow = None
     _mf = re.search(r'^; FLOW=([\d.]+)', _rules_txt, re.M)
+    _flow_variable = re.search(r'^; FLOW=VARIABLE:([\d.]+)\.\.([\d.]+)$', _rules_txt, re.M)
     if _mf:
         _decl_flow = float(_mf.group(1))
     # R8 — THE DECLARED FLOW MUST MEET THE MATERIAL'S FIGURE, OR THE FILE MUST SAY WHY NOT.
@@ -1544,7 +1545,10 @@ def check(path):
                     f"{_hist[_k]} bridge move(s) at {_k:.4f}mm2/mm" for _k in sorted(_hist))
                     + " — every one matches the declared schedule, and they are exempt from R4 "
                       "BECAUSE they are declared and counted here, not because they are bridges.")
-    if _flw and not _decl_flow:
+    if _flow_variable:
+        print(f"  R4 NOT APPLICABLE: declared variable-flow calibration "
+              f"{_flow_variable.group(1)}..{_flow_variable.group(2)} mm3/s")
+    elif _flw and not _decl_flow:
         problems.append("R4 cannot be checked: file carries no '; FLOW=' stamp, so constant flow "
                         "is unverifiable. Regenerate with a current generator.")
     # R7 THE PROBE MUST TOUCH AT PRINT TEMPERATURE.

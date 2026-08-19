@@ -762,7 +762,7 @@ def main():
     L[_mat_line] = (f"; MATERIAL {vol*1.24:.1f}g / {vol:.2f}cm3, ~{mins:.0f} min of motion — "
                     f"measured from this file's own final E and its own emitted moves")
 
-    open(out, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(out, "\n".join(L) + "\n")
 
     print(out)
     print(f"  {len(sectors)} sectors x {a.n_post} posts on the REAL {a.dia:g}mm ring "

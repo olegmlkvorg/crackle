@@ -532,7 +532,7 @@ if __name__ == "__main__":
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/belt_{a.printer}_c{a.centres:.0f}_p{a.pulley_d:.0f}_"
           f"w{a.belt_w:.0f}_{a.cleats}cleat_T{a.temp}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
     print(f"  loop {loop:.0f}mm (centres {a.centres:.0f} + pulley {a.pulley_d:.0f}) -> "
           f"flat stadium {length:.0f} x {a.ring_w:.0f}mm, measured perimeter {st['per']}mm")

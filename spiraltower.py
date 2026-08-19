@@ -151,7 +151,7 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"spiraltower_{a.printer}_h{a.height:g}_d{a.dia:g}_L{a.lobes}_T{temp:g}.gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
     print(fn)
     # print length / speed = motion time (matches validate's estimate); +heat/accel in reality
     _path_mm = laps * PPL * (2 * math.pi * Rm)  # rough: laps x points x mean circumference/points

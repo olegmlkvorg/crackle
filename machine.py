@@ -4,6 +4,8 @@ Oleg, 2026-07-25: "you should be extruding at max speed we know nozzle can flow.
 negotiable. 100% of the time."
 """
 import math
+import os
+import re
 MAX_FLOW = 81.2        # mm3/s, MEASURED (spiral ramp, first skips at 81.2 @ r137, 0.8 nozzle, PLA 230C)
 FLOW = 55.0            # CAPPED for BOTH machines (Oleg, 2026-07-25). K2 cracks ~74 and
                        # then still cracking at 70. Oleg heard the extruder
@@ -628,6 +630,60 @@ A_FIL = math.pi * (1.75 / 2) ** 2       # 2.40528 mm2 of 1.75mm filament
 # an unevidenced threshold by making it more permissive.
 R4_FLOW_MIN_RATIO = 0.80
 R4_FLOW_MAX_RATIO = 1.20
+
+
+def emit_gcode(path, text):
+    """Canonical, refusing writer for every generated G-code artifact.
+
+    Generators calculate these values from their own geometry and operating point. This boundary
+    verifies that they supplied real declarations, removes their candidate lines, and writes one
+    canonical block. It never derives or defaults a missing value.
+
+    FLOW provenance: delivered volumetric rate calculated by the generator from emitted bead
+    cross-section and feedrate. MATERIAL provenance: the generator's selected spool identity,
+    checked against MATERIAL_TEMP. LAYER_H provenance: the generator's emitted Z-step geometry.
+    Variable-flow calibration files declare `FLOW=VARIABLE:<lo>..<hi>` explicitly.
+    """
+    if not isinstance(text, str):
+        raise TypeError("emit_gcode: text must be str")
+    fields = {}
+    for name in ("FLOW", "MATERIAL", "LAYER_H"):
+        hits = re.findall(rf"^; {name}=([^\n]+)$", text, re.M)
+        if len(hits) != 1 or not hits[0].strip():
+            raise ValueError(f"REFUSING TO EMIT {path}: expected exactly one real '; {name}=' declaration")
+        fields[name] = hits[0].strip()
+    material = fields["MATERIAL"]
+    if material not in MATERIAL_TEMP:
+        raise ValueError(f"REFUSING TO EMIT {path}: MATERIAL={material!r} is not maintained")
+    try:
+        layer_h = float(fields["LAYER_H"])
+    except ValueError as exc:
+        raise ValueError(f"REFUSING TO EMIT {path}: LAYER_H must be numeric") from exc
+    if not math.isfinite(layer_h) or layer_h <= 0:
+        raise ValueError(f"REFUSING TO EMIT {path}: LAYER_H must be positive and finite")
+    variable = re.fullmatch(r"VARIABLE:([\d.]+)\.\.([\d.]+)", fields["FLOW"])
+    if variable:
+        lo, hi = map(float, variable.groups())
+        if not (0 < lo < hi and math.isfinite(lo) and math.isfinite(hi)):
+            raise ValueError(f"REFUSING TO EMIT {path}: invalid variable FLOW range")
+    else:
+        try:
+            flow = float(fields["FLOW"])
+        except ValueError as exc:
+            raise ValueError(f"REFUSING TO EMIT {path}: FLOW must be numeric or VARIABLE:<lo>..<hi>") from exc
+        if not math.isfinite(flow) or flow <= 0:
+            raise ValueError(f"REFUSING TO EMIT {path}: FLOW must be positive and finite")
+    body = re.sub(r"^; (?:FLOW|MATERIAL|LAYER_H)=[^\n]+\n?", "", text, flags=re.M)
+    header = (f"; MATERIAL={material}\n"
+              "; MATERIAL_PROVENANCE=generator-selected spool identity; maintained in machine.MATERIAL_TEMP\n"
+              f"; LAYER_H={layer_h:g}\n"
+              "; LAYER_H_PROVENANCE=generator-emitted Z-step geometry\n"
+              f"; FLOW={fields['FLOW']}\n"
+              "; FLOW_PROVENANCE=generator-calculated delivered bead cross-section x feedrate\n"
+              "; HEADER_PROVENANCE=machine.emit_gcode\n")
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as output:
+        output.write(header + body)
 
 
 def layer1_rate(landed_w, gap):

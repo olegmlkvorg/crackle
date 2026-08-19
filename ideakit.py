@@ -156,7 +156,7 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"ideakit_{a.printer}_h{a.height:g}_x{N}_T{temp:g}.gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
     print(fn)
     print(f"  idea kit: {N} samples ({', '.join(v[0] for v in VARIANTS)}), h{a.height:g}, "
           f"bed {bed:g}" + ("C" if bed else " (cold)"))

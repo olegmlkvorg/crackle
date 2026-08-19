@@ -104,7 +104,7 @@ def main():
     b.finish(top)
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"stand_cap_{a.printer}_{a.size:g}_bore{a.bore:g}_T{b.temp:g}.gcode")
-    open(fn, "w").write(b.text())
+    machine.emit_gcode(fn, b.text())
     print(f"  stand cap {a.size:g} sq, bore {a.bore:g}, wall {a.wall_h:g}mm + {a.lip:g}mm lip, "
           f"{fillet:g}mm fused {nbase}->1 haunch")
     print(f"  ~{b.grams():.0f} g, ~{b.minutes():.0f} min; bears on the column rim, spine + pour pass "

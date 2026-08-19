@@ -79,7 +79,7 @@ MATERIALS = {m: dict(temp=machine.temp_for(m),
 def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, seg_len,
          inward,
          bump_h, bump_arc, bump_every, spacing_mm, fixed_speed=None, bed_xy=None,
-         printer='k2plus', aux=1.0):
+         printer='k2plus', aux=1.0, material=None):
     """With --fixed-speed the ramp varies LINE WIDTH instead of speed.
 
     Q = width x height x speed, so a flow ramp can be driven by either factor. Driving it with
@@ -119,6 +119,11 @@ def emit(q_lo, q_hi, layer_h, line_w, temp, bed, fan, fil_d, home, margin, r0, s
         m += bump_every
 
     L = []; w = L.append
+    if material not in MATERIALS:
+        raise ValueError("flowtest.emit requires a real maintained material")
+    w(f"; MATERIAL={material}")
+    w(f"; LAYER_H={layer_h:g}")
+    w(f"; FLOW=VARIABLE:{q_lo:g}..{q_hi:g}")
     w(f"; MAX VOLUMETRIC FLOW — single layer, Archimedean spiral, {turns:.0f} turns")
     w(f"; line_w={line_w}->{_w_hi:.1f} at peak, layer_h={layer_h} temp={temp} bed={bed} fan={fan}, spiral pitch={_pitch:.1f}mm (= widest ribbon, so turns never overlap)")
     w(f"; RAMP {q_lo:g} -> {q_hi:g} mm3/s {'INWARD (peak first, largest radius)' if inward else 'outward'}, r {r0:g}..{r_max:g}mm about ({cx:g},{cy:g})")
@@ -287,7 +292,7 @@ if __name__ == "__main__":
                  a.spacing, a.fixed_speed or None,
                  (tuple(float(v) for v in a.bed_size.split(',')) if a.bed_size
                   else machine.BED[a.printer]),
-                 a.printer, a.aux)
+                 a.printer, a.aux, a.material)
     os.makedirs(a.out, exist_ok=True)
     # Machine tag in the filename. Two files that differ ONLY by bed size are a real hazard: the
     # K2's spiral is centred at 175,175 and the K1C's at 114,112, so starting the wrong one by hand
@@ -300,7 +305,7 @@ if __name__ == "__main__":
     _tag = a.printer
     fn = (f"{a.out}/flowspiral_{_tag}_{'nohome_' if a.no_home else ''}{a.material}"
           f"_T{temp}_{int(q_lo)}-{int(q_hi)}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     xs = a.line_w * a.layer_h
     print(f"{fn}\n  ONE layer, spiral {st['turns']} turns to r{st['r_max']:.0f}mm, "
           f"{st['path']} m path, ~{st['mins']} min, {st['grams']} g, {st['lines']} lines")

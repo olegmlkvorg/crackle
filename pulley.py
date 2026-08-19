@@ -511,7 +511,7 @@ if __name__ == "__main__":
                  a.material)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/pulley_{a.printer}_od{a.od:.0f}_w{a.width:.0f}_b{a.bore:.0f}D_T{a.temp}.gcode"
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
     print(f"  OD {a.od}mm (+{a.crown} crown, +{a.flange} flange), {a.width}mm wide, "
           f"{a.bore}mm D-bore modelled {a.bore + SHRINK:.2f} for shrink")

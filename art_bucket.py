@@ -1978,7 +1978,7 @@ def main():
                              f"f{a.floor_layers}x{a.net_pitch:g}_b{a.bridge_every}_"
                              f"x{a.cross_flow*100:g}_j{a.merge_mm:g}_{sha_o[:6]}{sha_h[:6]}"
                              f".gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
 
     print(fn)
     print(f"  posts {n_out} outer + {n_in} inner, all crossings dip-free at 1e-9 over "

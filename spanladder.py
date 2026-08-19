@@ -613,7 +613,7 @@ def main():
                     f"measured from this file's own final E and its own emitted moves, not from a "
                     f"nominal bead")
 
-    open(out, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(out, "\n".join(L) + "\n")
 
     print(out)
     print(f"  {nrow} rows: ladder {ladder[0]:g}..{ladder[-1]:g}mm in {len(ladder)} rungs "

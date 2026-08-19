@@ -614,7 +614,7 @@ if __name__ == "__main__":
     tag = a.printer
     kind = "hilbert" if a.open else "moore"
     fn = f"{a.out}/{kind}_{tag}_o{a.order}_{span:.0f}mm_L{a.layers}_T{a.temp}.gcode"
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}\n  order {a.order} -> {st['cells']} cells, {st['pitch']}mm pitch, "
           f"{span:.0f}mm square, fillet {fillet:.2f}mm, {st['pts']} points")
     print(f"  {st['speed']} mm/s at flow {st['flow']} mm3/s, ~{st['mins']} min, {st['grams']} g, "

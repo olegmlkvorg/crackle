@@ -110,7 +110,7 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     path = os.path.join(a.out, fn)
-    open(path, "w").write(b.text())
+    machine.emit_gcode(path, b.text())
     print(f"  stand {kind}")
     print(f"  ~{b.grams():.0f} g, ~{b.minutes():.0f} min. 4 per stand (one under each corner).")
     print(path)

@@ -712,7 +712,7 @@ if __name__ == "__main__":
     os.makedirs(a.out, exist_ok=True)
     fn = (f"{a.out}/nucleon_{'nohome_' if a.no_home else ''}{'vase_' if a.vase else ''}"
           f"N{a.N}_weld{a.weld:g}_T{a.temp}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}\n  N={a.N} ({2*a.N*(a.N-1)} junctions/layer predicted, {st['junctions']} measured "
           f"over {a.layers} layers), {st['lifts']} lifts")
     # THE SUMMARY IS MEASURED FROM THE FILE, NOT RECOMPUTED FROM THE VARIABLE. A summary line that

@@ -288,7 +288,7 @@ def main():
 
     vol = E * machine.A_FIL / 1000.0
     L[_mat] = (f"; MATERIAL {vol*1.24:.1f}g / {vol:.2f}cm3 — measured from this file's own final E")
-    open(out_path, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(out_path, "\n".join(L) + "\n")
     print(out_path)
     print(f"  2 sheets {a.sheet_x:g}x{a.sheet_y:g}mm, {a.layers} layer(s), holes "
           f"{'/'.join(f'{d:g}' for d in HOLES)}mm")

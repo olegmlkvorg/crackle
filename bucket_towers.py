@@ -2810,7 +2810,7 @@ def main():
                              f"n{n_tow}t{a.tower_d:g}{wf}_b{a.bridge_every}{bb}{mf}_"
                              f"f{a.floor_layers}x{a.floor_pitch:g}"
                              f"{_rsuf}{xf}{jf}{lz}.gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
 
     print(fn)
     print(f"  {n_tow} towers of {a.tower_d:g}mm on a {a.dia:g}mm circle "

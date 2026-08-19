@@ -104,7 +104,7 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"stand_column_{a.printer}_d{a.dia:g}_h{a.height:g}_T{b.temp:g}.gcode")
-    open(fn, "w").write(b.text())
+    machine.emit_gcode(fn, b.text())
 
     fill_ml = math.pi * (a.dia / 2.0 - b.bw) ** 2 * a.height / 1000.0
     kg = fill_ml * 1.9 / 1000.0

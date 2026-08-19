@@ -511,7 +511,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"bucket_latch_{a.printer}_{a.material}_d{a.diameter:g}_"
                              f"h{a.height:g}_f{a.floor_layers}p{a.floor_pitch:g}.gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
 
     print(fn)
     print(f"  {a.diameter:g}mm outer / toolpath radius {r_w:.2f}mm, {a.height:g}mm tall, "

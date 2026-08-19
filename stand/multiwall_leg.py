@@ -254,7 +254,7 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"multiwall_{a.printer}_w{N}_h{a.height:g}_d{a.dia:g}_L{a.lobes}_T{temp:g}.gcode")
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
     print(fn)
     grams = E * A_FIL * 1.24 / 1000.0
     mins = (E / e_mm) / speed / 60.0

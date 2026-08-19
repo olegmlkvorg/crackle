@@ -303,7 +303,7 @@ def main():
     print(f"  a 2x2 of these = one tabletop: {2*sx:g}x{2*sy:g} mm, ~{4*kg:.1f} kg of damping mass")
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out, f"stand_tile_{a.printer}_{sx:g}x{sy:g}_d{a.depth:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(fn)
 
 

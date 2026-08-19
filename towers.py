@@ -267,7 +267,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     fn = os.path.join(a.out,
                       f"towers_{a.printer}_x{N}_d{a.tower_d:g}_h{a.height:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}")
 
 

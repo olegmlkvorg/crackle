@@ -230,9 +230,8 @@ def main():
     w(f"G0 X10 Y{by-10:.0f} F{travel_f}")
     w("M84")
     vol = E * machine.A_FIL / 1000
-    L[mat_line] = f"; MATERIAL={vol*1.24:.1f}g / {vol:.2f}cm3 from final emitted E"
-    with open(out_path, "w") as fh:
-        fh.write("\n".join(L) + "\n")
+    L[mat_line] = f"; MATERIAL_USAGE={vol*1.24:.1f}g / {vol:.2f}cm3 from final emitted E"
+    machine.emit_gcode(out_path, "\n".join(L) + "\n")
     print(out_path)
     print(f"  {a.width:g}x{a.depth:g}mm body, {a.wall_h:g}mm return, {a.channel:g}mm LED raceway")
     print(f"  {a.back_layers} back layers to Z{back_top:.1f}; {vol:.2f}cm3 / {vol*1.24:.1f}g")

@@ -479,7 +479,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     _wtag = f"_w{NW}" if NW > 1 else ""      # single-wall filename unchanged; multi-wall distinct
     fn = os.path.join(a.out, f"colonnade_{a.printer}_x{N}{_wtag}_d{a.dia:g}_h{a.height:g}_T{temp:g}.gcode")
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
 
     grams = e * A_FIL * 1.24 / 1000.0
     mins = (e / e_per_mm) / speed / 60.0

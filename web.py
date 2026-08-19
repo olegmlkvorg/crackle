@@ -946,7 +946,7 @@ def main():
     w("G0 Z40 F900")
     w(f"G0 X{min(10.0, bx - 10):.0f} Y{by - 10:.0f} F9000")
     os.makedirs(a.out, exist_ok=True)
-    open(fn, "w").write("\n".join(L) + "\n")
+    machine.emit_gcode(fn, "\n".join(L) + "\n")
     print(summary)
     print(fn)
 

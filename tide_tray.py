@@ -980,8 +980,7 @@ def main():
                                                      or machine.FLOW, BW, lh) * BW * lh,
                               mins, " for this part", material)
     os.makedirs(a.out, exist_ok=True)
-    with open(fn, "w") as fh:
-        fh.write(text)
+    machine.emit_gcode(fn, text)
     print(fn)
     for r in reports:
         print(r)

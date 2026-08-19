@@ -84,6 +84,9 @@ def emit(a_lo, a_hi, aspect, pitch, flow, line_w, layer_h, temp, bed, fil_d, r0,
     w_note = f"tallest staple rises {a_hi}mm in ~{t_up:.2f}s of stalled XY"
 
     L = []; w = L.append
+    w(f"; MATERIAL={machine.DEFAULT_MATERIAL}")
+    w(f"; LAYER_H={layer_h:g}")
+    w(f"; FLOW={flow:g}")
     w(f"; ARCH TEST — arcs every {pitch}mm of path, height {a_lo} -> {a_hi}mm outward")
     w(f"; STAPLE hops: XY stalls, Z rises, carry {aspect}x height, XY stalls, Z descends")
     w(f"; flow={flow} at {speed:.0f} mm/s, line {line_w}x{layer_h}, base spacing {spacing}")
@@ -479,7 +482,7 @@ if __name__ == "__main__":
                  a.land_wave, a.layers, a.clear, a.tip_gap)
     os.makedirs(a.out, exist_ok=True)
     fn = f"{a.out}/hooptest_{a.a_lo:g}-{a.a_hi:g}mm_T{a.temp}.gcode"
-    open(fn, "w").write(g)
+    machine.emit_gcode(fn, g)
     print(f"{fn}\n  {st['arcs']} hoops, {a.a_lo}->{a.a_hi}mm tall, span scales with height")
     print(f"  {st['speed']} mm/s, {st['path']} m path, ~{st['mins']} min, {st['grams']} g")
     print(f"  height at radius: {', '.join(f'{h}mm@r{r}' for h,r in st['sample'])}")
