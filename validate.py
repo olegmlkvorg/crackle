@@ -135,6 +135,78 @@ COUPON_RE = re.compile(
     re.M)
 
 
+def sharp_angle_coverage(lines):
+    """Return G3's selected move count, sharp turns, and worst spatial cluster.
+
+    XYZ and E are modal G-code state.  Requiring a Z word on the same line as XY/E made ordinary
+    layer bodies invisible to this rule.  Exempt declarations split runs so an angle is never
+    invented across a move outside G3's jurisdiction.
+    """
+    runs, run = [], []
+    x = y = z = None
+    e, absolute_e, body = 0.0, True, False
+    selected = 0
+    for raw in lines:
+        if 'BODY_START' in raw:
+            body = True
+            if run:
+                runs.append(run); run = []
+        code = raw.split(';')[0].strip()
+        if code.startswith('M82'):
+            absolute_e = True; continue
+        if code.startswith('M83'):
+            absolute_e = False; continue
+        if code.startswith('G92'):
+            me = re.search(r'\bE(-?\d+(?:\.\d+)?)', code)
+            if me: e = float(me.group(1))
+            continue
+        if not code.startswith(('G0', 'G1')):
+            continue
+        g = dict(re.findall(r'\b([XYZE])(-?\d+(?:\.\d+)?)', code))
+        nx = float(g['X']) if 'X' in g else x
+        ny = float(g['Y']) if 'Y' in g else y
+        nz = float(g['Z']) if 'Z' in g else z
+        de = 0.0
+        if 'E' in g:
+            ev = float(g['E']); de = ev - e if absolute_e else ev
+            e = ev if absolute_e else e + ev
+        exempt = ('THIN CROSS' in raw.upper() or '; LINK' in raw
+                  or ('; BRIDGE' in raw and ' pass ' in raw))
+        deposited = (body and code.startswith('G1') and de > 1e-9
+                     and None not in (x, y, nx, ny) and math.hypot(nx-x, ny-y) > 1e-9)
+        if deposited and not exempt:
+            selected += 1
+            if not run:
+                run = [(x, y)]
+            run.append((nx, ny))
+        elif run:
+            runs.append(run); run = []
+        x, y, z = nx, ny, nz
+    if run:
+        runs.append(run)
+
+    sharp = []
+    for points in runs:
+        for i in range(1, len(points) - 1):
+            ax, ay = points[i][0] - points[i-1][0], points[i][1] - points[i-1][1]
+            bx, by = points[i+1][0] - points[i][0], points[i+1][1] - points[i][1]
+            la, lb = math.hypot(ax, ay), math.hypot(bx, by)
+            if la < 0.05 or lb < 0.05:
+                continue
+            cv = max(-1.0, min(1.0, (ax*bx + ay*by) / (la*lb)))
+            if math.degrees(math.acos(cv)) > 140.0:
+                sharp.append(points[i])
+    best = 0
+    if sharp:
+        cell, grid = 15.0, {}
+        for sx, sy in sharp:
+            key = (int(sx // cell), int(sy // cell)); grid[key] = grid.get(key, 0) + 1
+        best = max(sum(grid.get((kx+dx, ky+dy), 0)
+                       for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+                   for kx, ky in grid)
+    return {'moves_examined': selected, 'sharp_turns': len(sharp), 'max_cluster': best}
+
+
 def layer1_excuse(path, txt, h1, w1, zerr, lh):
     """May this file print an UNPROVEN first layer? Returns (excused, note).
 
@@ -1427,7 +1499,13 @@ def check(path):
              else list(_bvals))
     if _bvals or _bdecl:
         _btol = lambda d: max(0.002, 0.01 * d)
-        if _bvals and not _bdecl and not _bodd:
+        if _bvals and not _bdecl and _bbead is None:
+            problems.append(
+                f"R4e REFUSED: {len(_bvals)} '; BRIDGE' move(s) were found, but the file carries "
+                f"neither '; BRIDGE_MM2=' nor a parseable '; bead <width>x<height>' stamp. Without "
+                f"one of those physical cross-sections R4e cannot decide whether the bridge uses "
+                f"the body flow or an undeclared second regime.")
+        elif _bvals and not _bdecl and not _bodd:
             print(f"  R4e: {len(_bvals)} '; BRIDGE' move(s), all within 20% of this file's own "
                   f"{_bbead:.4f}mm2 bead — one flow, so there is no schedule to declare.")
         elif _bvals and not _bdecl:
@@ -2136,52 +2214,21 @@ def check(path):
     # The signal is CLUSTERING, not raw count: distributed sharp turns (raster row-ends, the
     # topper's spring-C mouths) print fine — measured max-cluster <=20 on every part that adhered,
     # vs 360 on the base that detached. So this fails only a dense pile-up (>=50 in one ~45mm patch).
-    _sh, _pb, _inb = [], [], False
-    for _ln in open(path):
-        if 'BODY_START' in _ln:
-            _inb = True; continue
-        if not _inb:
-            continue
-        # DECLARED IN-AIR STRANDS ARE NOT PLATE CUSPS. The fabric weave (2026-08-07) reverses
-        # deliberately at the post tips -- there-back-there, welding INTO a standing wall at
-        # height -- and 545 layers of that read as a >=1000-cusp pile at each post to a check
-        # whose mechanism is first-layer beads peeling off the PLATE at a hairpin. Wrong frame
-        # for a declared regime: THIN CROSS and LINK moves are counted and gated elsewhere
-        # (R4's exemption census, the send ledger), so they are out of this check's
-        # jurisdiction. An UNDECLARED cusp pile still fires exactly as before.
-        if ('THIN CROSS' in _ln.upper() or '; LINK' in _ln
-                or ('; BRIDGE' in _ln and ' pass ' in _ln)):
-            # '; BRIDGE ... pass p/N' is the split-bridge weave (2026-08-07): its turnarounds
-            # weld into a standing wall at height, same argument as the fabric weave. A single
-            # fat bridge carries no ' pass ' and stays in jurisdiction.
-            continue
-        _c = _ln.split(';')[0]
-        _m = re.match(r'^G1 (?:F[\d.]+ )?X([-\d.]+) Y([-\d.]+) Z([\d.]+) E', _c)
-        if _m:
-            _pb.append((float(_m.group(1)), float(_m.group(2))))
-    for _i in range(1, len(_pb) - 1):
-        _ax, _ay = _pb[_i][0] - _pb[_i-1][0], _pb[_i][1] - _pb[_i-1][1]
-        _bx, _by = _pb[_i+1][0] - _pb[_i][0], _pb[_i+1][1] - _pb[_i][1]
-        _la = math.hypot(_ax, _ay); _lb = math.hypot(_bx, _by)
-        if _la < 0.05 or _lb < 0.05:
-            continue
-        _cv = max(-1.0, min(1.0, (_ax*_bx + _ay*_by) / (_la*_lb)))
-        if math.degrees(math.acos(_cv)) > 140.0:
-            _sh.append(_pb[_i])
-    if _sh:
-        _SC = 15.0; _gc = {}
-        for _x, _y in _sh:
-            _k = (int(_x // _SC), int(_y // _SC)); _gc[_k] = _gc.get(_k, 0) + 1
-        _best = max(sum(_gc.get((_kx+_dx, _ky+_dy), 0) for _dx in (-1, 0, 1) for _dy in (-1, 0, 1))
-                    for (_kx, _ky) in _gc)
-        if _best >= 50:
-            problems.append(f"SHARP-ANGLE CLUSTER: {_best} near-reversals (>140deg) pile into one "
+    # XYZ AND E ARE MODAL. The old regex required Z on every extrusion line, so a normal layer
+    # that states Z once and then emits XY/E inspected one move and reported green. G3 now carries
+    # the machine state and prints its selected-move count on every body file.
+    _g3 = sharp_angle_coverage(_lines)
+    if not _g3['moves_examined']:
+        problems.append("G3 sharp-angle rule REFUSED: zero real body extrusion moves examined")
+    elif _g3['max_cluster'] >= 50:
+            problems.append(f"SHARP-ANGLE CLUSTER: {_g3['max_cluster']} near-reversals (>140deg) pile into one "
                             f"~45mm patch — cusps concentrate stress and do not adhere (Oleg: the "
                             f"base detached from 'so many sharp angles in the middle'). Spread the "
                             f"convergence out; do not run many paths into a single point.")
-        else:
-            print(f"  sharp-angle cluster max {_best} (>140deg reversals in any ~45mm patch; fails "
-                  f"at 50) — {len(_sh)} sharp turns total, distributed")
+    else:
+        print(f"  G3 examined {_g3['moves_examined']} real extrusion moves; sharp-angle cluster "
+              f"max {_g3['max_cluster']} (>140deg reversals in any ~45mm patch; fails at 50) — "
+              f"{_g3['sharp_turns']} sharp turns total, distributed")
 
     # TPU RUNS FULL FANS, ALWAYS. Oleg's rule, 2026-07-26, after finding the chamber fans at 0 on
     # a TPU print: "tpu must allway run full fans, add a guard". hilbert/honeycomb/waves never set

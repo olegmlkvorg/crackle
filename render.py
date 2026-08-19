@@ -18,10 +18,10 @@ that should not exist is visible rather than merely reported.
 
 Usage: python3 render.py out/thing.gcode [out.svg]
 """
-import re, sys, math, os
+import hashlib, re, sys, math, os
 
 
-def read_path(path):
+def read_path(path, body_only=False):
     """Parse a gcode file into drawable segments.
 
     NO PHANTOM FIRST SEGMENT. Position starts unknown, not at (0,0,0). Seeding it at the origin
@@ -32,7 +32,17 @@ def read_path(path):
     """
     segs = []                     # (x0,y0,z0, x1,y1,z1, extruding)
     x = y = z = None; e = 0.0
+    in_body = not body_only
     for ln in open(path):
+        if body_only and "BODY_START" in ln:
+            in_body = True
+            x = y = z = None
+            e = 0.0
+            continue
+        if body_only and in_body and ln.split(';')[0].strip() == "M107":
+            break
+        if not in_body:
+            continue
         t = ln.split(';')[0].strip()
         if not t.startswith(('G0', 'G1')):
             continue
@@ -52,7 +62,8 @@ def read_path(path):
     return segs
 
 
-def svg(segs, out, w=1500, h=820, zmax_cut=None, layers=0, min_seg=0.0):
+def svg(segs, out, w=1500, h=820, zmax_cut=None, layers=0, min_seg=0.0,
+        source_name="", source_sha256=""):
     # AUTO height cut. A fixed 60mm silently truncated tall parts — the 180mm spiral tower rendered as
     # its bottom third and nobody could see the form. Cut just above the tallest EXTRUDING move (the
     # part), which drops only the non-extruding park lift, at any part height.
@@ -94,7 +105,11 @@ def svg(segs, out, w=1500, h=820, zmax_cut=None, layers=0, min_seg=0.0):
         return f"rgb({r},{g},{b})"
 
     L = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
-         f'viewBox="0 0 {w} {h}"><rect width="{w}" height="{h}" fill="#08090b"/>']
+         f'viewBox="0 0 {w} {h}">']
+    if source_sha256:
+        L.append(f'<metadata data-source="{source_name}" '
+                 f'data-source-sha256="{source_sha256}"/>')
+    L.append('<rect width="100%" height="100%" fill="#08090b"/>')
     L.append(f'<text x="{pad}" y="26" fill="#7fe3d4" font-family="monospace" font-size="15">'
              f'PLAN — from above</text>')
     L.append(f'<text x="{w/2+pad}" y="26" fill="#7fe3d4" font-family="monospace" font-size="15">'
@@ -135,7 +150,7 @@ def svg(segs, out, w=1500, h=820, zmax_cut=None, layers=0, min_seg=0.0):
             L.append(f'<polyline points="{pt}" fill="none" stroke="{c}" '
                      f'stroke-width="{1.1 if ext else 0.7}"{d}/>')
     L.append(f'<text x="{pad}" y="{h-6}" fill="#5b6572" font-family="monospace" font-size="12">'
-             f'{os.path.basename(sys.argv[1])} — {len(body)} segments, '
+             f'{source_name or os.path.basename(sys.argv[1])} — {len(body)} segments, '
              f'X {x0:.0f}..{x1:.0f}  Y {y0:.0f}..{y1:.0f}  Z {z0:.2f}..{z1:.1f}{cut}</text>')
     L.append('</svg>')
     open(out, 'w').write('\n'.join(L))
@@ -148,11 +163,16 @@ if __name__ == "__main__":
     out = args[0] if args else src.rsplit('.', 1)[0] + '.svg'
     layers = 0
     min_seg = 0.0
+    body_only = False
     for a in sys.argv[2:]:
         if a.startswith('--layers='):
             layers = int(a.split('=', 1)[1])
         if a.startswith('--min-seg='):
             min_seg = float(a.split('=', 1)[1])
-    st = svg(read_path(src), out, layers=layers, min_seg=min_seg)
+        if a == '--body-only':
+            body_only = True
+    source_sha256 = hashlib.sha256(open(src, 'rb').read()).hexdigest()
+    st = svg(read_path(src, body_only=body_only), out, layers=layers, min_seg=min_seg,
+             source_name=os.path.basename(src), source_sha256=source_sha256)
     print(f"{out}\n  {st['segs']} segments  X {st['x'][0]:.0f}..{st['x'][1]:.0f}  "
           f"Y {st['y'][0]:.0f}..{st['y'][1]:.0f}  Z {st['z'][0]:.2f}..{st['z'][1]:.1f}")

@@ -1,0 +1,77 @@
+{
+  "parser": "nucleon-preview/verify.py",
+  "variants": [
+    {
+      "all_moves_inside_bounds": true,
+      "body_bounds_mm": [
+        155.0,
+        155.0,
+        195.0,
+        194.999
+      ],
+      "body_moves": 5196,
+      "dry_body_moves": 0,
+      "ellipses": 6,
+      "gcode_sha256": "3c18911f5b10354f6996d7fc136d56d5d90a59cd88b36ed61edbab8d0d72f8a5",
+      "machine_bounds_mm": [
+        350.0,
+        350.0,
+        350.0
+      ],
+      "measured_x_mm": 40.0,
+      "measured_y_mm": 39.999,
+      "printer": "k2plus",
+      "ratio": 0.62,
+      "requested_mm": 40.0,
+      "slug": "compact-40"
+    },
+    {
+      "all_moves_inside_bounds": true,
+      "body_bounds_mm": [
+        150.0,
+        150.0,
+        200.0,
+        199.998
+      ],
+      "body_moves": 6852,
+      "dry_body_moves": 0,
+      "ellipses": 8,
+      "gcode_sha256": "3b6043973447b936327f119d1795960542f9947938a691bc49bac165d5444a82",
+      "machine_bounds_mm": [
+        350.0,
+        350.0,
+        350.0
+      ],
+      "measured_x_mm": 50.0,
+      "measured_y_mm": 49.998,
+      "printer": "k2plus",
+      "ratio": 0.55,
+      "requested_mm": 50.0,
+      "slug": "standard-50"
+    },
+    {
+      "all_moves_inside_bounds": true,
+      "body_bounds_mm": [
+        143.0,
+        143.012,
+        207.0,
+        206.991
+      ],
+      "body_moves": 10740,
+      "dry_body_moves": 0,
+      "ellipses": 12,
+      "gcode_sha256": "ee2188d6126b886816cd388c304daec530007ddcf28d7aa4da229f2841ee5329",
+      "machine_bounds_mm": [
+        350.0,
+        350.0,
+        350.0
+      ],
+      "measured_x_mm": 64.0,
+      "measured_y_mm": 63.979,
+      "printer": "k2plus",
+      "ratio": 0.46,
+      "requested_mm": 64.0,
+      "slug": "statement-64"
+    }
+  ]
+}

@@ -5,16 +5,40 @@ Coverage is deliberately independent of validate.check(): it records which emitt
 rule selected.  A PASS with zero selected moves is converted to REFUSE.
 """
 import argparse
+import concurrent.futures
 import glob
 import json
 import math
 import os
 import re
+import subprocess
 import sys
+import tempfile
 
 import machine
 
 AREA = math.pi * (1.75 / 2) ** 2
+
+
+class FieldParseError(ValueError):
+    """A stamped validator input exists but cannot be interpreted."""
+
+    def __init__(self, field, value):
+        self.field = field
+        self.value = value
+        super().__init__(f"unparseable {field} value {value!r}")
+
+
+def stamped_float(text, name):
+    value = stamp(text, name)
+    if value is None:
+        return None
+    # Header stamps may carry an explanatory inline comment. The numeric token is the field;
+    # accepting any other suffix would turn a typo into a silently truncated value.
+    parsed = re.fullmatch(r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s*;.*)?", value)
+    if not parsed:
+        raise FieldParseError(f"; {name}=", value)
+    return float(parsed.group(1))
 PROVENANCE = {
     "R1": "machine.PRESS_HARD; Oleg 2026-07-27: nozzle 0.1mm to board",
     "R2": "; LAYER_H= emitted by generator; maximum one declared layer step",
@@ -30,6 +54,21 @@ PROVENANCE = {
 def stamp(text, name):
     m = re.search(rf"^; {re.escape(name)}=([^\n]+)", text, re.M)
     return m.group(1).strip() if m else None
+
+
+class FieldParseError(ValueError):
+    pass
+
+
+def stamped_float(text, name):
+    value = stamp(text, name)
+    if value is None:
+        return None
+    token = value.split(";", 1)[0].strip()
+    try:
+        return float(token)
+    except ValueError as exc:
+        raise FieldParseError(f"field {name} has unparseable numeric value {value!r}") from exc
 
 
 def moves(text):
@@ -91,8 +130,8 @@ def analyze_text(text):
     body = [m for m in ms if m["body"] and m["distance"] > 1e-9]
     ext = [m for m in body if m["de"] is not None and m["de"] > 1e-9]
     lh_s, flow_s, mat, printer = stamp(text, "LAYER_H"), stamp(text, "FLOW"), stamp(text, "MATERIAL"), stamp(text, "PRINTER")
-    lh = float(lh_s) if lh_s else None
-    declared_flow = float(flow_s) if flow_s else None
+    lh = stamped_float(text, "LAYER_H")
+    declared_flow = stamped_float(text, "FLOW")
     out = []
 
     first = ext[:1]
@@ -121,7 +160,7 @@ def analyze_text(text):
                       {"max_step_mm": lh}))
 
     pv = stamp(text, "PRESSED_LAYER1")
-    pz = float(pv) if pv else None
+    pz = stamped_float(text, "PRESSED_LAYER1")
     eligible = [m for m in ext if pz is None or m["z"] is None or abs(m["z"] - pz) > 1e-6]
     speeds = [round(m["feed"], 1) for m in eligible if m["feed"]]
     r3bad = not speeds or max(speeds) > machine.MAX_SPEED + .6 or len(set(speeds)) > 1
@@ -159,7 +198,7 @@ def analyze_text(text):
             mt = re.match(r"M10[49].*\bS([\d.]+)", l)
             if mt: temps.append(float(mt.group(1)))
     print_s = stamp(text, "PRINT_TEMP")
-    print_temp = float(print_s) if print_s else None
+    print_temp = stamped_float(text, "PRINT_TEMP")
     if print_temp is None and homes:
         after = []
         for l in code_lines[homes[0]:]:
@@ -228,11 +267,94 @@ def is_multipart(text):
     return bool(re.search(r"^; SEQUENTIAL=", text, re.M) or len(re.findall(r"^; ---- part", text, re.M)) >= 2)
 
 
+def validator_result(path, timeout_s=90):
+    """Return validate.py's own verdict and findings without allowing it to abort the report."""
+    command = [sys.executable, os.path.join(os.path.dirname(__file__), "validate.py"), path]
+    try:
+        run = subprocess.run(command, text=True, capture_output=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        return {"verdict": "REFUSE", "findings": [],
+                "reason": f"validate.py exceeded {timeout_s}s timeout"}
+    output = "\n".join(part for part in (run.stdout, run.stderr) if part).strip()
+    findings = [line.strip() for line in output.splitlines()
+                if line.lstrip().startswith(("FAIL", "REFUSE"))]
+    if run.returncode == 0:
+        return {"verdict": "PASS", "findings": findings, "reason": "validate.py exited 0"}
+    if findings:
+        return {"verdict": "FAIL", "findings": findings,
+                "reason": f"validate.py exited {run.returncode}"}
+    return {"verdict": "REFUSE", "findings": [],
+            "reason": f"validate.py exited {run.returncode} without a parseable finding: {output[-500:]}"}
+
+
+def refused_record(path, reason):
+    return {"path": os.path.abspath(path), "analysis_status": "REFUSED", "reason": reason,
+            "multipart": False, "coverage_rules": [], "coverage_status": "REFUSE",
+            "validator_verdict": "NOT_RUN", "validator_findings": [], "verdict": "REFUSE"}
+
+
+def build_report(paths, include_all, bad, validate_file=validator_result, validator_timeout=90,
+                 validator_workers=4, selection="explicit paths"):
+    files = []
+    pending_validation = []
+    for path in sorted(paths):
+        try:
+            with open(path) as source:
+                text = source.read()
+        except (OSError, UnicodeError) as exc:
+            files.append(refused_record(path, f"unreadable: {exc}"))
+            continue
+        multipart = is_multipart(text)
+        if not include_all and not multipart:
+            if selection == "explicit paths":
+                files.append(refused_record(path, "named file is not recognised as multi-part; use --all to analyse it"))
+            continue
+        if not re.search(r"^G[01](?:\s|$)", text, re.M):
+            files.append(refused_record(path, "not recognised as emitted motion G-code: no G0/G1 command"))
+            continue
+        try:
+            rows = analyze_text(text)
+        except (FieldParseError, ValueError) as exc:
+            files.append(refused_record(path, f"coverage parser refused {os.path.basename(path)}: {exc}"))
+            continue
+        for row in rows:
+            row["known_bad"] = bad[row["rule"]]
+        coverage = "FAIL" if any(r["verdict"] in ("FAIL", "REFUSE") for r in rows) else "PASS"
+        record = {"path": os.path.abspath(path), "analysis_status": "ANALYSED",
+                  "multipart": multipart, "coverage_rules": rows, "coverage_status": coverage,
+                  "validator_verdict": "PENDING", "validator_findings": [], "verdict": "PENDING"}
+        files.append(record)
+        pending_validation.append(record)
+
+    def run_validator(record):
+        return record, validate_file(record["path"], validator_timeout)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, validator_workers)) as pool:
+        for record, validated in pool.map(run_validator, pending_validation):
+            record["validator_verdict"] = validated["verdict"]
+            record["validator_findings"] = validated.get("findings", [])
+            record["validator_reason"] = validated.get("reason")
+            record["verdict"] = validated["verdict"]
+
+    summary = {"files": len(files)}
+    for verdict in ("PASS", "FAIL", "REFUSE"):
+        summary[verdict.lower()] = sum(f["verdict"] == verdict for f in files)
+    summary["coverage"] = {verdict.lower(): sum(f["coverage_status"] == verdict for f in files)
+                           for verdict in ("PASS", "FAIL", "REFUSE")}
+    return {"schema": "crackle.gate-coverage.v2",
+            "corpus": {"selection": selection, "requested_paths": len(paths),
+                       "rule": "all supplied G-code" if include_all else "multi-part: SEQUENTIAL stamp or at least two part markers"},
+            "verdict_definition": "verdict is validate.py's result; coverage_status only reports whether coverage gates inspected their intended moves",
+            "files": files, "summary": summary}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("paths", nargs="*")
     ap.add_argument("--all", action="store_true", help="include all supplied files, not only multi-part")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--validator-timeout", type=int, default=90)
+    ap.add_argument("--validator-workers", type=int, default=4)
     ns = ap.parse_args(argv)
     bad = known_bad_results()
     if ns.selftest:
@@ -242,23 +364,29 @@ def main(argv=None):
         zero = fixture().replace("; BODY_START\n", "; BODY_START\n; all body motion removed\n").replace("G1 F3000", "; G1 F3000").replace("G1 X30", "; G1 X30").replace("G1 X40", "; G1 X40")
         zrow = next(r for r in analyze_text(zero) if r["rule"] == "R1")
         assert zrow["verdict"] == "REFUSE" and zrow["moves_examined"] == 0, zrow
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "fixture.gcode")
+            with open(path, "w") as output:
+                output.write(fixture())
+            fake = lambda _path, _timeout: {"verdict": "FAIL", "findings": ["FAIL physical validator finding"], "reason": "test"}
+            checked = build_report([path], True, bad, validate_file=fake)
+            assert checked["files"][0]["coverage_status"] == "PASS", checked
+            assert checked["files"][0]["verdict"] == "FAIL", checked
+            assert checked["files"][0]["validator_findings"], checked
+            malformed = os.path.join(directory, "malformed.gcode")
+            with open(malformed, "w") as output:
+                output.write(fixture().replace("PRESSED_LAYER1=0.1", "PRESSED_LAYER1=oops"))
+            refused = build_report([malformed], True, bad, validate_file=fake)["files"][0]
+            assert refused["verdict"] == "REFUSE" and refused["coverage_rules"] == [], refused
         print(json.dumps({"selftest": "PASS", "known_bad": bad, "zero_move": zrow}, indent=2, sort_keys=True))
         return 0
-    paths = ns.paths or glob.glob(os.path.expanduser("~/dev/crackle/out/*.gcode"))
-    files = []
-    for path in sorted(paths):
-        text = open(path).read()
-        if ns.all or is_multipart(text):
-            rows = analyze_text(text)
-            for row in rows:
-                row["known_bad"] = bad[row["rule"]]
-            files.append({"path": os.path.abspath(path), "multipart": is_multipart(text), "rules": rows,
-                          "coverage_verdict": "FAIL" if any(r["verdict"] in ("FAIL", "REFUSE") for r in rows) else "PASS"})
-    document = {"schema": "crackle.gate-coverage.v1", "files": files,
-                "summary": {"files": len(files), "pass": sum(f["coverage_verdict"] == "PASS" for f in files),
-                            "fail": sum(f["coverage_verdict"] == "FAIL" for f in files)}}
+    paths = ns.paths or glob.glob(os.path.join(os.path.dirname(__file__), "out", "*.gcode"))
+    selection = "explicit paths" if ns.paths else "repository out/*.gcode snapshot"
+    document = build_report(paths, ns.all, bad, validator_timeout=ns.validator_timeout,
+                            validator_workers=ns.validator_workers, selection=selection)
     print(json.dumps(document, indent=2, sort_keys=True, allow_nan=False))
-    return 1 if document["summary"]["fail"] else 0
+    return 1 if document["summary"]["fail"] or document["summary"]["refuse"] else 0
 
 
 if __name__ == "__main__":

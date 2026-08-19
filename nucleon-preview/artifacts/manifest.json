@@ -1,0 +1,65 @@
+{
+  "stage": "preview; nothing has been printed",
+  "variants": [
+    {
+      "N": 6,
+      "a": 20.0,
+      "gcode": "compact-40.gcode",
+      "gcode_sha256": "3c18911f5b10354f6996d7fc136d56d5d90a59cd88b36ed61edbab8d0d72f8a5",
+      "generator_stats": {
+        "flow": 36.0,
+        "grams": 7.53,
+        "junctions": 2117,
+        "lifts": 0,
+        "lines": 5235,
+        "mins": 2.8,
+        "speed": 50.0
+      },
+      "ratio": 0.62,
+      "render": "compact-40.svg",
+      "render_sha256": "0ee4e28065a38a2ed1ad01cc007e2f247d8f85fe59dac74a190292f24d68f145",
+      "requested_mm": 40.0,
+      "slug": "compact-40"
+    },
+    {
+      "N": 8,
+      "a": 25.0,
+      "gcode": "standard-50.gcode",
+      "gcode_sha256": "3b6043973447b936327f119d1795960542f9947938a691bc49bac165d5444a82",
+      "generator_stats": {
+        "flow": 36.0,
+        "grams": 11.83,
+        "junctions": 2244,
+        "lifts": 0,
+        "lines": 6891,
+        "mins": 4.4,
+        "speed": 50.0
+      },
+      "ratio": 0.55,
+      "render": "standard-50.svg",
+      "render_sha256": "9e293f665e3e157fb9f8028aeaaabcd3a1d0de933ce884a1c952f2384ba4792c",
+      "requested_mm": 50.0,
+      "slug": "standard-50"
+    },
+    {
+      "N": 12,
+      "a": 32.0,
+      "gcode": "statement-64.gcode",
+      "gcode_sha256": "ee2188d6126b886816cd388c304daec530007ddcf28d7aa4da229f2841ee5329",
+      "generator_stats": {
+        "flow": 36.0,
+        "grams": 21.09,
+        "junctions": 3408,
+        "lifts": 0,
+        "lines": 10779,
+        "mins": 7.9,
+        "speed": 50.0
+      },
+      "ratio": 0.46,
+      "render": "statement-64.svg",
+      "render_sha256": "cbf95a82d569ee5c7ba7f0309e1e4d9cb136c8027bff7dd1677c5a634306439a",
+      "requested_mm": 64.0,
+      "slug": "statement-64"
+    }
+  ]
+}
