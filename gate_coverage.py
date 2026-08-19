@@ -24,7 +24,8 @@ PROVENANCE = {
     "R1": "machine.PRESS_HARD; Oleg 2026-07-27: nozzle 0.1mm to board",
     "R2": "; LAYER_H= emitted by generator; maximum one declared layer step",
     "R3": "machine.MAX_SPEED plus one-speed-per-print rule; Oleg 2026-07-27",
-    "R4": "; FLOW= emitted by generator; validator band 80%..120%",
+    "R4": ("machine.R4_FLOW_MIN_RATIO..machine.R4_FLOW_MAX_RATIO; Oleg 2026-07-27 "
+           "'flow must be constant'; the 20% tolerance has no recorded empirical provenance"),
     "R5": "validate.py R5; dry travel/extrusion <= 1.0, Oleg 2026-07-27",
     "R6": "machine.SUSTAINED_FLOW_BY_MATERIAL; measured per-material figures",
     "R7": "validate.py R7; probe within 5C of the file's emitted print temperature",
@@ -151,13 +152,21 @@ def analyze_text(text):
 
     flows = []
     flow_moves = []
+    bridge_declared = stamp(text, "BRIDGE_MM2") is not None
     for m in eligible:
-        if m["feed"] and m["distance"] > .05 and m["de"] and "LINK" not in m["raw"].upper() and "PRIME" not in m["raw"].upper():
+        upper = m["raw"].upper()
+        declared_regime = ("LINK" in upper or "THIN CROSS" in upper
+                           or ("BRIDGE" in upper and bridge_declared))
+        if m["feed"] and m["distance"] > .05 and m["de"] and not declared_regime and "PRIME" not in upper:
             flows.append(m["de"] * AREA * m["feed"] / m["distance"]); flow_moves.append(m)
-    r4bad = not declared_flow or not flows or any(v < .8*declared_flow or v > 1.2*declared_flow for v in flows)
+    r4bad = not declared_flow or not flows or any(
+        v < machine.R4_FLOW_MIN_RATIO * declared_flow
+        or v > machine.R4_FLOW_MAX_RATIO * declared_flow for v in flows)
     out.append(result("R4", bool(ext), "body contains deposited path", flow_moves, not r4bad,
                       "flow absent or outside declared band" if r4bad else "move flow within declared band",
-                      {"declared_mm3_s": declared_flow, "min_fraction": .8, "max_fraction": 1.2}))
+                      {"declared_mm3_s": declared_flow,
+                       "min_fraction": machine.R4_FLOW_MIN_RATIO,
+                       "max_fraction": machine.R4_FLOW_MAX_RATIO}))
 
     travel = [m for m in body if m["de"] is None]
     travel_mm, ext_mm = sum(m["distance"] for m in travel), sum(m["distance"] for m in ext)

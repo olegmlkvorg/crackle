@@ -621,6 +621,14 @@ PRESS_HARD = 0.10       # absolute Z for anything anchoring to the plate
 # edited in one place and stay wrong in four.
 A_FIL = math.pi * (1.75 / 2) ** 2       # 2.40528 mm2 of 1.75mm filament
 
+# R4's tolerance around each file's own declared flow. PROVENANCE: inherited by validate.py before
+# 2026-07-27; no machine, nozzle, coupon, or measured scatter is recorded for the 20% margin. The
+# physical rule is Oleg's 2026-07-27 "flow must be constant". Keep the existing tolerance visible
+# and unchanged until a flow coupon measures a tighter bound; this task fixes move selection, not
+# an unevidenced threshold by making it more permissive.
+R4_FLOW_MIN_RATIO = 0.80
+R4_FLOW_MAX_RATIO = 1.20
+
 
 def layer1_rate(landed_w, gap):
     """Filament mm per mm of path to land a bead `landed_w` wide in a `gap` high.

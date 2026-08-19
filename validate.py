@@ -1777,8 +1777,8 @@ def check(path):
               f"metered strands across open air, not dry travels. There is no retraction here, so "
               f"the alternative is the SAME ooze uncontrolled.")
     if _flw and _decl_flow:
-        _lo = [f for f in _flw if f < _decl_flow * 0.80]
-        _hi = [f for f in _flw if f > _decl_flow * 1.20]
+        _lo = [f for f in _flw if f < _decl_flow * machine.R4_FLOW_MIN_RATIO]
+        _hi = [f for f in _flw if f > _decl_flow * machine.R4_FLOW_MAX_RATIO]
         if _lo:
             problems.append(f"R4 constant flow: {len(_lo)} extruding moves deliver under 80% of "
                             f"the declared {_decl_flow:g} mm3/s (worst {min(_lo):.1f}) — the first "
