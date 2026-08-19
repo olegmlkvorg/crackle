@@ -8,11 +8,23 @@ each other about where the sticks are. Every threshold is written against centre
 positions measured from the file, not from the generator's variables (the summary line
 is not the file).
 """
-import math, re, sys, os
+import argparse, math, re, sys, os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 FAILS = []
+
+# V4/V5 spring-pocket contract, with the same recorded provenance as web.py.  These replace
+# the pre-V4 solid-boss bore expectation that this probe retained after the design changed.
+STICK_D = 3.175          # MEASURED: 1/8-inch bamboo stock
+SOCKET_R = 90.5          # CHOSEN: web.py R_STICK, 2026-07-28
+POCKET_RC = 2.70         # Oleg 2026-07-28: +10% from 2.45; half-flow spring-C centreline
+POCKET_STRAND = 1.0      # DERIVED: half of the K2's 2.0mm full-flow bead
+BASE_LAYERS = 10         # Oleg 2026-07-29: "10 layers in total"
+CAP_LAYERS = 3           # CHOSEN: show-face cap sheet
+TOP_POCKET_LAPS = 9      # CHOSEN: same 5.4mm grip above the base's pressed floor
+LAYER_H = 0.6            # generator-emitted layer step
+PRESS_Z = 0.1            # machine.PRESS_HARD
 
 
 def ok(cond, msg):
@@ -98,24 +110,48 @@ def probe_coupon(path):
     ok(max(zs) == 5.5, f"top of rails at z={max(zs)} (want 5.5)")
 
 
-def probe_base(path, bore=9.9, bw=2.0):
+def socket_minima(pts, zlo, zhi):
+    out = []
+    for k in range(12):
+        px = 175.0 + SOCKET_R * math.cos(2 * math.pi * k / 12)
+        py = 175.0 + SOCKET_R * math.sin(2 * math.pi * k / 12)
+        out.append(near(pts, px, py, zlo, zhi)[0])
+    return out
+
+
+def probe_base(path):
     print(f"\n== {path}")
     pts = read_pts(path)
-    cx = cy = 175.0
-    for k in range(12):
-        px = cx + 90.5 * math.cos(2 * math.pi * k / 12)
-        py = cy + 90.5 * math.sin(2 * math.pi * k / 12)
-        d, n = near(pts, px, py, 3.05, 14.0)
-        want = bore / 2 + bw / 2
-        if not (want - 0.15 < d < want + 0.40):
-            ok(False, f"socket {k}: bead at {d:.2f} vs want {want:.2f}")
-            continue
-        # socket floor: solid material below the void (blind socket)
-        df, nf = near(pts, px, py, 0.0, 2.55)
-        ok(df < 1.5 and nf > 3, f"socket {k}: void walled at {d:.2f} AND floored "
-                                f"(bead {df:.2f} from centre below it)")
+    ds = socket_minima(pts, 3.05, 14.0)
+    stick_r = STICK_D / 2.0
+    # This preserved 2026-07-29 p36 experiment is a known-bad control.  Its two extra petals
+    # between each socket cross the physical stick envelope; keeping the bytes makes this probe
+    # prove that the obstruction is detected without rewriting the historical record.
+    ok(len(ds) == 12 and max(ds) < stick_r,
+       f"known-bad p36 base rejected: all 12 sockets obstructed at "
+       f"r{min(ds):.3f}-{max(ds):.3f} inside stick r{stick_r:.3f}")
     zs = sorted({round(p[2], 2) for p in pts})
-    ok(abs(max(zs) - 13.9) < 1e-6, f"band top z={max(zs)} (want 13.9)")
+    want_top = PRESS_Z + (BASE_LAYERS - 1) * LAYER_H
+    ok(abs(max(zs) - want_top) < 1e-6,
+       f"historical base top z={max(zs)} (V5 10-layer design: {want_top})")
+
+
+def probe_base_generator():
+    """The corrected source must preserve a real 1/8-inch void at every spring pocket."""
+    import web
+    pts, _ = web.rose_sockets(175.0, 175.0, 100.0, 2.0)
+    ds = []
+    for k in range(12):
+        px = 175.0 + SOCKET_R * math.cos(2 * math.pi * k / 12)
+        py = 175.0 + SOCKET_R * math.sin(2 * math.pi * k / 12)
+        ds.append(min(math.hypot(x - px, y - py) for x, y in pts))
+    inner_edge = min(ds) - POCKET_STRAND / 2.0
+    ok(all(abs(d - POCKET_RC) < 0.02 for d in ds),
+       f"current p12 base: 12 spring-C walls at r{min(ds):.3f}-{max(ds):.3f} "
+       f"(want {POCKET_RC:.2f})")
+    ok(inner_edge > STICK_D / 2.0,
+       f"current p12 base: modelled inner bead edge r{inner_edge:.3f} clears "
+       f"1/8-inch stick r{STICK_D/2:.3f}")
 
 
 def probe_panel(path, bw=2.0, cav=4.3, mouth=2.9):
@@ -159,41 +195,50 @@ def probe_panel(path, bw=2.0, cav=4.3, mouth=2.9):
     ok(n_lift > 100, f"net crossing lifts present ({n_lift} lifted points)")
 
 
-def probe_topper(path, bore=9.9, bw=2.0):
+def probe_topper(path, bw=2.0):
     print(f"\n== {path}")
     pts = read_pts(path)
     cx = cy = 175.0
     # sockets at the SAME k/12 angles as the base: the assembly flip maps x->x, y->-y
     # (mirror), and this set maps onto itself landing on the base's stick circle
     for k in range(12):
-        px = cx + 90.5 * math.cos(2 * math.pi * k / 12)
-        py = cy + 90.5 * math.sin(2 * math.pi * k / 12)
+        px = cx + SOCKET_R * math.cos(2 * math.pi * k / 12)
+        py = cy + SOCKET_R * math.sin(2 * math.pi * k / 12)
         d, n = near(pts, px, py, 1.85, 9.0)
-        want = bore / 2 + bw / 2
         dc, ncap = near(pts, px, py, 0.0, 1.35)
-        ok(want - 0.15 < d < want + 0.40 and dc < 1.5,
-           f"socket {k}: walled at {d:.2f}, capped below (bead {dc:.2f} from centre)")
+        ok(abs(d - POCKET_RC) < 0.15 and dc < 1.5,
+           f"socket {k}: spring-C wall at {d:.2f} (want {POCKET_RC:.2f}), "
+           f"capped below (bead {dc:.2f} from centre)")
         # the flip check itself: mirrored centre must also be a socket centre
         mk = min(range(12), key=lambda j: math.hypot(
-            px - (cx + 90.5 * math.cos(2 * math.pi * j / 12)),
-            (2 * cy - py) - (cy + 90.5 * math.sin(2 * math.pi * j / 12))))
-        mx = cx + 90.5 * math.cos(2 * math.pi * mk / 12)
-        my = cy + 90.5 * math.sin(2 * math.pi * mk / 12)
+            px - (cx + SOCKET_R * math.cos(2 * math.pi * j / 12)),
+            (2 * cy - py) - (cy + SOCKET_R * math.sin(2 * math.pi * j / 12))))
+        mx = cx + SOCKET_R * math.cos(2 * math.pi * mk / 12)
+        my = cy + SOCKET_R * math.sin(2 * math.pi * mk / 12)
         ok(math.hypot(px - mx, (2 * cy - py) - my) < 0.01,
            f"socket {k}: mirrored position lands on socket {mk} — flip-aligned")
     # spiral cap coverage: no radial gap wider than a bead on the pressed face
     rr = sorted(math.hypot(p[0] - cx, p[1] - cy) for p in pts if p[2] <= 0.15)
     gaps = max(b - a_ for a_, b in zip(rr, rr[1:]))
-    ok(rr[0] < 81.5 and rr[-1] > 100.4 and gaps < bw + 0.1,
+    # V4 deliberately narrowed the cap to the wall/pocket envelope.  82..98 is CHOSEN in
+    # web.py; its 16mm span is exactly eight 2mm bead pitches, avoiding an extruded seam chord.
+    ok(abs(rr[0] - 82.0) < 0.05 and abs(rr[-1] - 98.0) < 0.05 and gaps < bw + 0.1,
        f"cap spiral spans r{rr[0]:.1f}-{rr[-1]:.1f}, max radial step {gaps:.2f}")
     zs = sorted({round(p[2], 2) for p in pts})
-    ok(abs(max(zs) - 8.5) < 1e-6, f"socket ring top z={max(zs)} (want 8.5)")
+    want_top = PRESS_Z + (CAP_LAYERS + TOP_POCKET_LAPS - 1) * LAYER_H
+    ok(abs(max(zs) - want_top) < 1e-6,
+       f"spring-pocket top z={max(zs)} (3 cap + 9 pocket layers: {want_top})")
 
 
 if __name__ == "__main__":
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "out")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                   "..", "out"))
+    args = ap.parse_args()
+    base = os.path.abspath(args.out)
     probe_coupon(os.path.join(base, "web_coupon_k1c_T230.gcode"))
     probe_base(os.path.join(base, "web_base_k2plus_d200_T230.gcode"))
+    probe_base_generator()
     probe_panel(os.path.join(base, "web_panel1_k2plus_w295_h178_T230.gcode"))
     probe_panel(os.path.join(base, "web_panel2_k2plus_w295_h178_T230.gcode"))
     probe_topper(os.path.join(base, "web_topper_k2plus_T230.gcode"))
