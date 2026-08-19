@@ -14,6 +14,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 FAILS = []
 
+REQUIRED_ARTIFACTS = (
+    "web_coupon_k1c_T230.gcode",
+    "web_base_k2plus_d200_T230.gcode",
+    "web_panel1_k2plus_w295_h178_T230.gcode",
+    "web_panel2_k2plus_w295_h178_T230.gcode",
+    "web_topper_k2plus_T230.gcode",
+)
+
 # V4/V5 spring-pocket contract, with the same recorded provenance as web.py.  These replace
 # the pre-V4 solid-boss bore expectation that this probe retained after the design changed.
 STICK_D = 3.175          # MEASURED: 1/8-inch bamboo stock
@@ -232,8 +240,9 @@ def probe_topper(path, bw=2.0):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                   "..", "out"))
+    ap.add_argument("--out", default=os.environ.get(
+        "CRACKLE_ARTIFACTS",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "out")))
     args = ap.parse_args()
     base = os.path.abspath(args.out)
     probe_coupon(os.path.join(base, "web_coupon_k1c_T230.gcode"))

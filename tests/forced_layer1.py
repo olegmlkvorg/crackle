@@ -15,11 +15,12 @@ Every case is checked three ways, because two of them have quietly failed on thi
 
 Usage:  python3 tests/forced_layer1.py            (about 90s: three buckets, ten validations)
 """
-import os, re, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CRACKLE = os.path.dirname(HERE)
 COUPON = 'zladder_k2plus_pla_6cell_w2_p1.6.gcode'
+REQUIRED_ARTIFACTS = ('zladder_k2plus_pla_6cell_w2_p1.6.gcode',)
 OFF = re.compile(r'^SET_GCODE_OFFSET .*$', re.M)
 
 
@@ -44,6 +45,13 @@ def stamp(txt, line):
 
 def main():
     tmp = tempfile.mkdtemp(prefix='forced_layer1_')
+    artifacts = os.environ.get('CRACKLE_ARTIFACTS', os.path.join(CRACKLE, 'out'))
+    coupon_source = os.path.join(artifacts, COUPON)
+    if not os.path.isfile(coupon_source):
+        raise SystemExit(f"NOT RUN: required artifact is absent: {coupon_source}")
+    # validate.py resolves a citation beside the candidate first. Copy the measured coupon into
+    # this test's temporary directory; never write into or regenerate the historical corpus.
+    shutil.copy2(coupon_source, os.path.join(tmp, COUPON))
     proven = open(gen(tmp, 'proven', 0.10, 2.00)).read()     # the pair that printed and held
     starved = open(gen(tmp, 'starved', 0.15, 1.33)).read()   # the bamboo base that lifted
     wide15 = open(gen(tmp, 'wide15', 0.15, 2.00)).read()     # unproven, but a ladder cell tested it

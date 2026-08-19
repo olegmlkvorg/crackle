@@ -1,0 +1,5 @@
+#!/bin/sh
+# Every discovered test must run and pass before Git may push.
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+exec python3 tests/run_all.py
