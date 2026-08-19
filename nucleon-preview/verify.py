@@ -25,10 +25,15 @@ def measure(path):
     e = 0.0
     body = False
     body_points = []
+    body_segments = []
     body_moves = dry_body_moves = 0
     all_points = []
     printer = None
+    declared_inner_r = None
     for number, line in enumerate(open(path), 1):
+        if line.startswith("; NUCLEON"):
+            match = re.search(r"\bb=(-?\d+(?:\.\d+)?)", line)
+            declared_inner_r = float(match.group(1)) if match else None
         if line.startswith("; PRINTER="):
             printer = line.strip().split("=", 1)[1]
         if "BODY_START" in line:
@@ -57,6 +62,7 @@ def measure(path):
             if "E" not in words or ne <= e:
                 dry_body_moves += 1
             body_points.extend(((x, y), (nx, ny)))
+            body_segments.append((x, y, nx, ny))
         x, y, z, e = nx, ny, nz, ne
     if printer not in BOUNDS:
         raise AssertionError(f"{os.path.basename(path)}: unknown printer {printer!r}")
@@ -69,12 +75,35 @@ def measure(path):
         raise AssertionError(f"{os.path.basename(path)}: {dry_body_moves} dry body moves")
     xs = [p[0] for p in body_points]
     ys = [p[1] for p in body_points]
+    cx = (min(xs) + max(xs)) / 2.0
+    cy = (min(ys) + max(ys)) / 2.0
+    sampled_inner_r = min(((px - cx) ** 2 + (py - cy) ** 2) ** 0.5 for px, py in body_points)
+    if declared_inner_r is None:
+        raise AssertionError(f"{os.path.basename(path)}: missing declared inner radius")
+
+    def segment_radius(seg):
+        x0, y0, x1, y1 = seg
+        dx, dy = x1 - x0, y1 - y0
+        den = dx * dx + dy * dy
+        t = 0.0 if den == 0 else max(0.0, min(1.0, ((cx - x0) * dx + (cy - y0) * dy) / den))
+        return ((x0 + t * dx - cx) ** 2 + (y0 + t * dy - cy) ** 2) ** 0.5
+
+    # The emitted fillet chords cut 0.092mm inside the smallest sampled endpoint on the 50mm
+    # variant. Keep 0.12mm for that measured approximation. A transition that enters farther
+    # crosses the hole rather than approximating its boundary.
+    void_crossings = [seg for seg in body_segments
+                      if segment_radius(seg) < declared_inner_r - 0.12]
+    if void_crossings:
+        raise AssertionError(f"{os.path.basename(path)}: {len(void_crossings)} extruding moves cross inner void")
     return {"printer": printer, "body_moves": body_moves,
             "dry_body_moves": dry_body_moves,
             "measured_x_mm": round(max(xs) - min(xs), 3),
             "measured_y_mm": round(max(ys) - min(ys), 3),
             "body_bounds_mm": [round(min(xs), 3), round(min(ys), 3),
                                round(max(xs), 3), round(max(ys), 3)],
+            "declared_inner_void_radius_mm": round(declared_inner_r, 3),
+            "sampled_inner_void_radius_mm": round(sampled_inner_r, 3),
+            "void_crossing_moves": 0,
             "machine_bounds_mm": list(BOUNDS[printer]),
             "all_moves_inside_bounds": True}
 
@@ -94,9 +123,9 @@ def selftest():
         open(bad, "w").write(original.replace("; BODY_START", "; BODY_START\nG0 X999 Y999", 1))
         try:
             measure(bad)
-            cases.append(False)
+            cases.append(("off-bed move", False))
         except AssertionError as exc:
-            cases.append("outside bounds" in str(exc))
+            cases.append(("off-bed move", "outside bounds" in str(exc)))
 
         lines = original.splitlines()
         body = False
@@ -109,22 +138,45 @@ def selftest():
         open(bad, "w").write("\n".join(lines) + "\n")
         try:
             measure(bad)
-            cases.append(False)
+            cases.append(("dry body move", False))
         except AssertionError as exc:
-            cases.append("dry body moves" in str(exc))
+            cases.append(("dry body move", "dry body moves" in str(exc)))
+
+        lines = original.splitlines()
+        body = False
+        first = None
+        for i, line in enumerate(lines):
+            if "BODY_START" in line:
+                body = True
+            elif body and line.startswith("G1") and " X" in line and " E" in line:
+                if first is None:
+                    first = line
+                else:
+                    lines[i] = re.sub(r"X-?\d+(?:\.\d+)?", "X175.000", line)
+                    lines[i] = re.sub(r"Y-?\d+(?:\.\d+)?", "Y175.000", lines[i])
+                    break
+        open(bad, "w").write("\n".join(lines) + "\n")
+        try:
+            measure(bad)
+            cases.append(("void chord", False))
+        except AssertionError as exc:
+            cases.append(("void chord", "cross inner void" in str(exc)))
 
         measured = measure(source)
         try:
             require_dimension("known-bad-size", measured, 41.0)
-            cases.append(False)
+            cases.append(("wrong dimension", False))
         except AssertionError as exc:
-            cases.append("dimension mismatch" in str(exc))
+            cases.append(("wrong dimension", "dimension mismatch" in str(exc)))
 
         digest = sha256(source)
         svg = open(os.path.join(OUT, "compact-40.svg")).read()
-        cases.append(f'data-source-sha256="{digest[:-1]}0"' not in svg)
-    failed = len(cases) - sum(cases)
-    print(f"nucleon preview selftest: {len(cases)} cases, {sum(cases)} passed, {failed} failed")
+        cases.append(("wrong render digest", f'data-source-sha256="{digest[:-1]}0"' not in svg))
+    passed = sum(ok for _, ok in cases)
+    failed = len(cases) - passed
+    for name, ok in cases:
+        print(f"{'ok ' if ok else 'BAD'}  {name}")
+    print(f"nucleon preview selftest: {len(cases)} cases, {passed} passed, {failed} failed")
     if failed:
         raise SystemExit(1)
 

@@ -4,74 +4,83 @@
     {
       "all_moves_inside_bounds": true,
       "body_bounds_mm": [
-        155.0,
-        155.0,
+        155.005,
+        155.002,
         195.0,
-        194.999
+        195.0
       ],
-      "body_moves": 5196,
+      "body_moves": 6384,
+      "declared_inner_void_radius_mm": 12.4,
       "dry_body_moves": 0,
       "ellipses": 6,
-      "gcode_sha256": "3c18911f5b10354f6996d7fc136d56d5d90a59cd88b36ed61edbab8d0d72f8a5",
+      "gcode_sha256": "d98600de610526aa91aecac58a2d2734df19385a52a43ce0ea150c97d047418e",
       "machine_bounds_mm": [
         350.0,
         350.0,
         350.0
       ],
-      "measured_x_mm": 40.0,
-      "measured_y_mm": 39.999,
+      "measured_x_mm": 39.995,
+      "measured_y_mm": 39.998,
       "printer": "k2plus",
       "ratio": 0.62,
       "requested_mm": 40.0,
-      "slug": "compact-40"
+      "sampled_inner_void_radius_mm": 12.4,
+      "slug": "compact-40",
+      "void_crossing_moves": 0
     },
     {
       "all_moves_inside_bounds": true,
       "body_bounds_mm": [
         150.0,
-        150.0,
+        150.004,
         200.0,
-        199.998
+        200.0
       ],
-      "body_moves": 6852,
+      "body_moves": 8256,
+      "declared_inner_void_radius_mm": 13.8,
       "dry_body_moves": 0,
       "ellipses": 8,
-      "gcode_sha256": "3b6043973447b936327f119d1795960542f9947938a691bc49bac165d5444a82",
+      "gcode_sha256": "f7f2818de66096dbce1f2953ec4fff468ba5900b16a9d2938fabc6e37aca634b",
       "machine_bounds_mm": [
         350.0,
         350.0,
         350.0
       ],
       "measured_x_mm": 50.0,
-      "measured_y_mm": 49.998,
+      "measured_y_mm": 49.996,
       "printer": "k2plus",
       "ratio": 0.55,
       "requested_mm": 50.0,
-      "slug": "standard-50"
+      "sampled_inner_void_radius_mm": 13.792,
+      "slug": "standard-50",
+      "void_crossing_moves": 0
     },
     {
       "all_moves_inside_bounds": true,
       "body_bounds_mm": [
-        143.0,
-        143.012,
+        143.002,
+        143.001,
         207.0,
-        206.991
+        207.0
       ],
-      "body_moves": 10740,
+      "body_moves": 12444,
+      "declared_inner_void_radius_mm": 14.7,
       "dry_body_moves": 0,
       "ellipses": 12,
-      "gcode_sha256": "ee2188d6126b886816cd388c304daec530007ddcf28d7aa4da229f2841ee5329",
+      "gcode_sha256": "127f263a68b32146bcd546969a3fd09c93b2661edbecb5acb0d11a64662f044b",
       "machine_bounds_mm": [
         350.0,
         350.0,
         350.0
       ],
-      "measured_x_mm": 64.0,
-      "measured_y_mm": 63.979,
+      "measured_x_mm": 63.998,
+      "measured_y_mm": 63.999,
       "printer": "k2plus",
       "ratio": 0.46,
       "requested_mm": 64.0,
-      "slug": "statement-64"
+      "sampled_inner_void_radius_mm": 14.721,
+      "slug": "statement-64",
+      "void_crossing_moves": 0
     }
   ]
 }

@@ -191,6 +191,7 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_
     kk = speed ** 2 / (jd * accel)
     h = math.acos(min(1.0, kk / (1.0 + kk)))          # half turn-angle budget per junction
     pts = []
+    connector_step = min(max_seg or 1.0, 1.0) / a
     for k in range(N):
         rot = phase + math.pi * k / N
         c, s = math.cos(rot), math.sin(rot)
@@ -221,11 +222,20 @@ def nucleon_path(N, a, b, cx, cy, n_per, phase=0.0, speed=None, accel=None, max_
             t += max(seg / max(dRdt, 1e-9), 1e-4)
         x, y = a, 0.0
         pts.append((cx + x * c - y * s, cy + x * s + y * c))
-    # ROUND THE JOINS. Each ellipse ends where it began and the next starts at a different
-    # rotation, so the path crosses a chord between them — a genuine ~19deg corner, one per
-    # ellipse. At 70 mm/s an 19deg turn caps the head at 28 mm/s, which is where the last 8.6% of
-    # speed loss was hiding. Everything else on the curve is already gentle, and fillet() leaves
-    # near-straight vertices untouched, so this only affects the joins.
+        # THE TRANSITION IS PART OF THE OBJECT. The old path ended one ellipse at its outer tip and
+        # jumped straight to the next tip while extruding. Those chords cut across the central void:
+        # 36.404mm in the 40mm preview and 62.480mm in the 64mm preview. They formed the same fan of
+        # converging sharp paths that previously detached a base, while the continuity gate called
+        # them clean because E advanced. Walk the OUTER boundary instead. The short arcs between
+        # tips plus the final half-circle make one complete perimeter and keep every transition on
+        # material rather than across the hole.
+        next_rot = (phase + math.pi * (k + 1) / N) if k < N - 1 else (phase + 2 * math.pi)
+        steps = max(1, math.ceil((next_rot - rot) / connector_step))
+        for j in range(1, steps + 1):
+            q = rot + (next_rot - rot) * j / steps
+            pts.append((cx + a * math.cos(q), cy + a * math.sin(q)))
+    # ROUND THE JOINS. Each ellipse now meets an outer-boundary arc. Everything else on the curve
+    # is already gentle, and fillet() leaves near-straight vertices untouched.
     # (Oleg, 2026-07-25: "not sharp angles, make sure you use semi circlish always".)
     if speed:
         r_min = speed * speed / (accel or machine.ACCEL)
@@ -451,7 +461,10 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # the spread is always < layer_h by construction.
         full = []; cage_marks = []
         for layer in range(layers):
-            ph = (math.pi / N) * (layer * 0.5)
+            # nucleon_path is now a closed circuit. Reusing its phase makes adjacent vase turns
+            # meet exactly; rotating a closed circuit before concatenating it would reintroduce an
+            # undeclared chord between turns.
+            ph = 0.0
             _ms = (lift_win / 6.0) if weld < 1.0 else None
             if cage_N:
                 seg, ci = nested_path(N, a, ratio, cage_N, cage_a, cage_ratio,
@@ -575,7 +588,9 @@ def emit(N, a, ratio, origin, layers, layer_h, strand_w, flow, weld, lift, lift_
         # Advancing by exactly pi(N-1)/N makes each layer's start coincide with the previous end —
         # zero gap, nothing to travel, and still a large inter-layer rotation (157.5 deg at N=8)
         # so crossings keep distributing through the volume instead of stacking into columns.
-        phase = (math.pi * (N - 1) / N) * layer
+        # nucleon_path closes on its own start, so the next layer begins at the same XY and needs
+        # only the declared Z step.
+        phase = 0.0
         _ms = [x for x in ((lift_win/6.0) if weld < 1.0 else None,
                            (wave_len/8.0) if wave_amp else None) if x]
         pts = nucleon_path(N, a, b, cx, cy, n_per, phase, speed=speed,
