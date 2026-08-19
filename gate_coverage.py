@@ -20,25 +20,6 @@ import machine
 AREA = math.pi * (1.75 / 2) ** 2
 
 
-class FieldParseError(ValueError):
-    """A stamped validator input exists but cannot be interpreted."""
-
-    def __init__(self, field, value):
-        self.field = field
-        self.value = value
-        super().__init__(f"unparseable {field} value {value!r}")
-
-
-def stamped_float(text, name):
-    value = stamp(text, name)
-    if value is None:
-        return None
-    # Header stamps may carry an explanatory inline comment. The numeric token is the field;
-    # accepting any other suffix would turn a typo into a silently truncated value.
-    parsed = re.fullmatch(r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s*;.*)?", value)
-    if not parsed:
-        raise FieldParseError(f"; {name}=", value)
-    return float(parsed.group(1))
 PROVENANCE = {
     "R1": "machine.PRESS_HARD; Oleg 2026-07-27: nozzle 0.1mm to board",
     "R2": "; LAYER_H= emitted by generator; maximum one declared layer step",
@@ -267,6 +248,13 @@ def is_multipart(text):
     return bool(re.search(r"^; SEQUENTIAL=", text, re.M) or len(re.findall(r"^; ---- part", text, re.M)) >= 2)
 
 
+def file_coverage_status(rows):
+    """Coverage asks whether applicable rules inspected moves, not whether the file is valid."""
+    if any(row["applicable"] and row["moves_examined"] == 0 for row in rows):
+        return "REFUSE"
+    return "PASS"
+
+
 def validator_result(path, timeout_s=90):
     """Return validate.py's own verdict and findings without allowing it to abort the report."""
     command = [sys.executable, os.path.join(os.path.dirname(__file__), "validate.py"), path]
@@ -319,7 +307,7 @@ def build_report(paths, include_all, bad, validate_file=validator_result, valida
             continue
         for row in rows:
             row["known_bad"] = bad[row["rule"]]
-        coverage = "FAIL" if any(r["verdict"] in ("FAIL", "REFUSE") for r in rows) else "PASS"
+        coverage = file_coverage_status(rows)
         record = {"path": os.path.abspath(path), "analysis_status": "ANALYSED",
                   "multipart": multipart, "coverage_rules": rows, "coverage_status": coverage,
                   "validator_verdict": "PENDING", "validator_findings": [], "verdict": "PENDING"}
@@ -344,7 +332,8 @@ def build_report(paths, include_all, bad, validate_file=validator_result, valida
     return {"schema": "crackle.gate-coverage.v2",
             "corpus": {"selection": selection, "requested_paths": len(paths),
                        "rule": "all supplied G-code" if include_all else "multi-part: SEQUENTIAL stamp or at least two part markers"},
-            "verdict_definition": "verdict is validate.py's result; coverage_status only reports whether coverage gates inspected their intended moves",
+            "verdict_definition": "verdict is validate.py's result",
+            "coverage_status_definition": "PASS means every applicable coverage rule examined at least one real move; REFUSE means one did not. Per-rule physical verdicts do not change coverage_status.",
             "files": files, "summary": summary}
 
 
@@ -374,6 +363,13 @@ def main(argv=None):
             assert checked["files"][0]["coverage_status"] == "PASS", checked
             assert checked["files"][0]["verdict"] == "FAIL", checked
             assert checked["files"][0]["validator_findings"], checked
+            physically_bad = os.path.join(directory, "raised-first-bead.gcode")
+            with open(physically_bad, "w") as output:
+                output.write(MUTATIONS["R1"][1](fixture()))
+            rejected = build_report([physically_bad], True, bad, validate_file=fake)["files"][0]
+            assert rejected["coverage_status"] == "PASS", rejected
+            assert rejected["verdict"] == "FAIL", rejected
+            assert next(r for r in rejected["coverage_rules"] if r["rule"] == "R1")["verdict"] == "FAIL", rejected
             malformed = os.path.join(directory, "malformed.gcode")
             with open(malformed, "w") as output:
                 output.write(fixture().replace("PRESSED_LAYER1=0.1", "PRESSED_LAYER1=oops"))
