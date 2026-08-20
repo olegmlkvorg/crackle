@@ -54,3 +54,10 @@ The current bucket filename gains `r1c` because current source emits the floor-b
 geometry arguments are otherwise the historical command. The scratch files were purged after these
 measurements. Future work must re-run this method against the bytes and source then present; do not
 quote these classifications as current without re-deriving them.
+
+## 2026-08-20 follow-up
+
+The live `solid.py` defect is fixed: a layer change now advances Z without E because stationary XY
+defines no bead path to meter. `tests/solid_layer_change.py` first rejected the old direct output at
+ratio 0.299992, then passed direct and sequential output at 0.999258--1.000843. The historical
+artifacts above remain unchanged; re-derive against current bytes before quoting this follow-up.

@@ -740,8 +740,15 @@ def emit(region, height, bead_w, layer_h, flow, temp, bed, fil_d, bed_xy, home, 
     for k in range(layers):
         z = press + k * layer_h
         if k:
-            e += layer_h * e_per_mm
-            L.append(f"G1 F{round(min(speed, 15)*60)} Z{z:.3f} E{e:.5f}")
+            # A layer change has zero XY distance, so it has no bead centreline to meter. The old
+            # command advanced E by one layer-height of BODY bead while moving only in Z at 15mm/s;
+            # measured by R4 that was a discrete 0.299992x-flow deposit on every layer. Raising E
+            # to make its instantaneous rate equal the body would put still more material into the
+            # same stationary seam. The emitted geometry is positioning, therefore it carries no
+            # extrusion. Provenance: the modal move itself, X/Y unchanged and Z advanced exactly
+            # one declared LAYER_H; tests/solid_layer_change.py measures both direct and sequential
+            # output through the validator's R4 selection.
+            L.append(f"G1 F{round(min(speed, 15)*60)} Z{z:.3f}")
             L.append(f"G1 F{f}")
         # THE BRIM MUST GO DOWN FIRST. Appending it to the ring list let order_rings reach it
         # LAST — measured at 75% through layer 1 — so the entire part was already printed before
