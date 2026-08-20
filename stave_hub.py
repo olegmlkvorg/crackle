@@ -142,6 +142,8 @@ a.temp = machine.temp_for(a.material)
 a.flow = machine.flow_for(a.material, A.flow, f" for {A.style} hub")
 a.bed, a.press, a.first_w, a.fan, a.aux = 0, 0.10, 3.0, 51, 0.2
 a.no_home, a.stick, a.wall = False, 6.35, A.wall
+# This part has no brim control or brim geometry; declare the zero that finish() emits and reports.
+a.brim = 0
 a.out = A.out
 
 print(f"STAVE {A.style.upper()} HUB  {A.side}x{A.side}x{H}mm   rim {RIM_H}mm  vents {A.vents}/side")

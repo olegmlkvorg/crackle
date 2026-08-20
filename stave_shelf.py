@@ -79,6 +79,8 @@ a.temp = machine.temp_for(a.material)
 a.flow = machine.flow_for(a.material, A.flow, " for shelf")
 a.bed, a.press, a.first_w, a.fan, a.aux = 0, 0.10, 3.0, 51, 0.2
 a.no_home, a.stick, a.wall = False, 6.35, A.rib
+# This shelf has no brim control or brim geometry; declare the zero that finish() emits and reports.
+a.brim = 0
 a.out = A.out
 
 play = math.degrees(math.atan2(A.bore - 0.25 - 6.35, A.thick))

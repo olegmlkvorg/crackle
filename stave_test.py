@@ -78,6 +78,8 @@ a.temp = machine.temp_for(a.material)
 a.flow = machine.flow_for(a.material, A.flow, " for test coupon")
 a.bed, a.press, a.first_w, a.fan, a.aux = 0, 0.10, 3.0, 51, 0.2
 a.no_home, a.stick, a.wall = False, 6.35, A.wall
+# This coupon has no brim control or brim geometry; declare the zero that finish() emits and reports.
+a.brim = 0
 a.out = A.out
 print(f"STAVE TEST COUPON {PLATE_X:.0f}x{PLATE_Y:.0f}x{H}mm, {N} sockets at {FITS} contact dia, "
       f"pitch {A.pitch}, tilt {A.theta} deg")

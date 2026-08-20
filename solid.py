@@ -1654,7 +1654,8 @@ def finish(region, a, label, fn):
     g, st = emit(region, a.height, a.bead_w, a.layer_h, a.flow, a.temp,
                  a.bed or machine.bed_for(a.material, a.printer), 1.75, machine.BED[a.printer],
                  not a.no_home, a.press, a.fan, a.first_w, a.aux, a.printer,
-                 f"{label.upper()} stick{a.stick:g} wall{a.wall:g}", material=a.material)
+                 f"{label.upper()} stick{a.stick:g} wall{a.wall:g}", material=a.material,
+                 brim=a.brim)
     os.makedirs(a.out, exist_ok=True)
     machine.emit_gcode(fn, g)
     print(f"{fn}")
