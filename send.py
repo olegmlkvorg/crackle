@@ -922,6 +922,13 @@ def upload_and_start(host, path):
     """Moonraker. Reached ONLY from --live, which refuses without an explicit --printer-host, so
     there is no host constant anywhere in this file for an accident to find."""
     import urllib.request
+    # MOONRAKER LISTENS ON :7125; a bare IP lands on the printer's own web UI, which answers
+    # "501 Not Implemented". That exact refusal is in send-log.jsonl twice, a month apart
+    # (2026-08-06T20:29 and 2026-08-31), each time fixed by retyping the host with the port.
+    # The port is a protocol fact — tools/push.py carries the same :7125 on every call — so it
+    # is defaulted here. Naming the MACHINE stays on the caller, on purpose.
+    if ':' not in host:
+        host = f'{host}:7125'
     name = os.path.basename(path)
     boundary = '----crackle' + hashlib.sha1(str(time.time()).encode()).hexdigest()[:16]
     with open(path, 'rb') as fh:
