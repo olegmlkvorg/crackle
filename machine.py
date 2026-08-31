@@ -1518,6 +1518,16 @@ def home(w, printer, calibrate=False):
       one exists, is the machine's own screen setting. Which of their settings feeds it is the
       remaining unmeasured half.
 
+      AND HOMING STATE IS NOT THE SELECTOR — tested live the same evening and the tidy hypothesis
+      DIED: a job started seconds after a cancel, machine verified homed xyz with a live session
+      mesh and no M84 anywhere in the chain, still drew the full 140C/50C probe grid (watched via
+      toolhead position marching the plate at Z5 with dips to -0.2). Their service preps API
+      starts regardless. The M84 removal from the hangertag tails stands on its own evidence (a
+      released bed sinks; their platform never cuts motors), but it does not buy the 6 minutes
+      back. Untried levers, in order: SDCARD_PRINT_FILE via /printer/gcode/script (a start below
+      their app wrapper, if the injection hangs off their start endpoint rather than
+      virtual_sdcard), and the touchscreen's own calibration preference.
+
     ONE MORE THING THE INTERRUPTED CALIBRATE DOES, and it is a trap: cancelling mid-calibrate
     leaves `bed_mesh.profile_name` empty with a ONE-ROW matrix. The saved mesh is gone until
     something loads it. Always `BED_MESH_PROFILE LOAD=default` and read back 25 rows before
