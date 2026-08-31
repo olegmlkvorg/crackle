@@ -899,6 +899,18 @@ def check(path):
     if _target and _moves and _starved > _moves * 0.05:
         problems.append(f"{_starved} of {_moves} moves run below HALF the {_target} mm3/s target — "
                         f"a slow move probably left its feedrate set (F persists in gcode)")
+    # CREALITY'S BED_MESH_CALIBRATE PARSES ITS WHOLE LINE AS key=value ARGS, so an inline
+    # '; comment' aborts the JOB at that line: key514 "Malformed command args ... not enough
+    # values to unpack (expected 2, got 1)", measured 2026-08-31 on the first calibrate-mode
+    # hangertag send — the file passed every gate here and died on the machine in second one.
+    # Only the command MEASURED to choke is refused: the same morning's ladder printed a
+    # commented 'BED_MESH_PROFILE LOAD=default' clean end to end, so stock commands stay free.
+    for _i, _l in enumerate(_lines):
+        if _l.split(';')[0].strip().startswith('BED_MESH_CALIBRATE') and ';' in _l:
+            problems.append(
+                f"L{_i + 1}: BED_MESH_CALIBRATE carries an inline comment — Creality's handler "
+                f"parses the whole line as key=value args and ABORTS THE JOB (key514, measured "
+                f"2026-08-31). Put the comment on its own line above the bare command.")
     if not any(t >= 150 for t in temps): problems.append("no hotend temp >=150 commanded")
     src = open(path).read()
     # HOMING IS A COMMAND, NOT A WORD IN A COMMENT. This grepped the raw source until 2026-08-15,
