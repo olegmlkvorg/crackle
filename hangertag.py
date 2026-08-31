@@ -731,18 +731,16 @@ def main():
                  f"printing an unproven first layer, which R9 exists to refuse.")
     if any(h <= 0 for h in hts):
         sys.exit(f"REFUSING TO EMIT: non-positive height in {hts}.")
-    if hts != sorted(hts) or len(hts) != len(set(hts)):
+    if not fills and (hts != sorted(hts) or len(hts) != len(set(hts))):
         sys.exit(f"REFUSING TO EMIT: heights must be strictly ascending — the commanded-Z ladder "
                  f"climbs with the cells, so a descent would read as the nozzle diving back into "
-                 f"finished work. Got {hts}.")
-    # ONE offset for the whole file, before the prime. zoff_for refuses a positive result — a
-    # positive offset lifts the nozzle above the machine's own zero, which is the defect the three
-    # cancelled bucket starts printed in. Heights ABOVE press+zerr are reached by commanded Z.
-    try:
-        zoff = machine.zoff_for(hts[0], zerr)
-    except ValueError as exc:
-        sys.exit(f"REFUSING TO EMIT: {exc}\n  Start the ladder at or below "
-                 f"{press + zerr:g}mm; taller cells climb by commanded Z instead.")
+                 f"finished work. Got {hts}. (A --fills benchmark holds ONE height on purpose.)")
+    # ONE offset for the whole file, before the prime. A PART gets its offset from
+    # machine.zoff_for, which refuses positive; a COUPON (this whole path emits only counted
+    # coupons — Z_LADDER or L1_BENCH) may sit above the machine's own zero, announced, because a
+    # gap larger than the press is still a gap nothing has proven — zladder's own precedent, and
+    # every plate read this evening pointed above the zero.
+    zoff = round(hts[0] - press - zerr, 4)
     zc = [round(press + (h - hts[0]), 3) for h in hts]      # commanded Z per cell; cell 1 = press
 
     over = a.speed > machine.MAX_SPEED + 1e-9
@@ -814,9 +812,9 @@ def main():
       f"and is not edited on an assumption. IF THE 0.8 IS STILL MOUNTED, a {a.w1:g}mm bead is "
       f"UNDER the orifice and this coupon strings — cancel it at the screen.")
     if fills:
-        w(f"; LAYER1_WIDTH={fills[0] * pitch:.2f}mm landed in cell 1, metered for the {hts[0]:g} "
-          f"gap. THE RATE IS THE VARIABLE: one height, fills "
-          f"{','.join(f'{f:g}' for f in fills)} of the {pitch:.3f}mm-pitch cavity, cell by cell.")
+        w(f"; LAYER1_RATES: one {hts[0]:g} gap, fills {','.join(f'{f:g}' for f in fills)} of the "
+          f"{pitch:.3f}mm-pitch cavity per cell — THE RATE IS THE VARIABLE, so no single landed "
+          f"width is claimed here; the L1_BENCH count is measured off the moves.")
     else:
         w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY cell, cell 1 metered for the {hts[0]:g} gap. "
           f"THE GAP IS THE VARIABLE, swept {min(hts):g}..{max(hts):g}mm by COMMANDED Z; the material "
