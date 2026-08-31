@@ -355,7 +355,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     w("G90")
     w(f"M140 S{bed:.0f}")
     w(f"M104 S{temp}")
-    machine.home(w, a.printer)
+    machine.home(w, a.printer, calibrate=a.calibrate)
     w("SET_GCODE_OFFSET Z=0                 ; clear whatever the last job left")
     w(f"SET_GCODE_OFFSET Z={zoff:.3f} MOVE=0   ; commanded Z + this + the {zerr:+.3f} machine "
       f"error = the ladder's welded {a.h1:g}")
@@ -502,6 +502,11 @@ def main():
                          "necks below the hole), and 0.4 lifts the 45deg roof's layer-to-layer "
                          "overlap from 20%% to 40%% — the handoff's own #1 open risk. The tunnel "
                          "INNER profile is untouched; the wall grows outward only.")
+    ap.add_argument("--calibrate", action="store_true",
+                    help="run a FULL bed-mesh probe before printing instead of loading the "
+                         "saved mesh — the first print after a restart or nozzle change "
+                         "(Oleg, 2026-08-31). Costs ~6 measured minutes, buys a bed the "
+                         "machine has actually seen since it changed.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
@@ -640,7 +645,7 @@ def main():
     w("G90")
     w(f"M140 S{bed:.0f}")
     w(f"M104 S{temp}")                      # R7: nozzle commanded hot BEFORE the probe
-    machine.home(w, a.printer)
+    machine.home(w, a.printer, calibrate=a.calibrate)
     w("SET_GCODE_OFFSET Z=0                 ; clear whatever the last job or a hand command left")
     w(f"SET_GCODE_OFFSET Z={zoff:.3f} MOVE=0   ; the ONE correction: commanded Z + this + the "
       f"{zerr:+.3f} machine error = the cell's labelled height")

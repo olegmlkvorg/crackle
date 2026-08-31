@@ -1445,8 +1445,10 @@ def aux_fans(printer, frac):
 SAVED_MESH = {"k2plus": "default"}
 
 
-def home(w, printer):
-    """G28, and then PUT THE BED MESH BACK, because G28 throws it away.
+def home(w, printer, calibrate=False):
+    """G28, and then PUT THE BED MESH BACK, because G28 throws it away — or, with
+    `calibrate=True`, RE-MEASURE it: a full BED_MESH_CALIBRATE saved over the session profile,
+    for the first print after a restart or a nozzle change, on request and never by default.
 
     Oleg, 2026-08-07, on a 3-minute coupon: "why you executing clibration again?" and then "restore
     cache after running g28, or dont run g28 at all".
@@ -1530,6 +1532,19 @@ def home(w, printer):
     """
     w("G28")
     prof = SAVED_MESH.get(printer)
+    if calibrate:
+        # A DELIBERATE FULL RE-PROBE, asked for by name, never a default: Oleg, 2026-08-31, after
+        # two power-cycles and a nozzle swap in one session: "lets run first print with
+        # calibration, since we restarted machine". The saved profile survives restarts on disk,
+        # but it describes a bed nobody has probed since the nozzle changed — and an interrupted
+        # calibrate leaves the ACTIVE mesh one row tall (the trap documented below), so the first
+        # print after a restart is exactly when the measured mesh is worth six minutes.
+        w("BED_MESH_CALIBRATE                   ; full probe, ~6 min measured end to end 2026-08-15")
+        if prof:
+            w(f"BED_MESH_PROFILE SAVE={prof}         ; the fresh mesh replaces the stale saved one "
+              f"for this power-cycle (SAVE_CONFIG would restart Klipper mid-job, so disk keeps its "
+              f"copy until a human saves)")
+        return
     if prof:
         w(f"BED_MESH_PROFILE LOAD={prof}"
           f"      ; G28's homing_override runs BED_MESH_CLEAR, so this puts back the mesh it")
