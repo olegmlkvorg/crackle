@@ -1508,6 +1508,16 @@ def home(w, printer, calibrate=False):
 
       WHAT SELECTS IT IS STILL UNKNOWN. Do not quote a cause here until one is measured.
 
+      HALF-MEASURED 2026-08-31, off the running machine's configfile while it was injecting one:
+      NOTHING in the Klipper config references BED_MESH_CALIBRATE_START_PRINT — not homing_override,
+      not START_PRINT, no macro. The caller sits ABOVE Klipper, in Creality's own service layer,
+      which issues that macro on job start (passing GCODE_FILE=<the job>), and the macro's
+      BED_MESH_CALIBRATE line is UNCONDITIONAL once invoked — the `prepare` gate inside it only
+      skips the pre-clean/re-home, which is why the PRINT_PREPARED experiment above changed
+      nothing. Consequence: no gcode in a file can summon or suppress the injection; the lever, if
+      one exists, is the machine's own screen setting. Which of their settings feeds it is the
+      remaining unmeasured half.
+
     ONE MORE THING THE INTERRUPTED CALIBRATE DOES, and it is a trap: cancelling mid-calibrate
     leaves `bed_mesh.profile_name` empty with a ONE-ROW matrix. The saved mesh is gone until
     something loads it. Always `BED_MESH_PROFILE LOAD=default` and read back 25 rows before
