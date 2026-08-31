@@ -226,8 +226,18 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     apex and then descending to tag 2's floor 32mm away would drive the heater block through the
     finished part. Z here only ever climbs; between strokes the head hops LIFTED and '; HOP'
     tagged, so the no-travel rule's licensed exception is the only travel in the file."""
+    WALL_MENU = {'s08': (1, 0.8, 0.0), 'd08': (2, 0.8, 0.64), 'd08t': (2, 0.8, 0.48),
+                 's12': (1, 1.2, 0.0), 'd12': (2, 1.2, 0.96)}
     lens = [float(s) for s in a.clip_lens.split(",") if s.strip()]
     n = len(lens)
+    fills = [float(s) for s in a.fills.split(",")] if a.fills else None
+    pitch = (1.0 - a.overlap) * a.w1
+    wcodes = [s.strip() for s in a.walls.split(",")] if a.walls else ['s08'] * n
+    if len(wcodes) == 1:
+        wcodes = wcodes * n
+    if len(wcodes) != n or any(c not in WALL_MENU for c in wcodes):
+        sys.exit(f"REFUSING TO EMIT: --walls needs {n} codes from {sorted(WALL_MENU)}; "
+                 f"got {wcodes}.")
     if not 1 <= n <= 9:
         sys.exit(f"REFUSING TO EMIT: {n} clip lengths; 1..9 tags fit the digit labels.")
     if any(l <= 0 or l > TAG_H - 1.0 for l in lens):
@@ -242,6 +252,15 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     if len(h1s) != n:
         sys.exit(f"REFUSING TO EMIT: {len(h1s)} floor heights for {n} tags — one each, or one "
                  f"for all.")
+    if fills:
+        if len(set(h1s)) != 1:
+            sys.exit(f"REFUSING TO EMIT: --fills sweeps the RATE, so --h1 must be ONE height "
+                     f"(got {sorted(set(h1s))}). Two variables in one axis is a confound.")
+        if len(fills) != n:
+            sys.exit(f"REFUSING TO EMIT: {len(fills)} fills for {n} tags.")
+        if len(set(fills)) < 3:
+            sys.exit("REFUSING TO EMIT: fewer than 3 distinct fills — a part wearing a benchmark "
+                     "stamp; validate counts it.")
     if h1s != sorted(h1s):
         sys.exit("REFUSING TO EMIT: floor heights must ascend with the tags, so commanded Z only "
                  "ever climbs across the row.")
@@ -266,7 +285,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         if not os.path.isfile(cpath) and not os.path.isfile(cf):
             sys.exit(f"REFUSING TO EMIT: cited coupon '{cf}' is not in {a.out}/ — a citation to a "
                      f"file nobody can open proves nothing (R9's own clause).")
-    if not proven and coupon is None and not ladder:
+    if not proven and coupon is None and not ladder and not fills:
         sys.exit(f"REFUSING TO EMIT: ({h1s[0]:g}, {a.w1:g}) is not in PROVEN_LAYER1[{a.printer!r}] "
                  f"and no --coupon cites the ladder cell that welded. R9 would refuse the file; "
                  f"refusing here says why sooner. (A comma list of 3+ floors is its own ladder.)")
@@ -280,7 +299,6 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     f_touch = round(touch_v * 60)
     e_wall = a.wall * a.layer_h / A_FIL
     flow_wall = a.wall * a.layer_h * a.speed
-    flows = [a.w1 * h * speed1 for h in h1s] + [a.w1 * h1s[0] * touch_v, flow_wall]
     f_body = round(a.speed * 60)
     travel_f = round(machine.MACHINE_MAX_SPEED * 60)
 
@@ -296,7 +314,14 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
 
     v_eff = min(a.speed, math.sqrt(machine.ACCEL * a.fillet))
     arc_seg = max(0.25, v_eff / 220.0)
-    e1s = [machine.layer1_rate(a.w1, h) for h in h1s]
+    if fills:
+        e1s = [f * pitch * h1s[0] / A_FIL for f in fills]
+    else:
+        e1s = [machine.layer1_rate(a.w1, h) for h in h1s]
+    wall_geo = [WALL_MENU[c] for c in wcodes]          # (lines, width, pair gap) per tag
+    flows = ([e * A_FIL * speed1 for e in e1s] + [min(e1s) * A_FIL * touch_v]
+             + [wd * a.layer_h * a.speed for _, wd, _ in wall_geo]
+             + [min(wd for _, wd, _ in wall_geo) * a.layer_h * touch_v])
     zbase = [round(press + (h - h1s[0]), 3) for h in h1s]   # each floor's commanded Z
     cells = [cell_path(x0 + i * stride, oy, a.w1, a.overlap, a.fillet, arc_seg)
              for i in range(n)]
@@ -338,6 +363,8 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         w(f";   the TOUCHDOWN crawl: the first {a.touch_mm:g}mm of every floor at speed1/3 — "
           f"Oleg 2026-08-31: 'first second of touching the plate should have x3 slowdown'.")
     w(f"; PRESSED_LAYER1={press:g}")
+    if a.retract > 0:
+        w(f"; RETRACT={a.retract:g}")
     w(f"; PRINT_TEMP={temp}")
     w(f"; PROBE_TEMP={a.probe_temp}")
     w(f"; bead {a.wall:g}x{a.layer_h:g}")
@@ -347,14 +374,21 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     w(f"; NOZZLE={a.nozzle:g} — corroborated by the plate 2026-08-31: the ladder's 0.6mm lines "
       f"welded (cell 6 read by Oleg), and an 0.8 orifice cannot lay a 0.6 bead at all. "
       f"machine.NOZZLE still carries the pre-swap 0.8 until he says the word at the machine.")
-    if coupon:
+    if coupon and not fills:
         w(f"; COUPON={coupon[0]} h1={h1s[0]:.3f} w1={a.w1:.2f} verdict=welded read={coupon[1]}")
-    if ladder:
+    if fills:
+        w("; L1_BENCH=1")
+    elif ladder:
         w("; Z_LADDER=1")
-    w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY floor, cell 1 metered for the {h1s[0]:g} gap"
-      + (f"; THE FLOOR GAP IS ALSO SWEPT {min(h1s):g}..{max(h1s):g} by commanded Z, one height "
-         f"per tag, so the plate that delivers the pieces also answers which floor grips"
-         if ladder else "."))
+    if fills:
+        w(f"; LAYER1_RATES: one {h1s[0]:g} gap, fills {','.join(f'{f:g}' for f in fills)} of the "
+          f"{pitch:.3f}mm-pitch cavity per tag — THE RATE IS THE VARIABLE, so no single landed "
+          f"width is claimed here; the L1_BENCH count above is measured off the moves.")
+    else:
+        w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY floor, cell 1 metered for the {h1s[0]:g} gap"
+          + (f"; THE FLOOR GAP IS ALSO SWEPT {min(h1s):g}..{max(h1s):g} by commanded Z, one height "
+             f"per tag, so the plate that delivers the pieces also answers which floor grips"
+             if ladder else "."))
     if zoff > 0:
         w(f"; OFFSET +{zoff:.3f} SITS ABOVE THE MACHINE'S OWN ZERO, and that is the PLATE's word, "
           f"not a guess: machine.zoff_for refuses positive for parts because an uncorrected "
@@ -370,9 +404,11 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     w(f"; the one below by {100 * (1 - a.layer_h / a.wall):.0f}% from layer 1 to the tip.")
     w(";")
     for i, l in enumerate(lens):
-        tilt = math.degrees(math.atan2(2 * a.fit_clear, l))
-        w(f";   tag {i + 1}  tunnel {l:g}mm  (rocks ~{tilt:.0f}deg on the shaft — the trade the "
-          f"LENGTHTEST measures)")
+        _wl, _wd, _wg = wall_geo[i]
+        w(f";   tag {i + 1}  tunnel {l:g}mm  floor "
+          + (f"fill {fills[i]:.2f}x" if fills else f"{h1s[i]:.3f}mm")
+          + f"  walls {wcodes[i]} ({_wl}x{_wd:g}mm" + (f", pair {_wg:g} apart" if _wl > 1 else "")
+          + ")")
     w(";")
     w("; READ IT: does each roof BOND (the 45deg single-line gable), and how short a tunnel still")
     w("; threads a hanger hook without wobbling loose. Tag 5's 0.6mm tunnel is 2-3 lines long —")
@@ -409,8 +445,15 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     E = 0.0
 
     def hop(tx, ty, note, lift):
+        if a.retract > 0:
+            w(f"G1 E{E - a.retract:.5f} F2400   ; RETRACT — no nets across the hop")
         w(f"G0 Z{lift:.3f} F1800   ; HOP lift, clear of everything laid")
         w(f"G0 X{tx:.3f} Y{ty:.3f} F{travel_f}   ; HOP {note}")
+
+    def touch():
+        nonlocal E
+        E += a.dab
+        w(f"G1 E{E:.5f} F600   ; unretract + pressure dab, stationary onto held material")
 
     # ---- layer 1: every tag's digit and net, all at the one proven gap
     for i in range(n):
@@ -418,18 +461,21 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         e1 = e1s[i]
         zb = zbase[i]
         dx = x0 + i * stride + (TAG_W - dw) / 2.0
-        w(f"; ---- layer 1, tag {i + 1}: digit + net at commanded Z{zb:.3f}, floor "
-          f"{h1s[i]:.3f}mm real ({a.w1 * h1s[i]:.4f} mm2/mm)")
+        w(f"; ---- layer 1, tag {i + 1}: digit + spiral at commanded Z{zb:.3f}, floor "
+          f"{h1s[i]:.3f}mm real, {e1s[i] * A_FIL:.4f} mm2/mm"
+          + (f" (fill {fills[i]:.2f}x)" if fills else ""))
         for s in DIGIT[str(i + 1)]:
             u0, v0, u1, v1 = SEG[s]
             ax, ay = dx + u0 * dw, dy + v0 * dh
             bx_, by_ = dx + u1 * dw, dy + v1 * dh
             hop(ax, ay, f"to digit {i + 1} segment '{s}'", zbase[-1] + 1.0)
             w(f"G1 F600 Z{zb:.3f}")
+            touch()
             E += math.hypot(bx_ - ax, by_ - ay) * e1
             w(f"G1 F{f_touch} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
         hop(pts[0][0], pts[0][1], f"to tag {i + 1} net", zbase[-1] + 1.0)
         w(f"G1 F600 Z{zb:.3f}")
+        touch()
         w(f"; touchdown: first {a.touch_mm:g}mm of this floor at {touch_v:g} mm/s (x3 slowdown), "
           f"then {speed1:g}")
         cum = 0.0
@@ -450,7 +496,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     _fan = int(round(machine.fan_for(material, machine.FAN_MAX.get(material, 0.2)) * 255))
     w(f"M106 S{_fan}      ; floors have bonded — {material}'s capped cooling for the walls")
 
-    # ---- the clip, layer-major across the row
+    # ---- the holders, layer-major across the row; per-tag wall STRUCTURE from --walls
     for k in range(1, K + 1):
         xs = sched[k - 1]
         w(f"; ---- wall layer {k} of {K}: 45deg tent at x "
@@ -460,12 +506,31 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
             ck = round(zbase[i] + k * a.layer_h, 3)
             cx = x0 + i * stride + TAG_W / 2.0
             half = lens[i] / 2.0
+            w_lines, w_wd, w_gap = wall_geo[i]
+            ew = w_wd * a.layer_h / A_FIL
+            first_of_layer = True
             for m, x in enumerate(xs):
-                ya, yb = (yc - half, yc + half) if (k + m) % 2 == 0 else (yc + half, yc - half)
-                hop(cx + x, ya, f"to tag {i + 1} wall x{x:+.2f}", lift)
-                w(f"G1 F600 Z{ck:.3f}")
-                E += lens[i] * e_wall
-                w(f"G1 F{f_body} X{cx + x:.3f} Y{yb:.3f} E{E:.5f} ; wall")
+                passes = [x]
+                if w_lines > 1 and abs(x) - w_gap > w_wd / 2.0:
+                    passes.append(x - w_gap if x > 0 else x + w_gap)
+                for x2 in passes:
+                    ya, yb = (yc - half, yc + half) if (k + m) % 2 == 0 else (yc + half, yc - half)
+                    hop(cx + x2, ya, f"to tag {i + 1} wall x{x2:+.2f}", lift)
+                    w(f"G1 F600 Z{ck:.3f}")
+                    touch()
+                    if first_of_layer:
+                        # Oleg 2026-08-31: "first touch of any layer has to be slower, so binding
+                        # can happen" — the layer's first stroke opens at the crawl.
+                        first_of_layer = False
+                        bind = min(2.5, lens[i] * 0.5)
+                        ym = ya + (2 * (yb > ya) - 1) * bind
+                        E += bind * ew
+                        w(f"G1 F{f_touch} X{cx + x2:.3f} Y{ym:.3f} E{E:.5f} ; layer first touch")
+                        E += (lens[i] - bind) * ew
+                        w(f"G1 F{f_body} X{cx + x2:.3f} Y{yb:.3f} E{E:.5f} ; wall")
+                    else:
+                        E += lens[i] * ew
+                        w(f"G1 F{f_body} X{cx + x2:.3f} Y{yb:.3f} E{E:.5f} ; wall")
 
     w("; ---- done")
     w("SET_GCODE_OFFSET Z=0                 ; hand the machine back at its own zero")
@@ -480,6 +545,10 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     # motor power; a job that leaves the machine homed leaves the next job free to skip the probe.
 
     _htag = f"{h1s[0]:g}" if len(set(h1s)) == 1 else f"{min(h1s):g}-{max(h1s):g}"
+    if fills:
+        _htag += f"_fill{min(fills):g}-{max(fills):g}"
+    if len(set(wcodes)) > 1:
+        _htag += "_wmix"
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), a.out,
                        f"hangertag_full{n}_{a.printer}_{material}_w{a.w1:g}_wall{a.wall:g}"
                        f"_h1-{_htag}_len{max(lens):g}-{min(lens):g}_v{a.speed:g}.gcode")
@@ -576,6 +645,29 @@ def main():
     ap.add_argument("--overlap", type=float, default=0.2,
                     help="fraction of a line width each spiral turn overlaps the previous "
                          "(0.2 = Oleg's 'make it overlap a little, we dont want a hole').")
+    ap.add_argument("--dab", type=float, default=0.4,
+                    help="mm of filament fed STANDING STILL at every touch point after a hop, on "
+                         "top of the unretract — Oleg 2026-08-31: 'the first point of touching "
+                         "each piece has not extrusion ... the first point need some time with "
+                         "extrusion but no movement'. Pressure died during the travel (the leak "
+                         "drains it); the dab rebuilds it onto material the plate already holds, "
+                         "which is the mechanism R10 counts and does not refuse.")
+    ap.add_argument("--retract", type=float, default=0.8,
+                    help="mm pulled back before every hop — Oleg 2026-08-31: 'we need to retract "
+                         "befor movement, as we crerating a lot of nets during move'. Declared "
+                         "'; RETRACT=' (the seam validate checks: E-only, no deeper than "
+                         "declared); restored plus --dab at the next touch.")
+    ap.add_argument("--walls", default=None,
+                    help="TRIANGLE-STRUCTURE sweep, one code per tag (Oleg 2026-08-31: 'also "
+                         "experiment with triangle structure on same plate'): s08 = single "
+                         "0.8mm line; d08 = double line 0.8mm, pair 0.64 apart; d08t = double "
+                         "tight, 0.48 apart; s12 = single 1.2mm; d12 = double 1.2mm, 0.96 apart.")
+    ap.add_argument("--fills", default=None,
+                    help="EXTRUSION BENCHMARK (floor plate only): comma list of fill ratios, one "
+                         "tag each, at ONE --heights value — volume per (pitch x gap) cavity. "
+                         "Oleg 2026-08-31: 'current spiral has too much extrusion ... we need to "
+                         "benchmark first layer extrusion level'. Stamps '; L1_BENCH=1', the "
+                         "counted Z-ladder mirror.")
     ap.add_argument("--touch-mm", type=float, default=15.0,
                     help="mm of each tag's floor path laid at the TOUCHDOWN crawl (speed1/3) "
                          "before the floor's own speed takes over. Oleg, 2026-08-31: 'first "
@@ -619,7 +711,21 @@ def main():
         return emit_full(a, material, temp, bed, bx, by, press, zerr)
 
     hts = [float(s) for s in a.heights.split(",") if s.strip()]
-    if len(set(hts)) < 3:
+    fills = [float(s) for s in a.fills.split(",")] if a.fills else None
+    pitch = (1.0 - a.overlap) * a.w1
+    if fills:
+        # THE EXTRUSION BENCHMARK: one height, the RATE is the ladder (L1_BENCH, the counted
+        # Z-ladder mirror in validate). Oleg 2026-08-31: "we need to benchmark first layer
+        # extrusion level" — fill = volume per (pitch x gap) cavity, 1.0 = exactly full.
+        if len(set(hts)) != 1:
+            sys.exit(f"REFUSING TO EMIT: --fills sweeps the RATE, so --heights must be ONE value "
+                     f"(got {sorted(set(hts))}). Two variables in one axis is a confound.")
+        if len(set(fills)) < 3:
+            sys.exit("REFUSING TO EMIT: fewer than 3 distinct fills — that is a part wearing a "
+                     "benchmark stamp, and validate counts it.")
+        hts = hts * (len(fills) // len(hts)) if len(hts) == 1 else hts
+        hts = [hts[0]] * len(fills)
+    elif len(set(hts)) < 3:
         sys.exit(f"REFUSING TO EMIT: {len(set(hts))} distinct height(s). Three or more is what "
                  f"lets the file declare '; Z_LADDER=1' and be its own R9 coupon; fewer is a part "
                  f"printing an unproven first layer, which R9 exists to refuse.")
@@ -644,8 +750,16 @@ def main():
         print(f"  !! {a.speed:g} mm/s is ABOVE the {machine.MAX_SPEED:g} north star. Stamping "
               f"'; SPEED_OVERRIDE={a.speed:g}' — the declared seam validate.py checks — because "
               f"this file IS the speed measurement Oleg asked for. A part never carries this.")
-    flow_per_h = [round(a.w1 * h * a.speed, 4) for h in hts]
-    q_lo, q_hi = min(flow_per_h), max(flow_per_h)
+    if fills:
+        rates = [f * pitch * hts[0] / A_FIL for f in fills]          # filament mm per path mm
+        flow_per_h = [round(f * pitch * hts[0] * a.speed, 4) for f in fills]
+    else:
+        rates = [machine.layer1_rate(a.w1, h) for h in hts]
+        flow_per_h = [round(a.w1 * h * a.speed, 4) for h in hts]
+    touch_v = a.speed / 3.0
+    f_touch = round(touch_v * 60)
+    q_lo = round(min(min(flow_per_h), min(rates) * A_FIL * touch_v), 3)
+    q_hi = max(flow_per_h)
 
     n = len(hts)
     stride = TAG_W + a.gap
@@ -699,11 +813,21 @@ def main():
       f"0.4-nozzle profile) and 0.6 = 1.5x a 0.4 orifice. machine.NOZZLE still records the 0.8 "
       f"and is not edited on an assumption. IF THE 0.8 IS STILL MOUNTED, a {a.w1:g}mm bead is "
       f"UNDER the orifice and this coupon strings — cancel it at the screen.")
-    w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY cell, cell 1 metered for the {hts[0]:g} gap. "
-      f"THE GAP IS THE VARIABLE, swept {min(hts):g}..{max(hts):g}mm by COMMANDED Z; the material "
-      f"scales with each cell's gap so the width stays constant and the gap is the only "
-      f"difference between cells.")
-    w("; Z_LADDER=1")
+    if fills:
+        w(f"; LAYER1_WIDTH={fills[0] * pitch:.2f}mm landed in cell 1, metered for the {hts[0]:g} "
+          f"gap. THE RATE IS THE VARIABLE: one height, fills "
+          f"{','.join(f'{f:g}' for f in fills)} of the {pitch:.3f}mm-pitch cavity, cell by cell.")
+    else:
+        w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY cell, cell 1 metered for the {hts[0]:g} gap. "
+          f"THE GAP IS THE VARIABLE, swept {min(hts):g}..{max(hts):g}mm by COMMANDED Z; the material "
+          f"scales with each cell's gap so the width stays constant and the gap is the only "
+          f"difference between cells.")
+    w("; L1_BENCH=1" if fills else "; Z_LADDER=1")
+    w(f"; SPEED_LAYER1={touch_v:.4f}")
+    w(f";   the touchdown crawl: every stroke's first millimetres at speed/3 — Oleg 2026-08-31: "
+      f"'first touch of any layer has to be slower, so binding can happen'.")
+    if a.retract > 0:
+        w(f"; RETRACT={a.retract:g}")
     w(f"; SEQUENTIAL={n} tag cells, lifted hops between, nothing stacked across cells")
     w(";")
     w("; ---------------- WHAT THIS IS ----------------")
@@ -719,8 +843,12 @@ def main():
     w("; sheet is the true gap, whatever its label says.")
     w(";")
     for i, h in enumerate(hts):
-        w(f";   cell {i + 1}  first layer {h:.3f}mm REAL (commanded Z{zc[i]:.3f}), "
-          f"{a.w1 * h:.4f} mm2/mm, {flow_per_h[i]:g} mm3/s at {a.speed:g} mm/s")
+        if fills:
+            w(f";   cell {i + 1}  fill {fills[i]:.2f}x of the {pitch:.3f}x{h:g} cavity "
+              f"({rates[i] * A_FIL:.4f} mm2/mm, {flow_per_h[i]:g} mm3/s at {a.speed:g} mm/s)")
+        else:
+            w(f";   cell {i + 1}  first layer {h:.3f}mm REAL (commanded Z{zc[i]:.3f}), "
+              f"{a.w1 * h:.4f} mm2/mm, {flow_per_h[i]:g} mm3/s at {a.speed:g} mm/s")
     w(";")
     w("; READ IT: thumb-peel a corner of each cell. Welded fights back and leaves colour;")
     w("; not welded lifts whole with a glossy underside. Too high reads as round separate")
@@ -763,13 +891,20 @@ def main():
     E = 0.0
 
     def hop(tx, ty, note):
+        if a.retract > 0:
+            w(f"G1 E{E - a.retract:.5f} F2400   ; RETRACT — no nets across the hop")
         w(f"G0 Z{safe_z:.3f} F1800   ; HOP lift, clear of everything laid")
         w(f"G0 X{tx:.3f} Y{ty:.3f} F{travel_f}   ; HOP {note}")
+
+    def touch():
+        nonlocal E
+        E += a.dab
+        w(f"G1 E{E:.5f} F600   ; unretract + pressure dab, stationary onto held material")
 
     total_mm = 0.0
     for i, h in enumerate(hts):
         pts, st = cells[i]
-        e1 = machine.layer1_rate(a.w1, h)
+        e1 = rates[i]
         w(f"; ---- part {i + 1}: tag cell {i + 1}, first layer {h:.3f}mm REAL "
           f"(commanded Z{zc[i]:.3f} + offset {zoff:.3f} + machine error {zerr:+.3f}), "
           f"{a.w1 * h:.4f} mm2/mm")
@@ -782,18 +917,30 @@ def main():
             bx_, by_ = dx + u1 * dw, dy + v1 * dh
             hop(ax, ay, f"to digit {i + 1} segment '{s}'")
             w(f"G1 F600 Z{zc[i]:.3f}")
+            touch()
             E += math.hypot(bx_ - ax, by_ - ay) * e1
-            w(f"G1 F{f_body} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
+            w(f"G1 F{f_touch} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
 
         hop(pts[0][0], pts[0][1], f"to cell {i + 1} perimeter start")
         w(f"G1 F600 Z{zc[i]:.3f}")
+        touch()
         w(f"; ---- cell {i + 1} spiral: {st['turns']} turns at {st['pitch']:.3f}mm pitch, one "
-          f"stroke, {st['len']:.0f}mm at {a.speed:g} mm/s")
-        w(f"G1 F{f_body} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
+          f"stroke, {st['len']:.0f}mm; first {a.touch_mm:g}mm at {touch_v:g} mm/s, then "
+          f"{a.speed:g}")
+        cum = 0.0
+        slow = True
+        w(f"G1 F{f_touch} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
           f"E{(E := E + math.dist(pts[0], pts[1]) * e1):.5f}")
+        cum += math.dist(pts[0], pts[1])
         for j in range(2, len(pts)):
-            E += math.dist(pts[j - 1], pts[j]) * e1
-            w(f"G1 X{pts[j][0]:.3f} Y{pts[j][1]:.3f} E{E:.5f}")
+            d = math.dist(pts[j - 1], pts[j])
+            E += d * e1
+            if slow and cum >= a.touch_mm:
+                slow = False
+                w(f"G1 F{f_body} X{pts[j][0]:.3f} Y{pts[j][1]:.3f} E{E:.5f}")
+            else:
+                w(f"G1 X{pts[j][0]:.3f} Y{pts[j][1]:.3f} E{E:.5f}")
+            cum += d
         total_mm += st['len']
 
     w("; ---- done")

@@ -443,7 +443,10 @@ def scan(path, arc_z_min=3.0):
         'arc_r': (collections.Counter(round(f[2], 3) for f in good).most_common(1)[0]
                   if good else None),
         'bore_declared': bore_declared,
-        'hot': float(hot[0]) if hot else None,
+        # The HOTTEST pre-body temp, not the first: the leak-proof start flow (2026-08-31)
+        # probes at 140 and only reaches print temp at the chute, so hot[0] read the probe temp
+        # as the print temp and S6 judged (140, 80) on a file that prints at 210.
+        'hot': max(float(h) for h in hot) if hot else None,
         'bed': float(bed[0]) if bed else None,
     }
 
@@ -685,6 +688,12 @@ def audit_layer1(path, meas, printer, measured, zerr, today):
                        f"validate.py R9 counts that declaration against the file's own moves (3+ "
                        f"landed heights at one width) rather than believing it. A coupon is "
                        f"allowed to visit unproven gaps; that is what it is for.")
+    if re.search(r'^;\s*L1_BENCH=1\s*$', meas['head'], re.M):
+        return Finding('S1 first layer (h1,w1)', CITED,
+                       f"({h1:g}, {w1:g}) — not proven, and this file declares '; L1_BENCH=1', "
+                       f"the extrusion-level benchmark (Z ladder's mirror: one height, 3+ metered "
+                       f"rates, counted off the moves by validate.py). A coupon is allowed to "
+                       f"visit unproven welds; this one exists to find the flat one.")
     m = validate.COUPON_RE.search(meas['head'])
     if not m:
         return Finding('S1 first layer (h1,w1)', FAIL,

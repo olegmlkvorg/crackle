@@ -242,6 +242,67 @@ def layer1_excuse(path, txt, h1, w1, zerr, lh):
                        f"{w1:.2f}mm wide — that is a part, not a ladder, and the declaration does "
                        f"not survive being counted.")
 
+    # THE EXTRUSION-LEVEL BENCHMARK IS THE Z LADDER'S MIRROR: one landed height, 3+ deliberately
+    # different metering rates, single layer — the coupon Oleg asked for by name on 2026-08-31
+    # ("current spiral has too much extrusion ... we need to benchmark first layer extrusion
+    # level") after the solid spiral's 1.25x fill would not lay flat. DECLARED AND COUNTED like
+    # Z_LADDER: a part stamping this has one rate and is refused; the count is off the emitted
+    # moves, never the header. Cells are distinct only past 5% because that is the R9 width
+    # tolerance's own scale.
+    if re.search(r'^;\s*L1_BENCH=1\s*$', txt, re.M):
+        # The count lives on the FLOOR: the rates are read from the moves at the file's lowest
+        # landed height only, so a benchmark may carry holders above its floors (Oleg 2026-08-31:
+        # "also experiment with triangle structure on same plate. the biggst slow is between
+        # prints") without the walls' own bead reading as a benchmark level.
+        _fl = first_layer_emitted(path, zerr, full=True)
+        if not _fl['by_h']:
+            return False, "It declares '; L1_BENCH=1' and lands nothing measurable."
+        _floor_h = min(_fl['by_h'])
+        _zoff0 = _fl['zoff'] or 0.0
+        _rates = []
+        _x = _y = None
+        _z = 0.0
+        _e = 0.0
+        _body = False
+        for _ln in open(path):
+            if not _body:
+                _body = 'BODY_START' in _ln
+            _c = _ln.split(';')[0].strip()
+            if _c.startswith('SET_GCODE_OFFSET'):
+                _mo2 = re.search(r'\bZ=\s*(-?\d+(?:\.\d+)?)', _c)
+                if _mo2:
+                    _zoff0 = float(_mo2.group(1))
+                continue
+            if not _c.startswith(('G0', 'G1')):
+                continue
+            _g = dict(re.findall(r'\b([XYZE])(-?\d+(?:\.\d+)?)', _c))
+            if 'Z' in _g:
+                _z = float(_g['Z'])
+            _nx = float(_g['X']) if 'X' in _g else _x
+            _ny = float(_g['Y']) if 'Y' in _g else _y
+            if _body and 'PRIME' not in _ln.upper() and 'E' in _g and 'X' in _g \
+                    and _x is not None and abs(round(_z + _zoff0 + zerr, 4) - _floor_h) <= 0.005:
+                _d = math.hypot(_nx - _x, _ny - _y)
+                _de = float(_g['E']) - _e
+                if _d > 1.0 and _de > 0:
+                    _rates.append(_de * FIL_AREA / _d)
+            if 'E' in _g:
+                _e = float(_g['E'])
+            _x, _y = _nx, _ny
+        _levels = []
+        for _r in sorted(_rates):
+            if not _levels or _r > _levels[-1] * 1.05:
+                _levels.append(_r)
+        if len(_levels) >= 3:
+            return True, (f"'; L1_BENCH=1' is declared AND counted — the floor at "
+                          f"{_floor_h:.2f}mm meters {len(_levels)} distinct rates "
+                          f"({', '.join(f'{v:.3f}' for v in _levels)} mm2/mm). A coupon is "
+                          f"allowed to visit unproven welds; this one exists to find the flat "
+                          f"one.")
+        return False, (f"It declares '; L1_BENCH=1' but its floor at {_floor_h:.2f}mm meters only "
+                       f"{len(_levels)} distinct rate(s) — that is a part wearing a benchmark "
+                       f"stamp, and the declaration does not survive being counted.")
+
     _m = COUPON_RE.search(txt)
     if not _m:
         if re.search(r'^;\s*COUPON=', txt, re.M):
@@ -302,6 +363,10 @@ def check(path):
     # height is the intended 'press' half of the cycle, not ploughing — so the relative check is
     # replaced by an ABSOLUTE plate floor, which is the thing that actually breaks hardware.
     z_modulated = '; Z_MODULATED' in open(path).read()
+    # The declared retract depth, read once; see the backwards-E seam below (Oleg 2026-08-31).
+    _mrd = re.search(r'^; RETRACT=([\d.]+)', open(path).read()[:4000], re.M)
+    _retract_decl = float(_mrd.group(1)) if _mrd else None
+    _retracts_seen = 0
     _sequential_file = '; SEQUENTIAL=' in open(path).read()
     # Plate floor lowered to match machine.PRESS_HARD (0.10), which is now the project's deliberate
     # method rather than an accident — everything anchoring to the plate is crushed into it, because
@@ -350,7 +415,18 @@ def check(path):
                 ev = float(me.group(1))
                 de = ev - e if abs_e else ev
                 if body and abs_e and de < -1e-6:
-                    problems.append(f"L{ln}: absolute E goes BACKWARDS ({e:.3f}->{ev:.3f}) — that is an unintended retraction")
+                    # A DECLARED RETRACT IS NO LONGER UNINTENDED. The no-retract law was written
+                    # for the continuous-stroke work; Oleg re-legislated it on 2026-08-31, on a
+                    # leaking 0.4 nozzle stringing webs across every hop: "i guess we need to
+                    # retract befor movement, as we crerating a lot of nets during move". The
+                    # seam is narrow: the file stamps '; RETRACT=<mm>', the negative move must be
+                    # E-ONLY (a retract that drags XY is a starved line wearing a stamp), and no
+                    # deeper than declared. Anything else fails exactly as before.
+                    if (_retract_decl and 'X' not in s and 'Y' not in s
+                            and -de <= _retract_decl + 0.05):
+                        _retracts_seen += 1
+                    else:
+                        problems.append(f"L{ln}: absolute E goes BACKWARDS ({e:.3f}->{ev:.3f}) — that is an unintended retraction")
                 e = ev if abs_e else e + ev
                 extrude_mm += d
             else:
@@ -394,6 +470,9 @@ def check(path):
                 # making the descent back to the real floor read as a plough. It is not a layer
                 # change; the strand below already holds that ground.
                 layer_floor = nz
+    if _retracts_seen:
+        print(f"  {_retracts_seen} declared retract(s) at <= {_retract_decl:g}mm, E-only — "
+              f"'; RETRACT=' seam (Oleg 2026-08-31: strings across hops on the leaking 0.4)")
     if not body:
         # The single most dangerous outcome: a file that silently receives no checks and passes.
         problems.append("BODY NEVER STARTED — no recognised layer marker, so the Z-plough, "
