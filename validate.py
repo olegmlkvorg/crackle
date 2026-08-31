@@ -691,6 +691,20 @@ def check(path):
     _starved = [t for t in _starved
                 if '; LINK' not in _lines[t[0] - 1] and '; RETRACE' not in _lines[t[0] - 1]
                 and '; THIN CROSS' not in _lines[t[0] - 1]]
+    # A MOVE AT THE FILE'S OWN DECLARED BEAD IS NOT A STARVED THREAD, whatever the median says.
+    # The median frame assumes one bead per file; a part with a fat pressed floor and a thin
+    # declared wall breaks it by arithmetic: the 2026-08-31 hangertag plate (floors 0.9x0.44,
+    # walls the declared 0.4x0.24) put the walls at 0.242x of the median — under the 0.25 line by
+    # 3% — and 255 correct wall strokes read as "threads dragged across the plate". The '; bead'
+    # stamp is the cross-section R4/R4e already verify, so a move inside R4's own 0.8-1.2x band
+    # around it is the file doing what it declares. A real drag (the 18mm prime thread, 0.017mm2
+    # against 0.72) sits far outside any declared band and is still caught.
+    _mb0 = re.search(r'^; bead ([\d.]+)x([\d.]+)', open(path).read()[:4000], re.M)
+    if _mb0:
+        _decl_mm2 = float(_mb0.group(1)) * float(_mb0.group(2))
+        _starved = [t for t in _starved
+                    if not (machine.R4_FLOW_MIN_RATIO * _decl_mm2 <= t[2]
+                            <= machine.R4_FLOW_MAX_RATIO * _decl_mm2)]
     if _starved:
         _w = max(_starved, key=lambda t: t[1])
         problems.append(
