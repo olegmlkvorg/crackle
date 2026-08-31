@@ -1539,11 +1539,17 @@ def home(w, printer, calibrate=False):
         # but it describes a bed nobody has probed since the nozzle changed — and an interrupted
         # calibrate leaves the ACTIVE mesh one row tall (the trap documented below), so the first
         # print after a restart is exactly when the measured mesh is worth six minutes.
-        w("BED_MESH_CALIBRATE                   ; full probe, ~6 min measured end to end 2026-08-15")
+        # THE COMMAND LINE STAYS BARE. Creality's BED_MESH_CALIBRATE handler parses everything
+        # after the name as key=value args, so an inline '; comment' aborted the whole job with
+        # key514 "Malformed command args ... not enough values to unpack (expected 2, got 1)" —
+        # 2026-08-31, first calibrate-mode send. Stock Klipper commands (BED_MESH_PROFILE above)
+        # strip ; comments; their custom one does not, and one crashed job is the measurement.
+        w("; full probe, ~6 min measured end to end 2026-08-15; comment kept OFF the command line")
+        w("BED_MESH_CALIBRATE")
         if prof:
-            w(f"BED_MESH_PROFILE SAVE={prof}         ; the fresh mesh replaces the stale saved one "
-              f"for this power-cycle (SAVE_CONFIG would restart Klipper mid-job, so disk keeps its "
-              f"copy until a human saves)")
+            w(f"; the fresh mesh replaces the stale session profile; the disk copy is untouched")
+            w(f"; (SAVE_CONFIG would restart Klipper mid-job, so a human saves when they choose)")
+            w(f"BED_MESH_PROFILE SAVE={prof}")
         return
     if prof:
         w(f"BED_MESH_PROFILE LOAD={prof}"
