@@ -53,6 +53,18 @@ on an assumption — towercoupon.py records that Klipper's own config field lies
 fact, so only Oleg at the machine can settle it. If the 0.8 nozzle is still mounted, a 0.6mm bead
 is UNDER the orifice (unprintable — it strings into beads) and the coupon must be cancelled.
 
+S2 AND THE MISSING PITCH — measured, so the next session does not re-walk it. send.py's S2
+abstains on this file because its pitch instrument reads axis-aligned rasters only, and the
+obvious fix — teach it rotated rasters — was probed on the emitted bytes and REJECTED: the
+billiard's strand offsets project NON-uniformly (cell 1 measures gaps 2.12..2.36mm, modal
+dominance 0.22-0.25 against the 0.70 the ledger's own evidence demands), so an honest rotated
+instrument declines exactly like today's. The net genuinely has no single pitch. The standing
+options, all Oleg's to pick: keep the billiard and clear S2 with a recorded --oleg-said per send;
+redesign the fill as an exactly-uniform diamond crosshatch (measurable, slightly worse corners);
+or give S2 a max-inscribed-void measure, which is the quantity that physically decides whether a
+sticker face has backing — but that changes what the ledger stores, which is not a generator's
+call.
+
 FLOW AT SPEED, the ceiling this ladder will eventually hit: 0.6 x 0.24 = 0.144 mm2, so 50 mm/s is
 7.2 mm3/s, 100 is 14.4, 200 is 28.8. Every 0.4-nozzle hotend runs out somewhere in the 20s-30s,
 and machine.py's flow figures are all 0.8-nozzle numbers — so past ~150 mm/s the failure to watch
@@ -161,6 +173,277 @@ def cell_path(ox, oy, w_line, p, q, phase, fillet_r, arc_seg):
     return pts, {'len': length, 'verts': len(net), 'entry': entry}
 
 
+def clip_walls(zmid, shaft_d, fit_clear, wall):
+    """Wall CENTERLINE x-offsets (from tag centre) of the clip at height `zmid` above the plate's
+    top, straight from hanger-tag.scad's tunnel(): vertical legs to leg_h, then a 45-degree gable
+    closing to a point. The tunnel INNER profile is untouched (the fit is the fit); the wall sits
+    half a line outside it, so a fatter wall only grows the clip outward.
+
+    Returns [] above the apex, [x] when the two roof lines have merged into one, else [-x, +x]."""
+    rho = shaft_d / 2.0
+    half_w = rho + fit_clear
+    leg_h = rho + (math.sqrt(2.0) - 1.0) * half_w
+    xw = half_w + wall / 2.0
+    if zmid > leg_h:
+        xw -= (zmid - leg_h)            # the 45-degree roof: in by one mm per mm up
+    if xw < -wall / 4.0:
+        return []
+    if xw < wall / 2.0:
+        return [0.0]                    # the two lines are one weld now — draw it once
+    return [-xw, xw]
+
+
+def measured_speeds(path):
+    """Speeds and peak implied flow read back OFF THE EMITTED FILE (nucleon's discipline: the
+    summary describes the artifact, never the intention)."""
+    import re as _re
+    f, seen, body = 0.0, {}, False
+    px = py = None
+    pe = 0.0
+    wflow = 0.0
+    for ln in open(path):
+        if 'BODY_START' in ln:
+            body = True
+            continue
+        c = ln.split(';')[0].strip()
+        if not c.startswith(('G0', 'G1')):
+            continue
+        mf = _re.search(r'\bF(\d+(?:\.\d+)?)', c)
+        if mf:
+            f = float(mf.group(1)) / 60.0
+        mx = _re.search(r'\bX(-?[\d.]+)', c)
+        my = _re.search(r'\bY(-?[\d.]+)', c)
+        me = _re.search(r'\bE(-?[\d.]+)', c)
+        nx = float(mx.group(1)) if mx else px
+        ny = float(my.group(1)) if my else py
+        if body and me and mx and px is not None:
+            d = math.hypot(nx - px, ny - py)
+            de = float(me.group(1)) - pe
+            if d > 1e-6 and de > 0 and f:
+                seen[round(f, 1)] = seen.get(round(f, 1), 0) + 1
+                wflow = max(wflow, de * A_FIL / d * f)
+        if me:
+            pe = float(me.group(1))
+        px, py = nx, ny
+    return sorted(seen), sum(seen.values()), wflow
+
+
+def emit_full(a, material, temp, bed, bx, by, press, zerr):
+    """The LENGTHTEST as full native pieces: N tags, every floor the SAME proven gap, the clip
+    walls stacked above, layer-major across the row.
+
+    LAYER-MAJOR, NOT SEQUENTIAL, and the reason is the head, not the gates: machine.HEAD_R says
+    everything within ~50mm of the nozzle sweeps at head height, so finishing tag 1 to its 6.6mm
+    apex and then descending to tag 2's floor 32mm away would drive the heater block through the
+    finished part. Z here only ever climbs; between strokes the head hops LIFTED and '; HOP'
+    tagged, so the no-travel rule's licensed exception is the only travel in the file."""
+    lens = [float(s) for s in a.clip_lens.split(",") if s.strip()]
+    n = len(lens)
+    if not 1 <= n <= 9:
+        sys.exit(f"REFUSING TO EMIT: {n} clip lengths; 1..9 tags fit the digit labels.")
+    if any(l <= 0 or l > TAG_H - 1.0 for l in lens):
+        sys.exit(f"REFUSING TO EMIT: a clip length in {lens} is outside (0, {TAG_H - 1.0:g}] — "
+                 f"the tunnel lies along the tag's {TAG_H:g}mm height.")
+    if a.h1 is None:
+        sys.exit("REFUSING TO EMIT: full pieces need --h1, the ladder cell Oleg read as welded. "
+                 "The whole point of the ladder was to make this number a citation, not a guess.")
+    if a.speed > machine.MAX_SPEED + 1e-9:
+        sys.exit(f"REFUSING TO EMIT: {a.speed:g} mm/s on a full PIECE. The SPEED_OVERRIDE seam is "
+                 f"for measurement coupons; a part never carries it (machine.MAX_SPEED).")
+    proven = any(abs(a.h1 - p[0]) <= 0.005 and abs(a.w1 - p[1]) <= 0.05
+                 for p in machine.PROVEN_LAYER1.get(a.printer, []))
+    coupon = None
+    if a.coupon:
+        cf, _, cdate = a.coupon.partition(":")
+        coupon = (cf, cdate)
+        cpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), a.out, cf)
+        if not os.path.isfile(cpath) and not os.path.isfile(cf):
+            sys.exit(f"REFUSING TO EMIT: cited coupon '{cf}' is not in {a.out}/ — a citation to a "
+                     f"file nobody can open proves nothing (R9's own clause).")
+    if not proven and coupon is None:
+        sys.exit(f"REFUSING TO EMIT: ({a.h1:g}, {a.w1:g}) is not in PROVEN_LAYER1[{a.printer!r}] "
+                 f"and no --coupon cites the ladder cell that welded. R9 would refuse the file; "
+                 f"refusing here says why sooner.")
+
+    zoff = round(a.h1 - press - zerr, 4)
+    e_wall = a.wall * a.layer_h / A_FIL
+    flow_wall = a.wall * a.layer_h * a.speed
+    flow_l1 = a.w1 * a.h1 * a.speed
+    f_body = round(a.speed * 60)
+    travel_f = round(machine.MACHINE_MAX_SPEED * 60)
+
+    stride = TAG_W + a.gap
+    row_w = n * TAG_W + (n - 1) * a.gap
+    if row_w > bx - 60:
+        sys.exit(f"REFUSING TO EMIT: {n} tags need {row_w:.0f}mm and the plate has {bx - 60:.0f}.")
+    x0 = (bx - row_w) / 2.0
+    oy = by / 2.0 - TAG_H / 2.0
+    yc = oy + TAG_H / 2.0
+    dw, dh = 6.0, 10.0
+    dy = oy + TAG_H + 3.0
+
+    v_eff = min(a.speed, math.sqrt(machine.ACCEL * a.fillet))
+    arc_seg = max(0.25, v_eff / 220.0)
+    e1 = machine.layer1_rate(a.w1, a.h1)
+    cells = [cell_path(x0 + i * stride, oy, a.w1, a.p, a.q, a.phase, a.fillet, arc_seg)
+             for i in range(n)]
+
+    # the wall layer schedule, shared by every tag (same shaft, same profile — only length varies)
+    K = 0
+    sched = []
+    while True:
+        zmid = (K + 0.5) * a.layer_h
+        xs = clip_walls(zmid, a.shaft, a.fit_clear, a.wall)
+        if not xs:
+            break
+        K += 1
+        sched.append(xs)
+    rho = a.shaft / 2.0
+    leg_h = rho + (math.sqrt(2.0) - 1.0) * (rho + a.fit_clear)
+
+    L = []
+    w = L.append
+    w(f"; HANGERTAG FULL x{n} — the LENGTHTEST as native pieces: tunnel lengths "
+      f"{a.clip_lens}mm left to right, floor = the {a.p}:{a.q} net at the LADDER-PROVEN "
+      f"{a.h1:g}mm x {a.w1:g}mm weld (cell 6, read {coupon[1] if coupon else 'PROVEN_LAYER1'})")
+    w(f"; PRINTER={a.printer}")
+    w(f"; CMD={' '.join(shlex.quote(s) for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])}")
+    w(f"; MATERIAL={material}")
+    w(f"; LAYER_H={a.layer_h:g}")
+    w(f"; FLOW={flow_wall:g}")
+    w(f"; SPEED={a.speed:.4f}")
+    w(f"; PRESSED_LAYER1={press:g}")
+    w(f"; PRINT_TEMP={temp}")
+    w(f"; bead {a.wall:g}x{a.layer_h:g}")
+    w(f"; FLOW_DERATE=the clip wall IS one {a.wall:g}x{a.layer_h:g} line — the tag's whole design "
+      f"(hanger-tags-handoff.zip) — so {flow_wall:g} mm3/s at the {a.speed:g} mm/s north star is "
+      f"the operating point. Widening the bead would thicken a wall whose thickness is the part.")
+    w(f"; NOZZLE={a.nozzle:g} — corroborated by the plate 2026-08-31: the ladder's 0.6mm lines "
+      f"welded (cell 6 read by Oleg), and an 0.8 orifice cannot lay a 0.6 bead at all. "
+      f"machine.NOZZLE still carries the pre-swap 0.8 until he says the word at the machine.")
+    if coupon:
+        w(f"; COUPON={coupon[0]} h1={a.h1:.3f} w1={a.w1:.2f} verdict=welded read={coupon[1]}")
+    w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY floor, metered for the {a.h1:g} gap.")
+    if zoff > 0:
+        w(f"; OFFSET +{zoff:.3f} SITS ABOVE THE MACHINE'S OWN ZERO, and that is the PLATE's word, "
+          f"not a guess: machine.zoff_for refuses positive for parts because an uncorrected "
+          f"machine was the standing defect — but Oleg read the 2026-08-31 ladder and the cell "
+          f"that welded best is THIS one, {a.h1:g}mm in the pre-swap {zerr:+.3f} frame. Same "
+          f"commanded-plus-offset Z reproduces the same physical gap whatever the swap did to the "
+          f"true zero. The citation above is the license.")
+    w(";")
+    w("; ---------------- WHAT THIS IS ----------------")
+    w(f"; {n} complete hanger tags: one {a.layer_h:g} net floor (sticker face down, ~57% net) and")
+    w(f"; the clip above it — vertical legs to {leg_h:.2f}mm, then the 45deg gable, ONE "
+      f"{a.wall:g}mm line per layer,")
+    w(f"; {K} wall layers, apex ~{(K * a.layer_h):.1f}mm over the floor. Layer overlap on the "
+      f"roof: {100 * (1 - a.layer_h / a.wall):.0f}%")
+    w(f"; (the handoff's 0.30 wall gave 20% — that open question is what this plate answers, "
+      f"per length).")
+    w(";")
+    for i, l in enumerate(lens):
+        tilt = math.degrees(math.atan2(2 * a.fit_clear, l))
+        w(f";   tag {i + 1}  tunnel {l:g}mm  (rocks ~{tilt:.0f}deg on the shaft — the trade the "
+          f"LENGTHTEST measures)")
+    w(";")
+    w("; READ IT: does each roof BOND (the 45deg single-line gable), and how short a tunnel still")
+    w("; threads a hanger hook without wobbling loose. Tag 5's 0.6mm tunnel is 2-3 lines long —")
+    w("; the handoff predicted slicers drop it; native gcode draws it, so the plate decides.")
+    w("; HEADER_BLOCK_START"); w(f"; total layer number: {K + 1}"); w("; HEADER_BLOCK_END")
+
+    w("M82")
+    w("G90")
+    w(f"M140 S{bed:.0f}")
+    w(f"M104 S{temp}")
+    machine.home(w, a.printer)
+    w("SET_GCODE_OFFSET Z=0                 ; clear whatever the last job left")
+    w(f"SET_GCODE_OFFSET Z={zoff:.3f} MOVE=0   ; commanded Z + this + the {zerr:+.3f} machine "
+      f"error = the ladder's welded {a.h1:g}")
+    w(f"M190 S{bed:.0f}")
+    w(f"M109 S{temp}")
+    w("M107                                 ; fans OFF for layer 1 — the plate weld is the job")
+    for line in machine.aux_fans(a.printer, 0.0):
+        w(line)
+    w("G92 E0")
+    machine.prime(w, printer=a.printer, z=press,
+                  rate=e1, feed=f_body, travel_feed=travel_f,
+                  avoid=(("rect", x0 - 2, oy - 2, x0 + row_w + 2, dy + dh + 2),),
+                  near=(x0, oy))
+    w("; BODY_START")
+
+    E = 0.0
+
+    def hop(tx, ty, note, lift):
+        w(f"G0 Z{lift:.3f} F1800   ; HOP lift, clear of everything laid")
+        w(f"G0 X{tx:.3f} Y{ty:.3f} F{travel_f}   ; HOP {note}")
+
+    # ---- layer 1: every tag's digit and net, all at the one proven gap
+    for i in range(n):
+        pts, st = cells[i]
+        dx = x0 + i * stride + (TAG_W - dw) / 2.0
+        w(f"; ---- layer 1, tag {i + 1}: digit + net at commanded Z{press:.3f} "
+          f"({a.w1 * a.h1:.4f} mm2/mm)")
+        for s in DIGIT[str(i + 1)]:
+            u0, v0, u1, v1 = SEG[s]
+            ax, ay = dx + u0 * dw, dy + v0 * dh
+            bx_, by_ = dx + u1 * dw, dy + v1 * dh
+            hop(ax, ay, f"to digit {i + 1} segment '{s}'", press + 1.0)
+            w(f"G1 F600 Z{press:.3f}")
+            E += math.hypot(bx_ - ax, by_ - ay) * e1
+            w(f"G1 F{f_body} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
+        hop(pts[0][0], pts[0][1], f"to tag {i + 1} net", press + 1.0)
+        w(f"G1 F600 Z{press:.3f}")
+        w(f"G1 F{f_body} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
+          f"E{(E := E + math.dist(pts[0], pts[1]) * e1):.5f}")
+        for j in range(2, len(pts)):
+            E += math.dist(pts[j - 1], pts[j]) * e1
+            w(f"G1 X{pts[j][0]:.3f} Y{pts[j][1]:.3f} E{E:.5f}")
+
+    _fan = int(round(machine.fan_for(material, machine.FAN_MAX.get(material, 0.2)) * 255))
+    w(f"M106 S{_fan}      ; floors have bonded — {material}'s capped cooling for the walls")
+
+    # ---- the clip, layer-major across the row
+    for k in range(1, K + 1):
+        ck = round(press + k * a.layer_h, 3)
+        xs = sched[k - 1]
+        w(f"; ---- wall layer {k} of {K} at commanded Z{ck:.3f}: "
+          f"{'legs' if (k - 0.5) * a.layer_h <= leg_h else 'roof'} at x "
+          f"{','.join(f'{x:+.2f}' for x in xs)}")
+        for i in range(n):
+            cx = x0 + i * stride + TAG_W / 2.0
+            half = lens[i] / 2.0
+            for m, x in enumerate(xs):
+                ya, yb = (yc - half, yc + half) if (k + m) % 2 == 0 else (yc + half, yc - half)
+                hop(cx + x, ya, f"to tag {i + 1} wall x{x:+.2f}", ck + 0.8)
+                w(f"G1 F600 Z{ck:.3f}")
+                E += lens[i] * e_wall
+                w(f"G1 F{f_body} X{cx + x:.3f} Y{yb:.3f} E{E:.5f} ; wall")
+
+    w("; ---- done")
+    w("SET_GCODE_OFFSET Z=0                 ; hand the machine back at its own zero")
+    w("M107"); w("M104 S0"); w("M140 S0")
+    w("G0 Z45 F900")
+    w(f"G0 X10 Y{by - 10:.0f} F{travel_f}")
+    w("M84")
+
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), a.out,
+                       f"hangertag_full{n}_{a.printer}_{material}_w{a.w1:g}_wall{a.wall:g}"
+                       f"_h1-{a.h1:g}_len{max(lens):g}-{min(lens):g}_v{a.speed:g}.gcode")
+    machine.emit_gcode(out, "\n".join(L) + "\n")
+    vol = E * A_FIL / 1000.0
+    print(out)
+    print(f"  {n} FULL tags, tunnels {a.clip_lens}mm, floor {a.h1:g}x{a.w1:g} "
+          f"(offset {zoff:+.3f} vs zerr {zerr:+.3f}), wall {a.wall:g}x{a.layer_h:g}, "
+          f"{K + 1} layers, apex ~{K * a.layer_h + a.h1:.1f}mm")
+    print(f"  {vol:.2f}cm3 / {vol * 1.24:.1f}g  roof overlap "
+          f"{100 * (1 - a.layer_h / a.wall):.0f}% (handoff's 0.30 wall gave 20%)")
+    spds, moves, wflow = measured_speeds(out)
+    print(f"  MEASURED in the file: {'/'.join(f'{s:g}' for s in spds)} mm/s over {moves} "
+          f"extruding moves" + ("   !! MORE THAN ONE SPEED — R3 violation" if len(spds) > 1 else ""))
+    print(f"  peak implied flow {wflow:.1f} mm3/s")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -199,6 +482,26 @@ def main():
     ap.add_argument("--gap", type=float, default=6.0, help="clear plate between tag cells, mm")
     ap.add_argument("--zerr", type=float, default=None,
                     help="Z-zero error, mm. Default machine.ZERR[printer]; refused if unmeasured.")
+    ap.add_argument("--clip-lens", default=None,
+                    help="FULL-PIECE MODE: comma list of tunnel lengths mm, one tag each — the "
+                         "handoff's LENGTHTEST (8.2,4.1,2.4,1.2,0.6 answers 'how short can the "
+                         "holder go'). Every floor prints at ONE --h1, the clip walls stack above, "
+                         "layer-major across the row so the head never returns down past a "
+                         "standing part.")
+    ap.add_argument("--h1", type=float, default=None,
+                    help="full-piece floor gap, mm — the ladder cell Oleg read as welded.")
+    ap.add_argument("--coupon", default=None,
+                    help="R9 citation '<coupon-file>:<YYYY-MM-DD>' — the ladder plate and the day "
+                         "Oleg read it. Required when (--h1, --w1) is not in PROVEN_LAYER1.")
+    ap.add_argument("--shaft", type=float, default=4.6,
+                    help="shaft diameter the tunnel swallows (std bore, hanger-tag.scad clip_id)")
+    ap.add_argument("--fit-clear", type=float, default=0.3, help="radial clearance, scad's number")
+    ap.add_argument("--wall", type=float, default=0.4,
+                    help="clip wall, ONE line per layer. DEVIATES from the handoff's 0.30 with the "
+                         "reason recorded: 0.30 is under this 0.4 orifice (the house floor — melt "
+                         "necks below the hole), and 0.4 lifts the 45deg roof's layer-to-layer "
+                         "overlap from 20%% to 40%% — the handoff's own #1 open risk. The tunnel "
+                         "INNER profile is untouched; the wall grows outward only.")
     ap.add_argument("--out", default="out")
     a = ap.parse_args()
 
@@ -216,6 +519,13 @@ def main():
         sys.exit(f"REFUSING TO EMIT: --w1 {a.w1:g} is under the {a.nozzle:g}mm orifice this file "
                  f"assumes — a nozzle cannot lay a bead narrower than its hole; the melt stretches "
                  f"thin and breaks into beads.")
+
+    if a.clip_lens:
+        if a.wall < a.nozzle:
+            sys.exit(f"REFUSING TO EMIT: --wall {a.wall:g} is under the {a.nozzle:g}mm orifice — "
+                     f"same floor as --w1. The handoff's 0.30 needs a slicer's under-orifice "
+                     f"tricks; this toolchain does not lay beads narrower than the hole.")
+        return emit_full(a, material, temp, bed, bx, by, press, zerr)
 
     hts = [float(s) for s in a.heights.split(",") if s.strip()]
     if len(set(hts)) < 3:
