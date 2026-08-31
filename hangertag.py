@@ -147,26 +147,32 @@ def rounded_rect(x0, y0, x1, y1, r):
     return pts, sx
 
 
-def cell_path(ox, oy, w_line, p, q, phase, fillet_r, arc_seg):
-    """ONE tag cell as one continuous polyline: perimeter loop, link inward, billiard net.
+def cell_path(ox, oy, w_line, p, q, phase, fillet_r, arc_seg, perims=1, perim_overlap=0.2):
+    """ONE tag cell as one continuous polyline: perimeter ring(s), link inward, billiard net.
 
-    Perimeter centerline sits half a line inside the outline; the net's box sits 0.75 lines
-    inside the perimeter centerline, so every bounce overlaps the frame bead by ~25% — welded,
-    not blobbed. Returns (pts, stats)."""
+    Ring 1's centerline sits half a line inside the outline. With perims=2 a SECOND ring runs
+    (1 - perim_overlap) lines further in, so the two beads overlap by perim_overlap and the
+    frame is a sealed band — Oleg, 2026-08-31, on the single-ring pieces: "we need perfert outer
+    line, make it overlap a little, we dont want a hole in there". The net's box sits 0.75 lines
+    inside the INNERMOST ring, bounces welded into it. Returns (pts, stats)."""
     px0, py0 = ox + w_line / 2.0, oy + w_line / 2.0
     px1, py1 = ox + TAG_W - w_line / 2.0, oy + TAG_H - w_line / 2.0
     rc = max(1.1 * w_line - w_line / 2.0, 0.2)          # scad's face_r = 1.1*line_w, centerline
-    lat_in = 0.75 * w_line                              # bounce apex -> 25% bead overlap
+    pitch = (1.0 - perim_overlap) * w_line              # ring-to-ring centerline distance
+    pts = []
+    sx_last = None
+    for r in range(perims):
+        inset = r * pitch
+        ring, sx = rounded_rect(px0 + inset, py0 + inset, px1 - inset, py1 - inset,
+                                max(rc - inset, 0.05))
+        pts += ring
+        sx_last = sx
+    lat_in = (perims - 1) * pitch + 0.75 * w_line       # net box inside the innermost ring
     lx0, ly0 = px0 + lat_in, py0 + lat_in
     lw, lh = (px1 - px0) - 2 * lat_in, (py1 - py0) - 2 * lat_in
-
     net = billiard(lw, lh, p, q, phase)
     entry = (lx0 + net[0][0], ly0 + net[0][1])
-
-    peri, sx = rounded_rect(px0, py0, px1, py1, rc)
-    # The loop's joint is at (sx, py0); the link runs from there to the net's entry. Both are near
-    # the bottom-left, so the link is about one line width long — drawn at full rate, a weld.
-    pts = peri + [entry] + [(lx0 + x, ly0 + y) for x, y in net[1:]]
+    pts += [entry] + [(lx0 + x, ly0 + y) for x, y in net[1:]]
     pts = smooth.fillet(pts, fillet_r, arc_seg=arc_seg)
     pts = machine.decimate(pts)
     length = sum(math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
@@ -174,18 +180,24 @@ def cell_path(ox, oy, w_line, p, q, phase, fillet_r, arc_seg):
 
 
 def clip_walls(zmid, shaft_d, fit_clear, wall):
-    """Wall CENTERLINE x-offsets (from tag centre) of the clip at height `zmid` above the plate's
-    top, straight from hanger-tag.scad's tunnel(): vertical legs to leg_h, then a 45-degree gable
-    closing to a point. The tunnel INNER profile is untouched (the fit is the fit); the wall sits
-    half a line outside it, so a fatter wall only grows the clip outward.
+    """Wall CENTERLINE x-offsets (from tag centre) of the holder at height `zmid` above the
+    plate's top: a PURE 45-DEGREE TRIANGLE from the floor, both walls leaning inward from layer 1
+    until they meet.
 
-    Returns [] above the apex, [x] when the two roof lines have merged into one, else [-x, +x]."""
-    rho = shaft_d / 2.0
-    half_w = rho + fit_clear
-    leg_h = rho + (math.sqrt(2.0) - 1.0) * half_w
-    xw = half_w + wall / 2.0
-    if zmid > leg_h:
-        xw -= (zmid - leg_h)            # the 45-degree roof: in by one mm per mm up
+    THIS REPLACES THE LEGS+GABLE, ON THE PLATE'S WORD. The handoff rejected the pure triangle for
+    its dead corners (base 2*(1+sqrt2)*half_w vs 5.2mm for legs+gable) and the first pieces
+    printed the gable — Oleg, 2026-08-31, holding them: "for the top part make it triangle 45
+    deg, because now it is not good". The tent buys what the gable lacked: no vertical-to-roof
+    transition corner, and every layer overlaps the one below by the same 1 - lh/wall (70% at
+    0.8x0.24) from the first wall layer to the apex.
+
+    The inscribed clearance circle fixes the base: a 45-45 tent over a circle of radius
+    half_w = shaft/2 + fit_clear needs half-base B = half_w * (1 + sqrt2) — the same arithmetic
+    the handoff used to reject it. The tunnel INNERs stay the fit; the wall sits half a line
+    outside. Returns [] above the apex, [x] when the two lines have merged, else [-x, +x]."""
+    half_w = shaft_d / 2.0 + fit_clear
+    B = half_w * (1.0 + math.sqrt(2.0))
+    xw = B + wall / 2.0 - zmid          # 45 degrees: in by one mm per mm up, from the floor
     if xw < -wall / 4.0:
         return []
     if xw < wall / 2.0:
@@ -309,7 +321,8 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     arc_seg = max(0.25, v_eff / 220.0)
     e1s = [machine.layer1_rate(a.w1, h) for h in h1s]
     zbase = [round(press + (h - h1s[0]), 3) for h in h1s]   # each floor's commanded Z
-    cells = [cell_path(x0 + i * stride, oy, a.w1, a.p, a.q, a.phase, a.fillet, arc_seg)
+    cells = [cell_path(x0 + i * stride, oy, a.w1, a.p, a.q, a.phase, a.fillet, arc_seg,
+                       a.perims, a.perim_overlap)
              for i in range(n)]
 
     # the wall layer schedule, shared by every tag (same shaft, same profile — only length varies)
@@ -322,8 +335,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
             break
         K += 1
         sched.append(xs)
-    rho = a.shaft / 2.0
-    leg_h = rho + (math.sqrt(2.0) - 1.0) * (rho + a.fit_clear)
+    B_tent = (a.shaft / 2.0 + a.fit_clear) * (1.0 + math.sqrt(2.0))
 
     L = []
     w = L.append
@@ -375,13 +387,11 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
           f"{'A counted ladder may visit gaps nothing has proven; that is what it is for.' if ladder else 'The citation above is the license.'}")
     w(";")
     w("; ---------------- WHAT THIS IS ----------------")
-    w(f"; {n} complete hanger tags: one {a.layer_h:g} net floor (sticker face down, ~57% net) and")
-    w(f"; the clip above it — vertical legs to {leg_h:.2f}mm, then the 45deg gable, ONE "
-      f"{a.wall:g}mm line per layer,")
-    w(f"; {K} wall layers, apex ~{(K * a.layer_h):.1f}mm over the floor. Layer overlap on the "
-      f"roof: {100 * (1 - a.layer_h / a.wall):.0f}%")
-    w(f"; (the handoff's 0.30 wall gave 20% — that open question is what this plate answers, "
-      f"per length).")
+    w(f"; {n} complete hanger tags: a sealed net floor (sticker face down; the outer band is a")
+    w(f"; double ring overlapped {a.perim_overlap:.0%}) and the holder above it — a PURE 45deg")
+    w(f"; TRIANGLE from the floor, half-base {B_tent:.2f}mm, ONE {a.wall:g}mm line per layer,")
+    w(f"; {K} wall layers, apex ~{(K * a.layer_h):.1f}mm over the floor, every layer overlapping")
+    w(f"; the one below by {100 * (1 - a.layer_h / a.wall):.0f}% from layer 1 to the tip.")
     w(";")
     for i, l in enumerate(lens):
         tilt = math.degrees(math.atan2(2 * a.fit_clear, l))
@@ -467,8 +477,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     # ---- the clip, layer-major across the row
     for k in range(1, K + 1):
         xs = sched[k - 1]
-        w(f"; ---- wall layer {k} of {K}: "
-          f"{'legs' if (k - 0.5) * a.layer_h <= leg_h else 'roof'} at x "
+        w(f"; ---- wall layer {k} of {K}: 45deg tent at x "
           f"{','.join(f'{x:+.2f}' for x in xs)} (commanded Z per tag: its floor + {k}*{a.layer_h:g})")
         lift = zbase[-1] + k * a.layer_h + 0.8
         for i in range(n):
@@ -594,6 +603,12 @@ def main():
                          "is bad on this suface\'. His word overrules the speed-is-not-a-lever "
                          "doctrine FOR THIS SURFACE; a declared \'; SPEED_LAYER1=\' regime, the "
                          "same seam zladder\'s half-speed layer 1 uses.")
+    ap.add_argument("--perims", type=int, default=2,
+                    help="perimeter rings. 2 since Oleg 2026-08-31: 'we need perfert outer line, "
+                         "make it overlap a little, we dont want a hole in there' — the second "
+                         "ring overlaps the first by --perim-overlap and seals the frame band.")
+    ap.add_argument("--perim-overlap", type=float, default=0.2,
+                    help="fraction of a line width the rings overlap (0.2 = 'a little').")
     ap.add_argument("--touch-mm", type=float, default=15.0,
                     help="mm of each tag's floor path laid at the TOUCHDOWN crawl (speed1/3) "
                          "before the floor's own speed takes over. Oleg, 2026-08-31: 'first "
@@ -687,7 +702,8 @@ def main():
 
     cells = []
     for i, h in enumerate(hts):
-        pts, st = cell_path(x0 + i * stride, oy, a.w1, a.p, a.q, a.phase, a.fillet, arc_seg)
+        pts, st = cell_path(x0 + i * stride, oy, a.w1, a.p, a.q, a.phase, a.fillet, arc_seg,
+                            a.perims, a.perim_overlap)
         cells.append((pts, st))
 
     L = []
