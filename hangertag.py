@@ -456,7 +456,12 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     w("M107"); w("M104 S0"); w("M140 S0")
     w("G0 Z45 F900")
     w(f"G0 X10 Y{by - 10:.0f} F{travel_f}")
-    w("M84")
+    # NO M84, AND IT IS THE WHOLE POINT. The zladder-inherited motors-off line released the
+    # steppers on a machine whose idle_timeout is disabled and whose own END_PRINT never cuts
+    # motors — so the bed sank after every job ("why after the print the bed is goind full
+    # down", Oleg 2026-08-31) and every next start faced an UNHOMED machine, which is the state
+    # Creality's service re-preps with the injected 6-minute calibrate. Their platform owns
+    # motor power; a job that leaves the machine homed leaves the next job free to skip the probe.
 
     _htag = f"{h1s[0]:g}" if len(set(h1s)) == 1 else f"{min(h1s):g}-{max(h1s):g}"
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), a.out,
@@ -760,7 +765,12 @@ def main():
     w("M107"); w("M104 S0"); w("M140 S0")
     w("G0 Z45 F900")
     w(f"G0 X10 Y{by - 10:.0f} F{travel_f}")
-    w("M84")
+    # NO M84, AND IT IS THE WHOLE POINT. The zladder-inherited motors-off line released the
+    # steppers on a machine whose idle_timeout is disabled and whose own END_PRINT never cuts
+    # motors — so the bed sank after every job ("why after the print the bed is goind full
+    # down", Oleg 2026-08-31) and every next start faced an UNHOMED machine, which is the state
+    # Creality's service re-preps with the injected 6-minute calibrate. Their platform owns
+    # motor power; a job that leaves the machine homed leaves the next job free to skip the probe.
 
     tag = f"v{a.speed:g}" + ("_OVR" if over else "")
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), a.out,
