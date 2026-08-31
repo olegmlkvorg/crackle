@@ -95,42 +95,10 @@ DIGIT = {'1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd', '6': 
          '7': 'abc', '8': 'abcdefg', '9': 'abcdfg'}
 
 
-def tri(u):
-    """Triangle wave 0 -> 1 -> 0 over one unit of u."""
-    u = u % 1.0
-    return 2.0 * u if u <= 0.5 else 2.0 * (1.0 - u)
-
-
-def billiard(w, h, p, q, phase):
-    """Closed p:q billiard (reflection) path in a w x h box, vertices only.
-
-    x = w*tri(p*t + phase), y = h*tri(q*t) over t in [0,1]. Both coordinates are piecewise linear,
-    so the path is exactly the straight legs between fold times. p, q coprime closes it.
-
-    THE PHASE IS WHAT KEEPS IT A NET AND NOT A LINE DRAWN TWICE. With phase 0 the path launches
-    from the box corner, and a billiard from a corner runs to a corner and RETRACES — every leg
-    covered twice, 2x material on one track. A phase that keeps the x-folds and y-folds from ever
-    coinciding means no corner is ever hit and each leg is laid once. Asserted, not assumed."""
-    if math.gcd(p, q) != 1:
-        raise SystemExit(f"billiard p={p}, q={q} share a factor — the path closes early and "
-                         f"covers only 1/{math.gcd(p, q)} of the box.")
-    tx = [(0.5 * m - phase) / p for m in range(0, 2 * p + 1)]
-    tx = [t for t in tx if 1e-9 < t < 1.0 - 1e-9]
-    ty = [m / (2.0 * q) for m in range(0, 2 * q + 1)]
-    ty = [t for t in ty if 1e-9 < t < 1.0 - 1e-9]
-    gap = min(abs(a - b) for a in tx for b in ty)
-    if gap < 1e-4:
-        raise SystemExit(f"billiard phase {phase} lets an x-fold and a y-fold coincide "
-                         f"(gap {gap:.6f}) — that is a box corner, and a corner hit makes the "
-                         f"path retrace itself. Nudge --phase.")
-    ts = sorted([0.0] + tx + ty + [1.0])
-    return [(w * tri(p * t + phase), h * tri(q * t)) for t in ts]
-
-
 def rounded_rect(x0, y0, x1, y1, r):
     """Rounded-rect loop, CCW from (sx, y0) on the bottom edge, back to (sx, y0). Corner arcs are
-    emitted as real arcs (fine enough that fillet() leaves them alone); sx is where the caller
-    wants to enter and leave, so the loop's one open joint sits exactly at the lattice link."""
+    emitted as real arcs (fine enough that fillet() leaves them alone); sx keeps every ring's
+    joint in one seam column, so the spiral's turn-to-turn step always happens in the same place."""
     def arc(cx, cy, a0, a1, n=12):
         return [(cx + r * math.cos(a0 + (a1 - a0) * k / n),
                  cy + r * math.sin(a0 + (a1 - a0) * k / n)) for k in range(n + 1)]
@@ -147,36 +115,48 @@ def rounded_rect(x0, y0, x1, y1, r):
     return pts, sx
 
 
-def cell_path(ox, oy, w_line, p, q, phase, fillet_r, arc_seg, perims=1, perim_overlap=0.2):
-    """ONE tag cell as one continuous polyline: perimeter ring(s), link inward, billiard net.
+def cell_path(ox, oy, w_line, overlap, fillet_r, arc_seg):
+    """ONE tag cell as one continuous stroke: the tag outline spiralling to its centre.
 
-    Ring 1's centerline sits half a line inside the outline. With perims=2 a SECOND ring runs
-    (1 - perim_overlap) lines further in, so the two beads overlap by perim_overlap and the
-    frame is a sealed band — Oleg, 2026-08-31, on the single-ring pieces: "we need perfert outer
-    line, make it overlap a little, we dont want a hole in there". The net's box sits 0.75 lines
-    inside the INNERMOST ring, bounces welded into it. Returns (pts, stats)."""
-    px0, py0 = ox + w_line / 2.0, oy + w_line / 2.0
-    px1, py1 = ox + TAG_W - w_line / 2.0, oy + TAG_H - w_line / 2.0
-    rc = max(1.1 * w_line - w_line / 2.0, 0.2)          # scad's face_r = 1.1*line_w, centerline
-    pitch = (1.0 - perim_overlap) * w_line              # ring-to-ring centerline distance
+    Concentric rounded-rect rings, each (1 - overlap) lines further in, joined ring-end to
+    next-ring-start at one seam column — so every straight run is EXACTLY axis-aligned and the
+    turn-to-turn pitch is one modal number send.py's S2 instrument can measure off the moves.
+    The outer turn is the sealed edge, the middle turns are the face, and the last pass collapses
+    onto the tag's midline. No crossings, so the sticker-side face has no bumps.
+
+    THE BILLIARD NET THIS REPLACES IS RETIRED ON THE PLATE'S WORD — Oleg, 2026-08-31: "nucleon
+    pointless. just spiral towards center." What the net bought (speed-holding 45deg legs for the
+    speed series) stopped mattering when the floor settled at 15 mm/s for adhesion; what it cost
+    stayed: crossing bumps on the face, V-gaps at the frame, and a strand pitch too irregular for
+    S2 to measure (dominance 0.22-0.25 vs the 0.70 bar — measured, recorded in git history with
+    the billiard's code, commit 7fd0666 and earlier)."""
+    pitch = (1.0 - overlap) * w_line
+    rc0 = max(1.1 * w_line - w_line / 2.0, 0.2)
     pts = []
-    sx_last = None
-    for r in range(perims):
-        inset = r * pitch
-        ring, sx = rounded_rect(px0 + inset, py0 + inset, px1 - inset, py1 - inset,
-                                max(rc - inset, 0.05))
-        pts += ring
-        sx_last = sx
-    lat_in = (perims - 1) * pitch + 0.75 * w_line       # net box inside the innermost ring
-    lx0, ly0 = px0 + lat_in, py0 + lat_in
-    lw, lh = (px1 - px0) - 2 * lat_in, (py1 - py0) - 2 * lat_in
-    net = billiard(lw, lh, p, q, phase)
-    entry = (lx0 + net[0][0], ly0 + net[0][1])
-    pts += [entry] + [(lx0 + x, ly0 + y) for x, y in net[1:]]
+    k = 0
+    while True:
+        inset = w_line / 2.0 + k * pitch
+        h_left = TAG_H - 2.0 * inset
+        w_left = TAG_W - 2.0 * inset
+        if h_left <= pitch or w_left <= pitch:
+            break
+        ring, sx = rounded_rect(ox + inset, oy + inset,
+                                ox + TAG_W - inset, oy + TAG_H - inset,
+                                max(rc0 - k * pitch, 0.05))
+        pts += ring         # ring closes on its own start; the implicit segment from this
+        k += 1              # ring's end to the next ring's start is the one seam step per turn
+    # the degenerate middle: whatever is left is a line along the tag's midline
+    inset = w_line / 2.0 + k * pitch
+    if TAG_W - 2.0 * inset > 0.8:
+        yc = oy + TAG_H / 2.0
+        xa, xb = ox + inset, ox + TAG_W - inset
+        if pts and math.dist(pts[-1], (xa, yc)) > math.dist(pts[-1], (xb, yc)):
+            xa, xb = xb, xa
+        pts += [(xa, yc), (xb, yc)]
     pts = smooth.fillet(pts, fillet_r, arc_seg=arc_seg)
     pts = machine.decimate(pts)
     length = sum(math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
-    return pts, {'len': length, 'verts': len(net), 'entry': entry}
+    return pts, {'len': length, 'turns': k, 'pitch': pitch}
 
 
 def clip_walls(zmid, shaft_d, fit_clear, wall):
@@ -184,17 +164,14 @@ def clip_walls(zmid, shaft_d, fit_clear, wall):
     plate's top: a PURE 45-DEGREE TRIANGLE from the floor, both walls leaning inward from layer 1
     until they meet.
 
-    THIS REPLACES THE LEGS+GABLE, ON THE PLATE'S WORD. The handoff rejected the pure triangle for
-    its dead corners (base 2*(1+sqrt2)*half_w vs 5.2mm for legs+gable) and the first pieces
-    printed the gable — Oleg, 2026-08-31, holding them: "for the top part make it triangle 45
-    deg, because now it is not good". The tent buys what the gable lacked: no vertical-to-roof
-    transition corner, and every layer overlaps the one below by the same 1 - lh/wall (70% at
-    0.8x0.24) from the first wall layer to the apex.
-
-    The inscribed clearance circle fixes the base: a 45-45 tent over a circle of radius
-    half_w = shaft/2 + fit_clear needs half-base B = half_w * (1 + sqrt2) — the same arithmetic
-    the handoff used to reject it. The tunnel INNERs stay the fit; the wall sits half a line
-    outside. Returns [] above the apex, [x] when the two lines have merged, else [-x, +x]."""
+    THIS REPLACED THE HANDOFF'S LEGS+GABLE ON THE PLATE'S WORD — Oleg, 2026-08-31: "for the top
+    part make it triangle 45 deg, because now it is not good". The handoff rejected the triangle
+    for its dead corners; his read of the printed gable outranks that. The tent buys constant
+    1 - lh/wall layer overlap (70% at 0.8x0.24) from the first wall layer to the apex, with no
+    leg-to-roof transition corner. The inscribed clearance circle fixes the base: half-base
+    B = (shaft/2 + fit_clear) * (1 + sqrt2), the handoff's own arithmetic. The tunnel INNER
+    profile stays the fit; the wall sits half a line outside. Returns [] above the apex, [x]
+    when the two lines have merged, else [-x, +x]."""
     half_w = shaft_d / 2.0 + fit_clear
     B = half_w * (1.0 + math.sqrt(2.0))
     xw = B + wall / 2.0 - zmid          # 45 degrees: in by one mm per mm up, from the floor
@@ -321,8 +298,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     arc_seg = max(0.25, v_eff / 220.0)
     e1s = [machine.layer1_rate(a.w1, h) for h in h1s]
     zbase = [round(press + (h - h1s[0]), 3) for h in h1s]   # each floor's commanded Z
-    cells = [cell_path(x0 + i * stride, oy, a.w1, a.p, a.q, a.phase, a.fillet, arc_seg,
-                       a.perims, a.perim_overlap)
+    cells = [cell_path(x0 + i * stride, oy, a.w1, a.overlap, a.fillet, arc_seg)
              for i in range(n)]
 
     # the wall layer schedule, shared by every tag (same shaft, same profile — only length varies)
@@ -340,8 +316,8 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     L = []
     w = L.append
     w(f"; HANGERTAG FULL x{n} — the LENGTHTEST as native pieces: tunnel lengths "
-      f"{a.clip_lens}mm left to right, {a.p}:{a.q} net floors {a.w1:g}mm wide at "
-      f"{','.join(f'{h:g}' for h in h1s)}mm"
+      f"{a.clip_lens}mm left to right, SPIRAL floors ({a.w1:g}mm lines, {a.overlap:.0%} overlap) "
+      f"at {','.join(f'{h:g}' for h in h1s)}mm"
       + (" — the floors ARE the next ladder rung set" if ladder else ""))
     w(f"; PRINTER={a.printer}")
     w(f"; CMD={' '.join(shlex.quote(s) for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])}")
@@ -387,8 +363,8 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
           f"{'A counted ladder may visit gaps nothing has proven; that is what it is for.' if ladder else 'The citation above is the license.'}")
     w(";")
     w("; ---------------- WHAT THIS IS ----------------")
-    w(f"; {n} complete hanger tags: a sealed net floor (sticker face down; the outer band is a")
-    w(f"; double ring overlapped {a.perim_overlap:.0%}) and the holder above it — a PURE 45deg")
+    w(f"; {n} complete hanger tags: a SOLID SPIRAL floor (sticker face down — the outline")
+    w(f"; spirals to the centre, every turn overlapping {a.overlap:.0%}) and the holder — a PURE 45deg")
     w(f"; TRIANGLE from the floor, half-base {B_tent:.2f}mm, ONE {a.wall:g}mm line per layer,")
     w(f"; {K} wall layers, apex ~{(K * a.layer_h):.1f}mm over the floor, every layer overlapping")
     w(f"; the one below by {100 * (1 - a.layer_h / a.wall):.0f}% from layer 1 to the tip.")
@@ -556,12 +532,6 @@ def main():
                          "makes the assumption cancellable rather than silent.")
     ap.add_argument("--layer-h", type=float, default=0.24,
                     help="the tag design's layer height (the plate IS one 0.24 layer).")
-    ap.add_argument("--p", type=int, default=3, help="billiard x-cycles; with q sets the net")
-    ap.add_argument("--q", type=int, default=8,
-                    help="billiard y-cycles. 3:8 in the tag's box runs the legs at ~45 deg, so "
-                         "every bounce is ~90 deg — no hairpins, the head holds speed.")
-    ap.add_argument("--phase", type=float, default=0.031,
-                    help="billiard phase; keeps fold families apart (asserted in billiard()).")
     ap.add_argument("--fillet", type=float, default=0.8,
                     help="bounce fillet radius, mm. sqrt(accel*r) is the speed a corner holds "
                          "(63 mm/s at 0.8/5000); past that the planner brakes locally, commanded "
@@ -603,12 +573,9 @@ def main():
                          "is bad on this suface\'. His word overrules the speed-is-not-a-lever "
                          "doctrine FOR THIS SURFACE; a declared \'; SPEED_LAYER1=\' regime, the "
                          "same seam zladder\'s half-speed layer 1 uses.")
-    ap.add_argument("--perims", type=int, default=2,
-                    help="perimeter rings. 2 since Oleg 2026-08-31: 'we need perfert outer line, "
-                         "make it overlap a little, we dont want a hole in there' — the second "
-                         "ring overlaps the first by --perim-overlap and seals the frame band.")
-    ap.add_argument("--perim-overlap", type=float, default=0.2,
-                    help="fraction of a line width the rings overlap (0.2 = 'a little').")
+    ap.add_argument("--overlap", type=float, default=0.2,
+                    help="fraction of a line width each spiral turn overlaps the previous "
+                         "(0.2 = Oleg's 'make it overlap a little, we dont want a hole').")
     ap.add_argument("--touch-mm", type=float, default=15.0,
                     help="mm of each tag's floor path laid at the TOUCHDOWN crawl (speed1/3) "
                          "before the floor's own speed takes over. Oleg, 2026-08-31: 'first "
@@ -702,14 +669,13 @@ def main():
 
     cells = []
     for i, h in enumerate(hts):
-        pts, st = cell_path(x0 + i * stride, oy, a.w1, a.p, a.q, a.phase, a.fillet, arc_seg,
-                            a.perims, a.perim_overlap)
+        pts, st = cell_path(x0 + i * stride, oy, a.w1, a.overlap, a.fillet, arc_seg)
         cells.append((pts, st))
 
     L = []
     w = L.append
     w(f"; HANGERTAG FLOOR — {n} tag cells ({TAG_W:g}x{TAG_H:g} outline from "
-      f"hanger-tags-handoff.zip), single-pass {a.p}:{a.q} billiard net at ONE speed "
+      f"hanger-tags-handoff.zip), each spiralling to its centre at ONE speed "
       f"{a.speed:g} mm/s, first-layer heights {a.heights} by offset")
     w(f"; PRINTER={a.printer}")
     w(f"; CMD={' '.join(shlex.quote(s) for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])}")
@@ -742,9 +708,10 @@ def main():
     w(";")
     w("; ---------------- WHAT THIS IS ----------------")
     w(f"; The hanger-tag PLATE (one {a.layer_h:g} layer, sticker face DOWN on the plate) as a")
-    w(f"; non-solid single-stroke net: perimeter + link + {a.p}:{a.q} billiard, ~45 deg legs,")
-    w(f"; ~90 deg filleted bounces (r={a.fillet:g}). Net path {cells[0][1]['len']:.0f}mm/cell, ")
-    w(f"; coverage ~{cells[0][1]['len'] * a.w1 / (TAG_W * TAG_H) * 100:.0f}% of the tag footprint.")
+    w(f"; single-stroke SPIRAL: the outline walks to the centre, {a.overlap:.0%} turn overlap, "
+      f"corners filleted r={a.fillet:g}.")
+    w(f"; Path {cells[0][1]['len']:.0f}mm/cell over {cells[0][1]['turns']} turns at "
+      f"{cells[0][1]['pitch']:.3f}mm pitch — a SOLID face, no crossings, no bumps.")
     w(f"; COMMANDED Z climbs with the cells from Z{press:.3f} (cell 1 IS the pressed press, R1's")
     w(f"; number); ONE SET_GCODE_OFFSET Z={zoff:.3f}, emitted before the prime, corrects the")
     w(f"; MEASURED (2026-08-06, pre-swap) Z-zero error {zerr:+.3f} for the whole file. If the")
@@ -820,8 +787,8 @@ def main():
 
         hop(pts[0][0], pts[0][1], f"to cell {i + 1} perimeter start")
         w(f"G1 F600 Z{zc[i]:.3f}")
-        w(f"; ---- cell {i + 1} net: perimeter + {a.p}:{a.q} billiard, one stroke, "
-          f"{st['len']:.0f}mm at {a.speed:g} mm/s")
+        w(f"; ---- cell {i + 1} spiral: {st['turns']} turns at {st['pitch']:.3f}mm pitch, one "
+          f"stroke, {st['len']:.0f}mm at {a.speed:g} mm/s")
         w(f"G1 F{f_body} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
           f"E{(E := E + math.dist(pts[0], pts[1]) * e1):.5f}")
         for j in range(2, len(pts)):
@@ -851,8 +818,8 @@ def main():
     print(out)
     print(f"  {n} tag cells, heights {a.heights} via commanded Z "
           f"{', '.join(f'{z:.3f}' for z in zc)} + one offset {zoff:.3f} against zerr {zerr:+.3f}")
-    print(f"  net {cells[0][1]['len']:.0f}mm/cell ({cells[0][1]['verts']} billiard verts), "
-          f"coverage ~{cells[0][1]['len'] * a.w1 / (TAG_W * TAG_H) * 100:.0f}%, "
+    print(f"  spiral {cells[0][1]['len']:.0f}mm/cell ({cells[0][1]['turns']} turns at "
+          f"{cells[0][1]['pitch']:.3f}mm pitch), "
           f"{vol:.2f}cm3 / {vol * 1.24:.1f}g total")
 
     # MEASURED FROM THE EMITTED FILE, never recomputed from the inputs (nucleon's discipline).
