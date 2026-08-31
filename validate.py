@@ -1600,12 +1600,33 @@ def check(path):
                       (re.match(r'M109 S(\d+)', _l.split(';')[0].strip()) for _l in _lines[_homes[0]:])
                       if m]
             _printt = max(_after) if _after else None
+        # A DECLARED COOL PROBE IS THE LEAK'S SEAM, NOT A HOLE. Oleg, 2026-08-31: "once nozel is
+        # 210 it starts to leak, so we need to alsways heat it outside of the printing are" — a
+        # hot G28 on that nozzle re-zeroes Z through a drool blob, an error 2-6x the thermal one
+        # this rule guards, and RANDOM where thermal is systematic. So a file may home cool ONLY
+        # by saying so: '; PROBE_TEMP=' must match the temp actually commanded before G28 (the
+        # stamped-but-not-applied failure is the one every declared regime here checks for), and
+        # an UNDECLARED cool probe fails exactly as before — that was solid.py's zero-adhesion
+        # accident and it stays refused.
+        _mpt = re.search(r'^; PROBE_TEMP=(\d+)', _rules_txt, re.M)
+        _probe_decl = int(_mpt.group(1)) if _mpt else None
         if _hot is not None and _printt is not None and _hot < _printt - 5:
-            problems.append(f"R7 probe temperature: G28 runs with the hotend commanded to {_hot}C "
-                            f"but the part prints at {_printt}C. The nozzle is shorter when it "
-                            f"probes, so Z zero is recorded high and the tip grows into the plate "
-                            f"-- roughly 0.046 mm per 80C, against a {machine.PRESS_HARD:g} mm "
-                            f"first layer. Probe at print temperature.")
+            if _probe_decl is not None and abs(_hot - _probe_decl) <= 1:
+                print(f"  R7: probes at a DECLARED {_hot}C against a {_printt}C print — the "
+                      f"leak-at-temp seam (drool on a hot probe outweighs ~0.046mm/80C of thermal "
+                      f"length). The height frame belongs to this probe temp; ladders re-measure it.")
+            elif _probe_decl is not None:
+                problems.append(f"R7 probe temperature: '; PROBE_TEMP={_probe_decl}' is declared "
+                                f"but G28 runs with the hotend commanded to {_hot}C — the "
+                                f"declaration and the commands disagree, and the moves are the "
+                                f"file.")
+            else:
+                problems.append(f"R7 probe temperature: G28 runs with the hotend commanded to {_hot}C "
+                                f"but the part prints at {_printt}C, and the file declares no "
+                                f"'; PROBE_TEMP='. The nozzle is shorter when it "
+                                f"probes, so Z zero is recorded high and the tip grows into the plate "
+                                f"-- roughly 0.046 mm per 80C, against a {machine.PRESS_HARD:g} mm "
+                                f"first layer. Probe at print temperature, or declare the cool probe.")
 
     # R4b FILL RATIO — the property "constant flow" was only ever a proxy for.
     # Raw flow equality and even deposition are the same thing ONLY when paths do not overlap.

@@ -256,6 +256,13 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     if h1s != sorted(h1s):
         sys.exit("REFUSING TO EMIT: floor heights must ascend with the tags, so commanded Z only "
                  "ever climbs across the row.")
+    if max(h1s) - min(h1s) > a.layer_h + 1e-9:
+        sys.exit(f"REFUSING TO EMIT: floor spread {max(h1s) - min(h1s):.2f}mm exceeds one layer "
+                 f"height ({a.layer_h:g}). Walls print layer-major across the row, so the lowest "
+                 f"tag's first wall layer must clear the tallest tag's floor — a wider sweep puts "
+                 f"a real descent under the global layer floor and validate's plough check fires "
+                 f"(measured on the 0.40-0.72 attempt, 2026-08-31). Sweep wider on a floor-only "
+                 f"ladder instead.")
     ladder = len(set(h1s)) >= 3
     if a.speed > machine.MAX_SPEED + 1e-9:
         sys.exit(f"REFUSING TO EMIT: {a.speed:g} mm/s on a full PIECE. The SPEED_OVERRIDE seam is "
@@ -280,9 +287,11 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     if speed1 > machine.MAX_SPEED + 1e-9:
         sys.exit(f"REFUSING TO EMIT: --speed1 {speed1:g} is above the north star.")
     f1 = round(speed1 * 60)
+    touch_v = speed1 / 3.0
+    f_touch = round(touch_v * 60)
     e_wall = a.wall * a.layer_h / A_FIL
     flow_wall = a.wall * a.layer_h * a.speed
-    flows = [a.w1 * h * speed1 for h in h1s] + [flow_wall]
+    flows = [a.w1 * h * speed1 for h in h1s] + [a.w1 * h1s[0] * touch_v, flow_wall]
     f_body = round(a.speed * 60)
     travel_f = round(machine.MACHINE_MAX_SPEED * 60)
 
@@ -333,12 +342,16 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         w(f"; FLOW=VARIABLE:{round(_qlo, 3):g}..{round(_qhi, 3):g}")
     w(f"; SPEED={a.speed:.4f}")
     if abs(speed1 - a.speed) > 1e-9:
-        w(f"; SPEED_LAYER1={speed1:.4f}")
+        w(f"; SPEED_FLOOR={speed1:.4f}")
         w(f";   way slower than the {a.speed:g} body BY INSTRUCTION — Oleg 2026-08-31: 'make "
           f"first layer way slower, adhestion is bad on this suface'. The floor dwells; the "
           f"walls do not need to.")
+        w(f"; SPEED_LAYER1={touch_v:.4f}")
+        w(f";   the TOUCHDOWN crawl: the first {a.touch_mm:g}mm of every floor at speed1/3 — "
+          f"Oleg 2026-08-31: 'first second of touching the plate should have x3 slowdown'.")
     w(f"; PRESSED_LAYER1={press:g}")
     w(f"; PRINT_TEMP={temp}")
+    w(f"; PROBE_TEMP={a.probe_temp}")
     w(f"; bead {a.wall:g}x{a.layer_h:g}")
     w(f"; FLOW_DERATE=the clip wall IS one {a.wall:g}x{a.layer_h:g} line — the tag's whole design "
       f"(hanger-tags-handoff.zip) — so {flow_wall:g} mm3/s at the {a.speed:g} mm/s north star is "
@@ -383,13 +396,20 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     w("M82")
     w("G90")
     w(f"M140 S{bed:.0f}")
-    w(f"M104 S{temp}")
+    w(f"; PROBE AT {a.probe_temp}C, NOT {temp} — at 210 this nozzle LEAKS (Oleg, 2026-08-31), so a")
+    w("; hot G28 re-zeroes Z through a drool blob right after the machine's own clean 140C mesh.")
+    w(f"M104 S{a.probe_temp}")
     machine.home(w, a.printer, calibrate=a.calibrate)
     w("SET_GCODE_OFFSET Z=0                 ; clear whatever the last job left")
     w(f"SET_GCODE_OFFSET Z={zoff:.3f} MOVE=0   ; commanded Z + this + the {zerr:+.3f} machine "
       f"error = tag 1's floor at {h1s[0]:g} (taller floors climb by commanded Z)")
     w(f"M190 S{bed:.0f}")
+    w("; heat to print temp OUTSIDE the printing area, at the machine's own chute, then wipe the")
+    w("; heat-up drool off mechanically. Their own START_PRINT does exactly this. Bare lines —")
+    w("; Creality's custom commands eat inline comments (the key514 lesson).")
+    w("BOX_GO_TO_EXTRUDE_POS")
     w(f"M109 S{temp}")
+    w("BOX_NOZZLE_CLEAN")
     w("M107                                 ; fans OFF for layer 1 — the plate weld is the job")
     for line in machine.aux_fans(a.printer, 0.0):
         w(line)
@@ -421,14 +441,25 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
             hop(ax, ay, f"to digit {i + 1} segment '{s}'", zbase[-1] + 1.0)
             w(f"G1 F600 Z{zb:.3f}")
             E += math.hypot(bx_ - ax, by_ - ay) * e1
-            w(f"G1 F{f1} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
+            w(f"G1 F{f_touch} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
         hop(pts[0][0], pts[0][1], f"to tag {i + 1} net", zbase[-1] + 1.0)
         w(f"G1 F600 Z{zb:.3f}")
-        w(f"G1 F{f1} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
+        w(f"; touchdown: first {a.touch_mm:g}mm of this floor at {touch_v:g} mm/s (x3 slowdown), "
+          f"then {speed1:g}")
+        cum = 0.0
+        slow = True
+        w(f"G1 F{f_touch} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
           f"E{(E := E + math.dist(pts[0], pts[1]) * e1):.5f}")
+        cum += math.dist(pts[0], pts[1])
         for j in range(2, len(pts)):
-            E += math.dist(pts[j - 1], pts[j]) * e1
-            w(f"G1 X{pts[j][0]:.3f} Y{pts[j][1]:.3f} E{E:.5f}")
+            d = math.dist(pts[j - 1], pts[j])
+            E += d * e1
+            if slow and cum >= a.touch_mm:
+                slow = False
+                w(f"G1 F{f1} X{pts[j][0]:.3f} Y{pts[j][1]:.3f} E{E:.5f}")
+            else:
+                w(f"G1 X{pts[j][0]:.3f} Y{pts[j][1]:.3f} E{E:.5f}")
+            cum += d
 
     _fan = int(round(machine.fan_for(material, machine.FAN_MAX.get(material, 0.2)) * 255))
     w(f"M106 S{_fan}      ; floors have bonded — {material}'s capped cooling for the walls")
@@ -480,12 +511,12 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     # A DECLARED SECOND REGIME IS NOT A VIOLATION, and a summary that shouts R3 at its own
     # '; SPEED_LAYER1=' is a summary that teaches the reader to ignore the shout. Undeclared
     # extras still shout; validate.py stays the authority either way.
-    _declared = {round(a.speed, 1), round(speed1, 1)}
+    _declared = {round(a.speed, 1), round(speed1, 1), round(touch_v, 1)}
     _extra = [s for s in spds if s not in _declared]
     print(f"  MEASURED in the file: {'/'.join(f'{s:g}' for s in spds)} mm/s over {moves} "
           f"extruding moves"
-          + (f"   (floors {speed1:g}, walls {a.speed:g} — two DECLARED regimes)"
-             if len(spds) > 1 and not _extra else "")
+          + (f"   (touchdown {touch_v:g}, floors {speed1:g}, walls {a.speed:g} — DECLARED "
+             f"regimes)" if len(spds) > 1 and not _extra else "")
           + (f"   !! UNDECLARED SPEED(S) {_extra} — R3 violation" if _extra else ""))
     print(f"  peak implied flow {wflow:.1f} mm3/s")
     return 0
@@ -548,12 +579,14 @@ def main():
     ap.add_argument("--shaft", type=float, default=4.6,
                     help="shaft diameter the tunnel swallows (std bore, hanger-tag.scad clip_id)")
     ap.add_argument("--fit-clear", type=float, default=0.3, help="radial clearance, scad's number")
-    ap.add_argument("--wall", type=float, default=0.4,
-                    help="clip wall, ONE line per layer. DEVIATES from the handoff's 0.30 with the "
-                         "reason recorded: 0.30 is under this 0.4 orifice (the house floor — melt "
-                         "necks below the hole), and 0.4 lifts the 45deg roof's layer-to-layer "
-                         "overlap from 20%% to 40%% — the handoff's own #1 open risk. The tunnel "
-                         "INNER profile is untouched; the wall grows outward only.")
+    ap.add_argument("--wall", type=float, default=0.8,
+                    help="clip wall, ONE line per layer. 0.8 = 2x the 0.4 the first pieces "
+                         "printed with — Oleg, 2026-08-31, holding them: 'for the holder the "
+                         "fillament volume needs to be 2x. cuirrently structure do not hold'. A "
+                         "0.4 orifice spreads 0.8 at a 0.24 gap (the house wide-bead trick), roof "
+                         "overlap rises to 70%%, and the tunnel INNER profile stays untouched; "
+                         "the wall grows outward only. (The handoff's 0.30 is under the orifice "
+                         "and was never printable here.)")
     ap.add_argument("--speed1", type=float, default=None,
                     help="FIRST-LAYER speed for full-piece mode, mm/s (default: --speed). "
                          "Oleg, 2026-08-31, after the full plate\'s floor failed to grip the "
@@ -561,6 +594,18 @@ def main():
                          "is bad on this suface\'. His word overrules the speed-is-not-a-lever "
                          "doctrine FOR THIS SURFACE; a declared \'; SPEED_LAYER1=\' regime, the "
                          "same seam zladder\'s half-speed layer 1 uses.")
+    ap.add_argument("--touch-mm", type=float, default=15.0,
+                    help="mm of each tag's floor path laid at the TOUCHDOWN crawl (speed1/3) "
+                         "before the floor's own speed takes over. Oleg, 2026-08-31: 'first "
+                         "second of touching the plate should have x3 slowdown' — at 5 mm/s this "
+                         "default is ~3 s of first contact per tag.")
+    ap.add_argument("--probe-temp", type=int, default=140,
+                    help="hotend temp DURING G28/probing. 140 is Creality's own g28_ext_temp — "
+                         "PLA is firm there, and Oleg 2026-08-31: 'once nozel is 210 it starts to "
+                         "leak, so we need to alsways heat it outside of the printing are'. Full "
+                         "print temp is reached at the machine's chute (BOX_GO_TO_EXTRUDE_POS) "
+                         "and the drool wiped (BOX_NOZZLE_CLEAN) before the first line. This also "
+                         "puts our Z zero in the SAME thermal frame as their injected 140C mesh.")
     ap.add_argument("--calibrate", action="store_true",
                     help="run a FULL bed-mesh probe before printing instead of loading the "
                          "saved mesh — the first print after a restart or nozzle change "
@@ -666,6 +711,7 @@ def main():
           f"of speed\". A coupon measuring speed, never a part.")
     w(f"; PRESSED_LAYER1={press:g}")
     w(f"; PRINT_TEMP={temp}")
+    w(f"; PROBE_TEMP={a.probe_temp}")
     w(f"; bead {a.w1:g}x{a.layer_h:g}")
     w(f"; NOZZLE={a.nozzle:g} ASSUMED, not measured: the handoff tag is cut for 0.30mm lines (a "
       f"0.4-nozzle profile) and 0.6 = 1.5x a 0.4 orifice. machine.NOZZLE still records the 0.8 "
@@ -703,13 +749,20 @@ def main():
     w("M82")
     w("G90")
     w(f"M140 S{bed:.0f}")
-    w(f"M104 S{temp}")                      # R7: nozzle commanded hot BEFORE the probe
+    w(f"; PROBE AT {a.probe_temp}C, NOT {temp} — at 210 this nozzle LEAKS (Oleg, 2026-08-31), so a")
+    w("; hot G28 re-zeroes Z through a drool blob right after the machine's own clean 140C mesh.")
+    w(f"M104 S{a.probe_temp}")
     machine.home(w, a.printer, calibrate=a.calibrate)
     w("SET_GCODE_OFFSET Z=0                 ; clear whatever the last job or a hand command left")
     w(f"SET_GCODE_OFFSET Z={zoff:.3f} MOVE=0   ; the ONE correction: commanded Z + this + the "
       f"{zerr:+.3f} machine error = the cell's labelled height")
     w(f"M190 S{bed:.0f}")
+    w("; heat to print temp OUTSIDE the printing area, at the machine's own chute, then wipe the")
+    w("; heat-up drool off mechanically. Their own START_PRINT does exactly this. Bare lines —")
+    w("; Creality's custom commands eat inline comments (the key514 lesson).")
+    w("BOX_GO_TO_EXTRUDE_POS")
     w(f"M109 S{temp}")
+    w("BOX_NOZZLE_CLEAN")
     w("M107                                 ; fans OFF — single layer, the plate weld is the job")
     for line in machine.aux_fans(a.printer, 0.0):
         w(line)
