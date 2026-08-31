@@ -472,8 +472,16 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     print(f"  {vol:.2f}cm3 / {vol * 1.24:.1f}g  roof overlap "
           f"{100 * (1 - a.layer_h / a.wall):.0f}% (handoff's 0.30 wall gave 20%)")
     spds, moves, wflow = measured_speeds(out)
+    # A DECLARED SECOND REGIME IS NOT A VIOLATION, and a summary that shouts R3 at its own
+    # '; SPEED_LAYER1=' is a summary that teaches the reader to ignore the shout. Undeclared
+    # extras still shout; validate.py stays the authority either way.
+    _declared = {round(a.speed, 1), round(speed1, 1)}
+    _extra = [s for s in spds if s not in _declared]
     print(f"  MEASURED in the file: {'/'.join(f'{s:g}' for s in spds)} mm/s over {moves} "
-          f"extruding moves" + ("   !! MORE THAN ONE SPEED — R3 violation" if len(spds) > 1 else ""))
+          f"extruding moves"
+          + (f"   (floors {speed1:g}, walls {a.speed:g} — two DECLARED regimes)"
+             if len(spds) > 1 and not _extra else "")
+          + (f"   !! UNDECLARED SPEED(S) {_extra} — R3 violation" if _extra else ""))
     print(f"  peak implied flow {wflow:.1f} mm3/s")
     return 0
 
