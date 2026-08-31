@@ -247,10 +247,20 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     if a.h1 is None:
         sys.exit("REFUSING TO EMIT: full pieces need --h1, the ladder cell Oleg read as welded. "
                  "The whole point of the ladder was to make this number a citation, not a guess.")
+    h1s = [float(s) for s in str(a.h1).split(",") if s.strip()]
+    if len(h1s) == 1:
+        h1s = h1s * n
+    if len(h1s) != n:
+        sys.exit(f"REFUSING TO EMIT: {len(h1s)} floor heights for {n} tags — one each, or one "
+                 f"for all.")
+    if h1s != sorted(h1s):
+        sys.exit("REFUSING TO EMIT: floor heights must ascend with the tags, so commanded Z only "
+                 "ever climbs across the row.")
+    ladder = len(set(h1s)) >= 3
     if a.speed > machine.MAX_SPEED + 1e-9:
         sys.exit(f"REFUSING TO EMIT: {a.speed:g} mm/s on a full PIECE. The SPEED_OVERRIDE seam is "
                  f"for measurement coupons; a part never carries it (machine.MAX_SPEED).")
-    proven = any(abs(a.h1 - p[0]) <= 0.005 and abs(a.w1 - p[1]) <= 0.05
+    proven = any(abs(h1s[0] - p[0]) <= 0.005 and abs(a.w1 - p[1]) <= 0.05
                  for p in machine.PROVEN_LAYER1.get(a.printer, []))
     coupon = None
     if a.coupon:
@@ -260,19 +270,19 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         if not os.path.isfile(cpath) and not os.path.isfile(cf):
             sys.exit(f"REFUSING TO EMIT: cited coupon '{cf}' is not in {a.out}/ — a citation to a "
                      f"file nobody can open proves nothing (R9's own clause).")
-    if not proven and coupon is None:
-        sys.exit(f"REFUSING TO EMIT: ({a.h1:g}, {a.w1:g}) is not in PROVEN_LAYER1[{a.printer!r}] "
+    if not proven and coupon is None and not ladder:
+        sys.exit(f"REFUSING TO EMIT: ({h1s[0]:g}, {a.w1:g}) is not in PROVEN_LAYER1[{a.printer!r}] "
                  f"and no --coupon cites the ladder cell that welded. R9 would refuse the file; "
-                 f"refusing here says why sooner.")
+                 f"refusing here says why sooner. (A comma list of 3+ floors is its own ladder.)")
 
-    zoff = round(a.h1 - press - zerr, 4)
+    zoff = round(h1s[0] - press - zerr, 4)
     speed1 = a.speed1 if a.speed1 else a.speed
     if speed1 > machine.MAX_SPEED + 1e-9:
         sys.exit(f"REFUSING TO EMIT: --speed1 {speed1:g} is above the north star.")
     f1 = round(speed1 * 60)
     e_wall = a.wall * a.layer_h / A_FIL
     flow_wall = a.wall * a.layer_h * a.speed
-    flow_l1 = a.w1 * a.h1 * a.speed
+    flows = [a.w1 * h * speed1 for h in h1s] + [flow_wall]
     f_body = round(a.speed * 60)
     travel_f = round(machine.MACHINE_MAX_SPEED * 60)
 
@@ -288,7 +298,8 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
 
     v_eff = min(a.speed, math.sqrt(machine.ACCEL * a.fillet))
     arc_seg = max(0.25, v_eff / 220.0)
-    e1 = machine.layer1_rate(a.w1, a.h1)
+    e1s = [machine.layer1_rate(a.w1, h) for h in h1s]
+    zbase = [round(press + (h - h1s[0]), 3) for h in h1s]   # each floor's commanded Z
     cells = [cell_path(x0 + i * stride, oy, a.w1, a.p, a.q, a.phase, a.fillet, arc_seg)
              for i in range(n)]
 
@@ -308,13 +319,18 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     L = []
     w = L.append
     w(f"; HANGERTAG FULL x{n} — the LENGTHTEST as native pieces: tunnel lengths "
-      f"{a.clip_lens}mm left to right, floor = the {a.p}:{a.q} net at the LADDER-PROVEN "
-      f"{a.h1:g}mm x {a.w1:g}mm weld (cell 6, read {coupon[1] if coupon else 'PROVEN_LAYER1'})")
+      f"{a.clip_lens}mm left to right, {a.p}:{a.q} net floors {a.w1:g}mm wide at "
+      f"{','.join(f'{h:g}' for h in h1s)}mm"
+      + (" — the floors ARE the next ladder rung set" if ladder else ""))
     w(f"; PRINTER={a.printer}")
     w(f"; CMD={' '.join(shlex.quote(s) for s in [os.path.basename(sys.argv[0])] + sys.argv[1:])}")
     w(f"; MATERIAL={material}")
     w(f"; LAYER_H={a.layer_h:g}")
-    w(f"; FLOW={flow_wall:g}")
+    _qlo, _qhi = min(flows), max(flows)
+    if abs(_qlo - _qhi) < 1e-9:
+        w(f"; FLOW={_qlo:g}")
+    else:
+        w(f"; FLOW=VARIABLE:{round(_qlo, 3):g}..{round(_qhi, 3):g}")
     w(f"; SPEED={a.speed:.4f}")
     if abs(speed1 - a.speed) > 1e-9:
         w(f"; SPEED_LAYER1={speed1:.4f}")
@@ -331,15 +347,19 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
       f"welded (cell 6 read by Oleg), and an 0.8 orifice cannot lay a 0.6 bead at all. "
       f"machine.NOZZLE still carries the pre-swap 0.8 until he says the word at the machine.")
     if coupon:
-        w(f"; COUPON={coupon[0]} h1={a.h1:.3f} w1={a.w1:.2f} verdict=welded read={coupon[1]}")
-    w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY floor, metered for the {a.h1:g} gap.")
+        w(f"; COUPON={coupon[0]} h1={h1s[0]:.3f} w1={a.w1:.2f} verdict=welded read={coupon[1]}")
+    if ladder:
+        w("; Z_LADDER=1")
+    w(f"; LAYER1_WIDTH={a.w1:.2f}mm landed in EVERY floor, cell 1 metered for the {h1s[0]:g} gap"
+      + (f"; THE FLOOR GAP IS ALSO SWEPT {min(h1s):g}..{max(h1s):g} by commanded Z, one height "
+         f"per tag, so the plate that delivers the pieces also answers which floor grips"
+         if ladder else "."))
     if zoff > 0:
         w(f"; OFFSET +{zoff:.3f} SITS ABOVE THE MACHINE'S OWN ZERO, and that is the PLATE's word, "
           f"not a guess: machine.zoff_for refuses positive for parts because an uncorrected "
-          f"machine was the standing defect — but Oleg read the 2026-08-31 ladder and the cell "
-          f"that welded best is THIS one, {a.h1:g}mm in the pre-swap {zerr:+.3f} frame. Same "
-          f"commanded-plus-offset Z reproduces the same physical gap whatever the swap did to the "
-          f"true zero. The citation above is the license.")
+          f"machine was the standing defect — but every 2026-08-31 read pointed above the zero "
+          f"(the clean-nozzle strip's best cell was its TOP rung), so the floors explore up. "
+          f"{'A counted ladder may visit gaps nothing has proven; that is what it is for.' if ladder else 'The citation above is the license.'}")
     w(";")
     w("; ---------------- WHAT THIS IS ----------------")
     w(f"; {n} complete hanger tags: one {a.layer_h:g} net floor (sticker face down, ~57% net) and")
@@ -367,7 +387,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     machine.home(w, a.printer, calibrate=a.calibrate)
     w("SET_GCODE_OFFSET Z=0                 ; clear whatever the last job left")
     w(f"SET_GCODE_OFFSET Z={zoff:.3f} MOVE=0   ; commanded Z + this + the {zerr:+.3f} machine "
-      f"error = the ladder's welded {a.h1:g}")
+      f"error = tag 1's floor at {h1s[0]:g} (taller floors climb by commanded Z)")
     w(f"M190 S{bed:.0f}")
     w(f"M109 S{temp}")
     w("M107                                 ; fans OFF for layer 1 — the plate weld is the job")
@@ -375,7 +395,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         w(line)
     w("G92 E0")
     machine.prime(w, printer=a.printer, z=press,
-                  rate=e1, feed=f1, travel_feed=travel_f,
+                  rate=e1s[0], feed=f1, travel_feed=travel_f,
                   avoid=(("rect", x0 - 2, oy - 2, x0 + row_w + 2, dy + dh + 2),),
                   near=(x0, oy))
     w("; BODY_START")
@@ -389,19 +409,21 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     # ---- layer 1: every tag's digit and net, all at the one proven gap
     for i in range(n):
         pts, st = cells[i]
+        e1 = e1s[i]
+        zb = zbase[i]
         dx = x0 + i * stride + (TAG_W - dw) / 2.0
-        w(f"; ---- layer 1, tag {i + 1}: digit + net at commanded Z{press:.3f} "
-          f"({a.w1 * a.h1:.4f} mm2/mm)")
+        w(f"; ---- layer 1, tag {i + 1}: digit + net at commanded Z{zb:.3f}, floor "
+          f"{h1s[i]:.3f}mm real ({a.w1 * h1s[i]:.4f} mm2/mm)")
         for s in DIGIT[str(i + 1)]:
             u0, v0, u1, v1 = SEG[s]
             ax, ay = dx + u0 * dw, dy + v0 * dh
             bx_, by_ = dx + u1 * dw, dy + v1 * dh
-            hop(ax, ay, f"to digit {i + 1} segment '{s}'", press + 1.0)
-            w(f"G1 F600 Z{press:.3f}")
+            hop(ax, ay, f"to digit {i + 1} segment '{s}'", zbase[-1] + 1.0)
+            w(f"G1 F600 Z{zb:.3f}")
             E += math.hypot(bx_ - ax, by_ - ay) * e1
             w(f"G1 F{f1} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
-        hop(pts[0][0], pts[0][1], f"to tag {i + 1} net", press + 1.0)
-        w(f"G1 F600 Z{press:.3f}")
+        hop(pts[0][0], pts[0][1], f"to tag {i + 1} net", zbase[-1] + 1.0)
+        w(f"G1 F600 Z{zb:.3f}")
         w(f"G1 F{f1} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
           f"E{(E := E + math.dist(pts[0], pts[1]) * e1):.5f}")
         for j in range(2, len(pts)):
@@ -413,17 +435,18 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
 
     # ---- the clip, layer-major across the row
     for k in range(1, K + 1):
-        ck = round(press + k * a.layer_h, 3)
         xs = sched[k - 1]
-        w(f"; ---- wall layer {k} of {K} at commanded Z{ck:.3f}: "
+        w(f"; ---- wall layer {k} of {K}: "
           f"{'legs' if (k - 0.5) * a.layer_h <= leg_h else 'roof'} at x "
-          f"{','.join(f'{x:+.2f}' for x in xs)}")
+          f"{','.join(f'{x:+.2f}' for x in xs)} (commanded Z per tag: its floor + {k}*{a.layer_h:g})")
+        lift = zbase[-1] + k * a.layer_h + 0.8
         for i in range(n):
+            ck = round(zbase[i] + k * a.layer_h, 3)
             cx = x0 + i * stride + TAG_W / 2.0
             half = lens[i] / 2.0
             for m, x in enumerate(xs):
                 ya, yb = (yc - half, yc + half) if (k + m) % 2 == 0 else (yc + half, yc - half)
-                hop(cx + x, ya, f"to tag {i + 1} wall x{x:+.2f}", ck + 0.8)
+                hop(cx + x, ya, f"to tag {i + 1} wall x{x:+.2f}", lift)
                 w(f"G1 F600 Z{ck:.3f}")
                 E += lens[i] * e_wall
                 w(f"G1 F{f_body} X{cx + x:.3f} Y{yb:.3f} E{E:.5f} ; wall")
@@ -435,15 +458,17 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     w(f"G0 X10 Y{by - 10:.0f} F{travel_f}")
     w("M84")
 
+    _htag = f"{h1s[0]:g}" if len(set(h1s)) == 1 else f"{min(h1s):g}-{max(h1s):g}"
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), a.out,
                        f"hangertag_full{n}_{a.printer}_{material}_w{a.w1:g}_wall{a.wall:g}"
-                       f"_h1-{a.h1:g}_len{max(lens):g}-{min(lens):g}_v{a.speed:g}.gcode")
+                       f"_h1-{_htag}_len{max(lens):g}-{min(lens):g}_v{a.speed:g}.gcode")
     machine.emit_gcode(out, "\n".join(L) + "\n")
     vol = E * A_FIL / 1000.0
     print(out)
-    print(f"  {n} FULL tags, tunnels {a.clip_lens}mm, floor {a.h1:g}x{a.w1:g} "
-          f"(offset {zoff:+.3f} vs zerr {zerr:+.3f}), wall {a.wall:g}x{a.layer_h:g}, "
-          f"{K + 1} layers, apex ~{K * a.layer_h + a.h1:.1f}mm")
+    print(f"  {n} FULL tags, tunnels {a.clip_lens}mm, floors "
+          f"{','.join(f'{h:g}' for h in h1s)}x{a.w1:g} at {speed1:g} mm/s "
+          f"(offset {zoff:+.3f} vs zerr {zerr:+.3f}), wall {a.wall:g}x{a.layer_h:g} at "
+          f"{a.speed:g}, {K + 1} layers")
     print(f"  {vol:.2f}cm3 / {vol * 1.24:.1f}g  roof overlap "
           f"{100 * (1 - a.layer_h / a.wall):.0f}% (handoff's 0.30 wall gave 20%)")
     spds, moves, wflow = measured_speeds(out)
@@ -497,8 +522,13 @@ def main():
                          "holder go'). Every floor prints at ONE --h1, the clip walls stack above, "
                          "layer-major across the row so the head never returns down past a "
                          "standing part.")
-    ap.add_argument("--h1", type=float, default=None,
-                    help="full-piece floor gap, mm — the ladder cell Oleg read as welded.")
+    ap.add_argument("--h1", default=None,
+                    help="full-piece floor gap, mm — one value (the ladder cell Oleg read as "
+                         "welded, cited via --coupon), or a comma list ONE PER TAG, ascending: "
+                         "the floors then form their own counted Z ladder ('; Z_LADDER=1'), for "
+                         "the state where the frame moved again and Oleg wants pieces, not "
+                         "another bare measuring strip (2026-08-31: 'i asked to print whole "
+                         "pieces').")
     ap.add_argument("--coupon", default=None,
                     help="R9 citation '<coupon-file>:<YYYY-MM-DD>' — the ladder plate and the day "
                          "Oleg read it. Required when (--h1, --w1) is not in PROVEN_LAYER1.")
