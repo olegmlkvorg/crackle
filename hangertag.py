@@ -226,8 +226,15 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     apex and then descending to tag 2's floor 32mm away would drive the heater block through the
     finished part. Z here only ever climbs; between strokes the head hops LIFTED and '; HOP'
     tagged, so the no-travel rule's licensed exception is the only travel in the file."""
+    # lines: 1 = single stroke, 2 = two separate strokes, 0 = CLOSED LOOP — two passes joined
+    # by end turnarounds, ONE stroke, zero free ends. The loop is 2026-08-31's structural lesson:
+    # the grid's best triangle was the SINGLE line, and what distinguished the losers was not
+    # material but FREE ENDS — d08's two blades had four unbraced ends and a hop between them.
+    # A loop closes each wall slab on itself (NOT around the tunnel — the mouths stay open for
+    # the hook); the end turns brace the blade the way a slicer's paired perimeters do.
     WALL_MENU = {'s08': (1, 0.8, 0.0), 'd08': (2, 0.8, 0.64), 'd08t': (2, 0.8, 0.48),
-                 's12': (1, 1.2, 0.0), 'd12': (2, 1.2, 0.96)}
+                 's12': (1, 1.2, 0.0), 'd12': (2, 1.2, 0.96),
+                 'l05': (0, 0.5, 0.35), 'l06': (0, 0.6, 0.40)}
     lens = [float(s) for s in a.clip_lens.split(",") if s.strip()]
     n = len(lens)
     fills = [float(s) for s in a.fills.split(",")] if a.fills else None
@@ -238,6 +245,11 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     if len(wcodes) != n or any(c not in WALL_MENU for c in wcodes):
         sys.exit(f"REFUSING TO EMIT: --walls needs {n} codes from {sorted(WALL_MENU)}; "
                  f"got {wcodes}.")
+    roofs = [s.strip() for s in a.roofs.split(",")] if a.roofs else ['tent'] * n
+    if len(roofs) == 1:
+        roofs = roofs * n
+    if len(roofs) != n or any(r not in ('tent', 'flat') for r in roofs):
+        sys.exit(f"REFUSING TO EMIT: --roofs needs {n} of tent|flat; got {roofs}.")
     if not 1 <= n <= 9:
         sys.exit(f"REFUSING TO EMIT: {n} clip lengths; 1..9 tags fit the digit labels.")
     if any(l <= 0 or l > TAG_H - 1.0 for l in lens):
@@ -326,17 +338,29 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     cells = [cell_path(x0 + i * stride, oy, a.w1, a.overlap, a.fillet, arc_seg)
              for i in range(n)]
 
-    # the wall layer schedule, shared by every tag (same shaft, same profile — only length varies)
+    # PER-TAG layer plan: tent tags follow the 45deg profile; flat tags run vertical walls to
+    # the clearance height, then ONE bridged roof layer and ONE top layer. Vertical clearance is
+    # the shaft plus its radial clearance above the floor; the slot the roof spans is the tunnel
+    # width, well inside the 16.8mm this machine has held taut.
+    half_w = a.shaft / 2.0 + a.fit_clear
+    B_tent = half_w * (1.0 + math.sqrt(2.0))
+    xw_flat = half_w + a.wall / 2.0
+    K_v = math.ceil((a.shaft + a.fit_clear) / a.layer_h)          # vertical wall layers
+    def plan(i, k):
+        """What tag i prints at wall layer k: ('walls', xs) | ('bridge',) | ('top',) | None."""
+        if roofs[i] == 'tent':
+            xs = clip_walls((k - 0.5) * a.layer_h, a.shaft, a.fit_clear, a.wall)
+            return ('walls', xs) if xs else None
+        if k <= K_v:
+            return ('walls', [-xw_flat, xw_flat])
+        if k == K_v + 1:
+            return ('bridge',)
+        if k == K_v + 2:
+            return ('top',)
+        return None
     K = 0
-    sched = []
-    while True:
-        zmid = (K + 0.5) * a.layer_h
-        xs = clip_walls(zmid, a.shaft, a.fit_clear, a.wall)
-        if not xs:
-            break
+    while any(plan(i, K + 1) for i in range(n)):
         K += 1
-        sched.append(xs)
-    B_tent = (a.shaft / 2.0 + a.fit_clear) * (1.0 + math.sqrt(2.0))
 
     L = []
     w = L.append
@@ -367,7 +391,8 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         w(f"; RETRACT={a.retract:g}")
     w(f"; PRINT_TEMP={temp}")
     w(f"; PROBE_TEMP={a.probe_temp}")
-    w(f"; bead {a.wall:g}x{a.layer_h:g}")
+    _bw_stamp = wall_geo[0][1] if len({g2[1] for g2 in wall_geo}) == 1 else a.wall
+    w(f"; bead {_bw_stamp:g}x{a.layer_h:g}")
     w(f"; FLOW_DERATE=the clip wall IS one {a.wall:g}x{a.layer_h:g} line — the tag's whole design "
       f"(hanger-tags-handoff.zip) — so {flow_wall:g} mm3/s at the {a.speed:g} mm/s north star is "
       f"the operating point. Widening the bead would thicken a wall whose thickness is the part.")
@@ -493,44 +518,95 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
                 w(f"G1 X{pts[j][0]:.3f} Y{pts[j][1]:.3f} E{E:.5f}")
             cum += d
 
-    _fan = int(round(machine.fan_for(material, machine.FAN_MAX.get(material, 0.2)) * 255))
-    w(f"M106 S{_fan}      ; floors have bonded — {material}'s capped cooling for the walls")
+    # FULL FAN FOR THE WALLS — Oleg 2026-08-31: "lets use fans more". The 20% PLA cap is scoped
+    # to fat pressed beads (machine.FAN_MAX note); a sub-millimetre wall stays molten without air
+    # and smears — every slicer runs this feature class at 100%.
+    w("M106 S255      ; floors have bonded — FULL cooling for the single-line walls")
 
-    # ---- the holders, layer-major across the row; per-tag wall STRUCTURE from --walls
+    # ---- the holders, layer-major across the row; per-tag structure from --walls/--roofs
     for k in range(1, K + 1):
-        xs = sched[k - 1]
-        w(f"; ---- wall layer {k} of {K}: 45deg tent at x "
-          f"{','.join(f'{x:+.2f}' for x in xs)} (commanded Z per tag: its floor + {k}*{a.layer_h:g})")
+        w(f"; ---- wall layer {k} of {K} (commanded Z per tag: its floor + {k}*{a.layer_h:g})")
         lift = zbase[-1] + k * a.layer_h + 0.8
         for i in range(n):
+            step = plan(i, k)
+            if step is None:
+                continue
             ck = round(zbase[i] + k * a.layer_h, 3)
             cx = x0 + i * stride + TAG_W / 2.0
             half = lens[i] / 2.0
             w_lines, w_wd, w_gap = wall_geo[i]
             ew = w_wd * a.layer_h / A_FIL
             first_of_layer = True
-            for m, x in enumerate(xs):
-                passes = [x]
-                if w_lines > 1 and abs(x) - w_gap > w_wd / 2.0:
-                    passes.append(x - w_gap if x > 0 else x + w_gap)
-                for x2 in passes:
+
+            def stroke(x2, ya, yb, feed, tag=' ; wall'):
+                nonlocal E
+                E += abs(yb - ya) * ew
+                w(f"G1 F{feed} X{x2:.3f} Y{yb:.3f} E{E:.5f}{tag}")
+
+            if step[0] == 'walls':
+                for m, x in enumerate(step[1]):
                     ya, yb = (yc - half, yc + half) if (k + m) % 2 == 0 else (yc + half, yc - half)
-                    hop(cx + x2, ya, f"to tag {i + 1} wall x{x2:+.2f}", lift)
-                    w(f"G1 F600 Z{ck:.3f}")
-                    touch()
-                    if first_of_layer:
-                        # Oleg 2026-08-31: "first touch of any layer has to be slower, so binding
-                        # can happen" — the layer's first stroke opens at the crawl.
-                        first_of_layer = False
-                        bind = min(2.5, lens[i] * 0.5)
-                        ym = ya + (2 * (yb > ya) - 1) * bind
-                        E += bind * ew
-                        w(f"G1 F{f_touch} X{cx + x2:.3f} Y{ym:.3f} E{E:.5f} ; layer first touch")
-                        E += (lens[i] - bind) * ew
-                        w(f"G1 F{f_body} X{cx + x2:.3f} Y{yb:.3f} E{E:.5f} ; wall")
+                    if w_lines == 0 and abs(x) > w_gap:
+                        # CLOSED LOOP: out on the outer line, turn, back on the inner — one
+                        # stroke, zero free ends (the 2026-08-31 structural lesson).
+                        sgn = 1.0 if x > 0 else -1.0
+                        xo, xi = x + sgn * w_gap / 2.0, x - sgn * w_gap / 2.0
+                        hop(cx + xo, ya, f"to tag {i + 1} wall loop x{x:+.2f}", lift)
+                        w(f"G1 F600 Z{ck:.3f}")
+                        touch()
+                        if first_of_layer:
+                            first_of_layer = False
+                            bind = min(2.5, lens[i] * 0.5)
+                            ym = ya + (1 if yb > ya else -1) * bind
+                            stroke(cx + xo, ya, ym, f_touch, ' ; layer first touch')
+                            stroke(cx + xo, ym, yb, f_body)
+                        else:
+                            stroke(cx + xo, ya, yb, f_body)
+                        E += w_gap * ew
+                        w(f"G1 X{cx + xi:.3f} Y{yb:.3f} E{E:.5f} ; loop end turn")
+                        stroke(cx + xi, yb, ya, f_body)
+                        E += w_gap * ew
+                        w(f"G1 X{cx + xo:.3f} Y{ya:.3f} E{E:.5f} ; loop close — no free ends")
                     else:
-                        E += lens[i] * ew
-                        w(f"G1 F{f_body} X{cx + x2:.3f} Y{yb:.3f} E{E:.5f} ; wall")
+                        passes = [x]
+                        if w_lines > 1 and abs(x) - w_gap > w_wd / 2.0:
+                            passes.append(x - w_gap if x > 0 else x + w_gap)
+                        for x2 in passes:
+                            hop(cx + x2, ya, f"to tag {i + 1} wall x{x2:+.2f}", lift)
+                            w(f"G1 F600 Z{ck:.3f}")
+                            touch()
+                            if first_of_layer:
+                                first_of_layer = False
+                                bind = min(2.5, lens[i] * 0.5)
+                                ym = ya + (1 if yb > ya else -1) * bind
+                                stroke(cx + x2, ya, ym, f_touch, ' ; layer first touch')
+                                stroke(cx + x2, ym, yb, f_body)
+                            else:
+                                stroke(cx + x2, ya, yb, f_body)
+            else:
+                # ROOF over the flat shape: ONE hop, then a serpentine — bridge strokes across
+                # the slot, connectors riding ON the wall tops (supported ground, so they are
+                # ordinary moves). The 'top' layer repeats it one layer up, landing on bridges.
+                span = xw_flat + a.wall / 2.0
+                ys = []
+                yy = yc - half + w_wd / 2.0
+                while yy <= yc + half - w_wd / 2.0 + 1e-9:
+                    ys.append(round(yy, 3))
+                    yy += w_wd
+                kind = step[0]
+                w(f"; ---- tag {i + 1} {kind} layer: {len(ys)} strokes across the "
+                  f"{2 * half_w:.1f}mm slot" + (" — declared bridges" if kind == 'bridge' else ""))
+                hop(cx - span, ys[0], f"to tag {i + 1} {kind} roof", lift)
+                w(f"G1 F600 Z{ck:.3f}")
+                touch()
+                for r_i, ry in enumerate(ys):
+                    xa, xb = (cx - span, cx + span) if r_i % 2 == 0 else (cx + span, cx - span)
+                    if r_i > 0:
+                        E += w_wd * ew
+                        w(f"G1 X{xa:.3f} Y{ry:.3f} E{E:.5f} ; roof step on the wall top")
+                    E += 2 * span * ew
+                    w(f"G1 F{f_body} X{xb:.3f} Y{ry:.3f} E{E:.5f}"
+                      + (" ; BRIDGE across the slot" if kind == 'bridge' else " ; roof top"))
 
     w("; ---- done")
     w("SET_GCODE_OFFSET Z=0                 ; hand the machine back at its own zero")
@@ -549,16 +625,18 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         _htag += f"_fill{min(fills):g}-{max(fills):g}"
     if len(set(wcodes)) > 1:
         _htag += "_wmix"
+    _wtag = wcodes[0] if len(set(wcodes)) == 1 else 'wmixW'
+    _rtag = roofs[0] if len(set(roofs)) == 1 else 'mixroof'
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), a.out,
-                       f"hangertag_full{n}_{a.printer}_{material}_w{a.w1:g}_wall{a.wall:g}"
+                       f"hangertag_full{n}_{a.printer}_{material}_w{a.w1:g}_{_wtag}_{_rtag}"
                        f"_h1-{_htag}_len{max(lens):g}-{min(lens):g}_v{a.speed:g}.gcode")
     machine.emit_gcode(out, "\n".join(L) + "\n")
     vol = E * A_FIL / 1000.0
     print(out)
     print(f"  {n} FULL tags, tunnels {a.clip_lens}mm, floors "
           f"{','.join(f'{h:g}' for h in h1s)}x{a.w1:g} at {speed1:g} mm/s "
-          f"(offset {zoff:+.3f} vs zerr {zerr:+.3f}), wall {a.wall:g}x{a.layer_h:g} at "
-          f"{a.speed:g}, {K + 1} layers")
+          f"(offset {zoff:+.3f} vs zerr {zerr:+.3f}), walls {'/'.join(sorted(set(wcodes)))} "
+          f"roofs {'/'.join(sorted(set(roofs)))} at {a.speed:g}, {K + 1} layers")
     print(f"  {vol:.2f}cm3 / {vol * 1.24:.1f}g  roof overlap "
           f"{100 * (1 - a.layer_h / a.wall):.0f}% (handoff's 0.30 wall gave 20%)")
     spds, moves, wflow = measured_speeds(out)
@@ -657,6 +735,12 @@ def main():
                          "befor movement, as we crerating a lot of nets during move'. Declared "
                          "'; RETRACT=' (the seam validate checks: E-only, no deeper than "
                          "declared); restored plus --dab at the next touch.")
+    ap.add_argument("--roofs", default=None,
+                    help="holder SHAPE per tag: 'tent' (45deg triangle) or 'flat' (vertical "
+                         "walls + serpentine BRIDGED roof over the slot — the shape this house "
+                         "has evidence for: 16.8mm spans proven taut, this slot is ~6mm). "
+                         "Oleg 2026-08-31: 'i think all 5 suggestions we can do', 'least "
+                         "material even print at max possible speed'.")
     ap.add_argument("--walls", default=None,
                     help="TRIANGLE-STRUCTURE sweep, one code per tag (Oleg 2026-08-31: 'also "
                          "experiment with triangle structure on same plate'): s08 = single "

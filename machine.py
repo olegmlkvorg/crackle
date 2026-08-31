@@ -1597,13 +1597,22 @@ def home(w, printer, calibrate=False):
 # not so glass" -- at 60 the pressed layer froze glassy-brittle; 80 keeps it above Tg long enough
 # to weld ductile. (The 2026-07-30 note said 80 was above the filament's rated 50-70 and wasted
 # solar; his plate read supersedes it for this translucent PLA. 120-never-sets stays retired.)
-BED_TEMP = {"pla": 80, "pla-matte": 60, "petg": 70, "tpu": 45, "abs": 100}
+# PLA bed 80 -> 60, Oleg 2026-08-31 late, closing the hanger-tag night: "also make bed 60".
+# The 80 was his 2026-08-08 call for ductile first-layer welds on the fat-bead bucket work; the
+# tag floors at 60 get a set floor instead of a rubbery one. (210, 60) is already a proven
+# PROVEN_SEND temps pair, so the ledger agrees. The 80 story stays above; this line supersedes it.
+BED_TEMP = {"pla": 60, "pla-matte": 60, "petg": 70, "tpu": 45, "abs": 100}
 
 # PART-COOLING FAN CEILING, PER MATERIAL. Oleg, 2026-07-26: "fans for printing pla should be only on
 # 20% at most". Running 80% on PLA — which this project had been doing on 320mm plates — chills the
 # bead as it lands, and on layer 1 it chills the bond while it is still forming. It is the cheapest
 # possible way to lose adhesion and it looks like nothing in the file.
 # TPU is the exception and goes the other way: it needs FULL fans (see the guard in validate.py).
+# SCOPE NOTE 2026-08-31: the 20% PLA cap was measured on FAT PRESSED 0.8-nozzle beads, where hard
+# cooling loses first layers. A sub-millimetre single-line wall is the opposite regime — it stays
+# molten and smears without air — and Oleg's "lets use fans more" (hanger-tag walls) is scoped
+# there: hangertag.py runs its WALL layers at full part fan by declared emission, floors still
+# uncooled. The cap below keeps governing the fat-bead generators unchanged.
 FAN_MAX = {"pla": 0.20, "pla-matte": 0.20, "petg": 0.40, "tpu": 1.00, "abs": 0.10}
 # LAYER 1 GETS NO FAN — EXCEPT WHERE THE MATERIAL DEMANDS IT.
 # The first layer's job is to weld to the plate, and cooling it works against the only thing that
