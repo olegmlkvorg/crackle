@@ -266,6 +266,10 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
                  f"refusing here says why sooner.")
 
     zoff = round(a.h1 - press - zerr, 4)
+    speed1 = a.speed1 if a.speed1 else a.speed
+    if speed1 > machine.MAX_SPEED + 1e-9:
+        sys.exit(f"REFUSING TO EMIT: --speed1 {speed1:g} is above the north star.")
+    f1 = round(speed1 * 60)
     e_wall = a.wall * a.layer_h / A_FIL
     flow_wall = a.wall * a.layer_h * a.speed
     flow_l1 = a.w1 * a.h1 * a.speed
@@ -312,6 +316,11 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
     w(f"; LAYER_H={a.layer_h:g}")
     w(f"; FLOW={flow_wall:g}")
     w(f"; SPEED={a.speed:.4f}")
+    if abs(speed1 - a.speed) > 1e-9:
+        w(f"; SPEED_LAYER1={speed1:.4f}")
+        w(f";   way slower than the {a.speed:g} body BY INSTRUCTION — Oleg 2026-08-31: 'make "
+          f"first layer way slower, adhestion is bad on this suface'. The floor dwells; the "
+          f"walls do not need to.")
     w(f"; PRESSED_LAYER1={press:g}")
     w(f"; PRINT_TEMP={temp}")
     w(f"; bead {a.wall:g}x{a.layer_h:g}")
@@ -366,7 +375,7 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
         w(line)
     w("G92 E0")
     machine.prime(w, printer=a.printer, z=press,
-                  rate=e1, feed=f_body, travel_feed=travel_f,
+                  rate=e1, feed=f1, travel_feed=travel_f,
                   avoid=(("rect", x0 - 2, oy - 2, x0 + row_w + 2, dy + dh + 2),),
                   near=(x0, oy))
     w("; BODY_START")
@@ -390,10 +399,10 @@ def emit_full(a, material, temp, bed, bx, by, press, zerr):
             hop(ax, ay, f"to digit {i + 1} segment '{s}'", press + 1.0)
             w(f"G1 F600 Z{press:.3f}")
             E += math.hypot(bx_ - ax, by_ - ay) * e1
-            w(f"G1 F{f_body} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
+            w(f"G1 F{f1} X{bx_:.3f} Y{by_:.3f} E{E:.5f} ; digit segment '{s}'")
         hop(pts[0][0], pts[0][1], f"to tag {i + 1} net", press + 1.0)
         w(f"G1 F600 Z{press:.3f}")
-        w(f"G1 F{f_body} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
+        w(f"G1 F{f1} X{pts[1][0]:.3f} Y{pts[1][1]:.3f} "
           f"E{(E := E + math.dist(pts[0], pts[1]) * e1):.5f}")
         for j in range(2, len(pts)):
             E += math.dist(pts[j - 1], pts[j]) * e1
@@ -502,6 +511,13 @@ def main():
                          "necks below the hole), and 0.4 lifts the 45deg roof's layer-to-layer "
                          "overlap from 20%% to 40%% — the handoff's own #1 open risk. The tunnel "
                          "INNER profile is untouched; the wall grows outward only.")
+    ap.add_argument("--speed1", type=float, default=None,
+                    help="FIRST-LAYER speed for full-piece mode, mm/s (default: --speed). "
+                         "Oleg, 2026-08-31, after the full plate\'s floor failed to grip the "
+                         "smooth glued plate at 50: \'make first layer way slower, adhestion "
+                         "is bad on this suface\'. His word overrules the speed-is-not-a-lever "
+                         "doctrine FOR THIS SURFACE; a declared \'; SPEED_LAYER1=\' regime, the "
+                         "same seam zladder\'s half-speed layer 1 uses.")
     ap.add_argument("--calibrate", action="store_true",
                     help="run a FULL bed-mesh probe before printing instead of loading the "
                          "saved mesh — the first print after a restart or nozzle change "
