@@ -59,6 +59,7 @@ slot_wall = 11;         // groove height — a third of the plate stands in it
 pad_h = 2;              // rest pads, so the plate's bottom edge sits in moving air
 lead_h = 5;             // height of the funnel at the groove mouth
 lead_y = 2.1;           // how far each rib top leans outward (sets the mouth width)
+base_t  = 2 * 0.4;      // SOLID first-layer plate under the plinth — see A12
 vent_d = 6;
 foot_h = 4;
 
@@ -140,6 +141,15 @@ assert(shoe_t/2 + jet_off - jet_d/2 > shoe_t/2 + slot_fit/2 + rib_t + 0.3,
   str("A10 jet inner edge ", shoe_t/2 + jet_off - jet_d/2, " clips slot rib at ",
       shoe_t/2 + slot_fit/2 + rib_t));
 
+// A12 first-layer grip. A tall part standing on a thin perimeter outline lifts, brim or
+// no brim; the base must be a solid plate at least two layers thick.
+assert(base_t >= 2*layer_h_p,
+  str("A12 base ", base_t, " under two layers — first layer reverts to a bare outline"));
+assert(base_t < foot_h - layer_h_p,
+  str("A12 base ", base_t, " fills the plinth, losing the insulating air gap"));
+
+echo(str("bed contact ", out_w*out_d, " mm2 solid base (outline alone was ",
+         2*(out_w + out_d)*skin, " mm2)"));
 echo(str("interior ", int_w, " x ", int_d, " x ", int_h,
          "  outer ", out_w, " x ", out_d, " x ", out_h + foot_h, " + lid"));
 echo(str("inlet ", inlet_area, " mm2, deck jets ", jet_area,
@@ -192,9 +202,14 @@ module body() {
       // support raft under the largest part. A closed skirt rises from the bed and
       // the floor bridges it, same trick as the lid skirt; one centre rib halves the
       // span. Air gap under the box is unchanged.
+      // The hollow starts base_t ABOVE the bed, so the first layer is a SOLID plate
+      // across the whole footprint instead of a 1.64 mm outline. The skirt version put
+      // roughly 516 mm2 on the plate for an 85 mm tall PC part, all of it perimeter,
+      // which is exactly where a shrinking part peels first — it failed to hold even
+      // with a brim (2026-09-01). Solid base is ~3750 mm2 and costs 3.6 g.
       translate([-out_w/2, -out_d/2, -foot_h]) difference() {
         cube([out_w, out_d, foot_h + e]);
-        translate([skin, skin, -e]) cube([out_w - 2*skin, out_d - 2*skin, foot_h + 3*e]);
+        translate([skin, skin, base_t]) cube([out_w - 2*skin, out_d - 2*skin, foot_h + 3*e]);
       }
       translate([-skin/2, -out_d/2, -foot_h]) cube([skin, out_d, foot_h + e]);
     }

@@ -46,6 +46,8 @@ CASES = (
     ("A10 jet clips slot rib",  {"jet_off": "4"},       "A10 jet inner edge"),
     ("A11 groove mouth flat",   {"lead_y": "0.4"},      "A11 groove mouth"),
     ("A11 no parallel grip",    {"lead_h": "10"},       "A11 lead-in 10"),
+    ("A12 outline first layer", {"base_t": "0.4"},      "A12 base 0.4"),
+    ("A12 base fills plinth",   {"base_t": "4"},        "A12 base 4"),
 )
 
 

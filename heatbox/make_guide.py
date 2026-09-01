@@ -236,12 +236,20 @@ what step 4 of the first run measures and settles.</p>
 </table>
 
 <h2>Printing</h2>
-<p>Creality Hyper&nbsp;PC, nozzle 240–260&nbsp;°C, bed 50–80&nbsp;°C, chamber heat on,
-filament dried first. The model is built around a 0.8&nbsp;mm nozzle at 0.82&nbsp;mm line
+<div class="stage" style="margin-bottom:4mm"><b>Bed 110&nbsp;°C, not 50–80</b>
+An earlier version of this page said 50–80&nbsp;°C, copied from the Hyper&nbsp;PC product
+listing. Creality's own slicer profile for the same spool says <b>110&nbsp;°C</b> on both
+the first layer and the rest, and PC on a 50–80&nbsp;°C bed lifts off the plate. The
+profile is the one that prints; the listing is wrong.</div>
+<p>Creality Hyper&nbsp;PC, nozzle 260&nbsp;°C, bed 110&nbsp;°C, chamber heating on and set
+to 50&nbsp;°C, part fan off for the first three layers then 10–40%, filament dried first. The model is built around a 0.8&nbsp;mm nozzle at 0.82&nbsp;mm line
 width and 0.4&nbsp;mm layers: every wall is exactly two extrusion lines thick and every
 plate a whole number of layers, so the slicer has no leftover slivers to fill. Changing
 nozzle or layer height means regenerating the STLs with the new numbers, not just
 re-slicing — the model refuses to build if the walls no longer divide evenly.</p>
+<p>The body's bottom two layers are a solid plate across its whole footprint, so it grips
+about 3750&nbsp;mm² of bed. It does not need a raft, and a brim is optional rather than a
+rescue. If it still lifts, the bed temperature is the first thing to check, not the brim.</p>
 
 <div class="foot">Generated from heatbox.scad by make_guide.py. Diagrams are renders of
 the same file the STLs come from. Design not yet printed or measured on hardware.</div>""")

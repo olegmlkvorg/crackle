@@ -105,8 +105,26 @@ L/min carries 0.014 W per K of temperature drop.
 
 ## Printing (K2 Plus, Hyper PC)
 
-Vendor page: nozzle 240-260 C, bed 50-80 C. Chamber heat on, filament dried first
-(generic PC practice — the vendor page is silent on drying). All four parts print upright
+**CORRECTED 2026-09-01, and the wrong number is left visible because it was published in
+the assembly PDF and probably cost a failed print.** This section said **bed 50-80 C**,
+taken from the Hyper PC product listing. Creality's OWN slicer profile for the same
+filament says **110 C**, and a PC part on a 50-80 C bed is a part that lifts:
+
+    .../profiles/Creality/filament/Hyper PC @Creality K2 Plus 0.8 nozzle.json
+    hot_plate_temp 110, textured_plate_temp 110, both initial-layer 110
+    nozzle_temperature 260 (initial layer 260)
+    chamber_temperature 50, activate_chamber_temp_control 1
+    fan_min_speed 10, fan_max_speed 40, close_fan_the_first_x_layers 3
+
+The marketing page and the slicer profile of one vendor disagree by 40 C about the same
+spool, and **the profile is the one that prints**. This repo's own table has no PC row;
+its nearest analogue, ABS, is bed 100 with the part fan capped at 0.10 (`machine.py`
+BED_TEMP / FAN_MAX), which agrees with the profile and not with the page. The K2 Plus
+holds 120 C rock steady under load (`machine.BED_MAX`), so 110 is well inside it.
+
+So: nozzle 260, bed 110, chamber 50 with active control, no part fan for the first three
+layers then 10-40%, filament dried first (generic PC practice — both vendor sources are
+silent on drying). All four parts print upright
 as modeled with no supports, and each unsupported span is deliberate:
 
 - the body stands on a **closed perimeter plinth** with one centre rib, so the bed carries
@@ -119,6 +137,12 @@ as modeled with no supports, and each unsupported span is deliberate:
 - the cap is a flat plate: its standoffs and locating pins live on the lid, pointing up.
   Nubs on the cap's underside would have printed as four dots on the bed with the plate
   bridging between them.
+- **the plinth's bottom two layers are SOLID across the full footprint.** The first
+  version was a hollow skirt, which put a 1.64 mm outline — about 456 mm2 — on the plate
+  under an 85 mm tall PC part, all of it perimeter, which is where a shrinking part peels
+  first. It would not hold even with a brim (2026-09-01). The solid base is 3750 mm2 and
+  costs 3.6 g. A12 refuses a base under two layers, and refuses one so thick it fills the
+  plinth and loses the insulating air gap.
 
 **Wall thickness is derived from the nozzle, and this is the expensive lesson of the
 build.** The first slice on the K2 Plus 0.8 nozzle came back 189.25 g and 3h19m, of which
@@ -154,6 +178,8 @@ give, and they have not been re-measured since the change.**
 | A10 | a jet hole clipping the slot rib (sliver, non-manifold) | `-D jet_off=4` |
 | A11 | a groove mouth too narrow to catch the plate blind | `-D lead_y=0.4` |
 | A11 | a lead-in that leaves no parallel groove to grip | `-D lead_h=10` |
+| A12 | a first layer that is a thin outline rather than a plate | `-D base_t=0.4` |
+| A12 | a base so thick the insulating air gap is gone | `-D base_t=4` |
 
 All sixteen fired with the right message on 2026-09-01 before the green render
 (`openscad -o /dev/null` swallows the assert — use a real output path when re-proving).
