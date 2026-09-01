@@ -13,6 +13,12 @@ have toppled between them. Each pocket is now a CARD SLOT: three short rib pairs
 a 2.8 mm groove, with the gaps between pairs passing the air, end stops, and two low pads
 so the bottom edge rests clear of the deck face.
 
+**The groove mouth is a funnel, and that is not cosmetic.** The rib tops lean outward over
+their last 5 mm, opening the 2.8 mm groove to 7.0 mm. Without it the plate has to be
+threaded into a 2.8 mm slot **36 mm down inside the box** — through the lid slot, blind, at
+110 C, held in tongs. A11 refuses a square-topped groove and also refuses a lead-in so tall
+that no parallel groove is left to actually grip the plate.
+
 Three copper shoes rotate: one in use, two resting in the chamber at 110 C, either one
 removable at any moment. The chamber is a printed double-wall box fed by the 2 cm hot-air
 inlet. Air enters a plenum under a perforated deck, rises as jets flanking each shoe's
@@ -146,8 +152,10 @@ give, and they have not been re-measured since the change.**
 | A9 | a card slot that cannot admit or cannot hold the plate | `-D slot_fit=0.2` |
 | A9 | slot ribs so long they merge into a solid wall | `-D rib_run=7` |
 | A10 | a jet hole clipping the slot rib (sliver, non-manifold) | `-D jet_off=4` |
+| A11 | a groove mouth too narrow to catch the plate blind | `-D lead_y=0.4` |
+| A11 | a lead-in that leaves no parallel groove to grip | `-D lead_h=10` |
 
-All ten fired with the right message on 2026-09-01 before the green render
+All sixteen fired with the right message on 2026-09-01 before the green render
 (`openscad -o /dev/null` swallows the assert — use a real output path when re-proving).
 **They are no longer proven by hand: `tests/heatbox_guards.py` re-proves every one on each
 suite run**, and it reads the verdict from the output file rather than the exit code,

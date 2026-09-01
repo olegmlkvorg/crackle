@@ -57,6 +57,8 @@ slot_ribs = 3;          // rib pairs forming the groove; gaps between them pass 
 rib_run = 4;            // length of one rib (A9 caught 7: the runs merged)
 slot_wall = 11;         // groove height — a third of the plate stands in it
 pad_h = 2;              // rest pads, so the plate's bottom edge sits in moving air
+lead_h = 5;             // height of the funnel at the groove mouth
+lead_y = 2.1;           // how far each rib top leans outward (sets the mouth width)
 vent_d = 6;
 foot_h = 4;
 
@@ -123,6 +125,13 @@ assert(slot_fit >= 0.4 && slot_fit <= 1.5,
 assert((shoe_w - rib_run)/(slot_ribs-1) > rib_run + rib_t,
   str("A9 slot ribs pitch ", (shoe_w - rib_run)/(slot_ribs-1),
       " merges runs of ", rib_run, " — the groove becomes a solid wall"));
+// A11 the groove mouth must be a funnel wide enough to catch the plate on the way in.
+// A square-topped groove is a 2.8 mm target 36 mm down a hole, found by feel with tongs.
+assert(shoe_t + slot_fit + 2*lead_y >= 2.5*shoe_t + 1,
+  str("A11 groove mouth ", shoe_t + slot_fit + 2*lead_y,
+      " is too narrow to catch a ", shoe_t, " mm plate blind"));
+assert(lead_h < slot_wall - 2,
+  str("A11 lead-in ", lead_h, " leaves under 2 mm of parallel groove to actually grip"));
 assert(slot_wall >= shoe_h/6,
   str("A9 groove ", slot_wall, " too shallow to stand a ", shoe_h, " mm plate"));
 // A10 a jet hole that clips the slot rib leaves a sliver and a non-manifold mesh.
@@ -226,10 +235,20 @@ module deck() {
       // y, which is OUTSIDE a 2 mm plate's own footprint, so it would have toppled
       // between them. Three short rib PAIRS per pocket form a groove the plate slides
       // into, and the gaps between pairs are what let air up the faces.
+      // Each rib LEANS OUTWARD over its top 5 mm, so the groove mouth is a funnel.
+      // Without it the plate has to find a 2.8 mm slot 36 mm down inside the box, blind,
+      // hot, held in tongs — the groove is only reachable through the lid slot above it.
       for (cx=[pocket_cx1, pocket_cx2], i=[0:slot_ribs-1], sy=[-1,1])
-        translate([cx - shoe_w/2 + rib_run/2 + i*(shoe_w - rib_run)/(slot_ribs-1),
-                   sy*(shoe_t/2 + slot_fit/2 + rib_t/2), deck_t/2 + slot_wall/2 - e])
-          cube([rib_run, rib_t, slot_wall], center=true);
+        hull() {
+          translate([cx - shoe_w/2 + rib_run/2 + i*(shoe_w - rib_run)/(slot_ribs-1),
+                     sy*(shoe_t/2 + slot_fit/2 + rib_t/2),
+                     deck_t/2 + (slot_wall - lead_h)/2 - e])
+            cube([rib_run, rib_t, slot_wall - lead_h], center=true);
+          translate([cx - shoe_w/2 + rib_run/2 + i*(shoe_w - rib_run)/(slot_ribs-1),
+                     sy*(shoe_t/2 + slot_fit/2 + rib_t/2 + lead_y),
+                     deck_t/2 + slot_wall - 0.5])
+            cube([rib_run, rib_t, 1], center=true);
+        }
       // end stops: the plate cannot slide out along its own length
       for (cx=[pocket_cx1, pocket_cx2], sx=[-1,1])
         translate([cx + sx*(shoe_w/2 + 1 + rib_t/2), 0, deck_t/2 + slot_wall/2 - e])

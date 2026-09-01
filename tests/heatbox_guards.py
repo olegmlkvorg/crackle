@@ -40,8 +40,12 @@ CASES = (
     ("A8 plate not whole layers", {"deck_t": "3"},      "A8 plates"),
     ("A9 slot too tight",       {"slot_fit": "0.2"},    "A9 slot clearance 0.2"),
     ("A9 slot ribs merge",      {"rib_run": "7"},       "A9 slot ribs pitch"),
-    ("A9 groove too shallow",   {"slot_wall": "4"},     "A9 groove 4"),
+    # slot_wall alone also trips A11 (the lead-in would eat the whole groove), and A11
+    # is asserted first, so the shallow-groove probe must shrink the lead-in with it.
+    ("A9 groove too shallow",   {"slot_wall": "6", "lead_h": "2"}, "A9 groove 6"),
     ("A10 jet clips slot rib",  {"jet_off": "4"},       "A10 jet inner edge"),
+    ("A11 groove mouth flat",   {"lead_y": "0.4"},      "A11 groove mouth"),
+    ("A11 no parallel grip",    {"lead_h": "10"},       "A11 lead-in 10"),
 )
 
 

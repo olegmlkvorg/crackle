@@ -47,8 +47,10 @@ STEPS = [
      "step4",
      "Each 2 mm plate drops edge-first into a card slot: three pairs of short ribs form a "
      "groove a little wider than the plate, and it rests on two low pads so its bottom "
-     "edge stays in moving air. It should slide in without forcing. There is a finger of "
-     "space at both ends of each slot — that gap is for your tongs, so keep it clear."),
+     "edge stays in moving air. The rib tops flare outward, so you can feel the plate "
+     "drop in rather than having to aim at the groove — it is well down inside the box. "
+     "It should seat without forcing. There is a finger of space at both ends of each "
+     "slot for your tongs, so keep that clear."),
     ("Put the lid on",
      "step5",
      "The lid drops over the rim with its skirt inside the inner wall. Two rectangular "
