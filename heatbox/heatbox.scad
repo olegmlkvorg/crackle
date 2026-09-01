@@ -53,7 +53,7 @@ inlet_area = PI*pow(inlet_id/2,2);
 jet_area   = 2*2*jets_per_row*PI*pow(jet_d/2,2) + 2*PI*pow(jet_d/2,2); // rows + 2 end bleeds
 slot_w = shoe_w + 2*(tong_jaw-3);        // lid slot passes shoe + tong jaws
 slot_d = shoe_t + 8;
-cap_w = slot_w + 8; cap_d = slot_d + 8;
+cap_w = slot_w + 14; cap_d = slot_d + 14;   // must overhang the lid's pin ring
 exit_area  = 2*(2*(slot_w+slot_d))*cap_standoff + 2*PI*pow(vent_d/2,2);
 
 // ---- guards. Each forced red before first render — commands in README.
@@ -113,15 +113,28 @@ module body() {
       // inlet socket boss, left end wall, axis at plenum mid-height
       translate([-out_w/2 - 8, 0, floor_t + plenum_h/2]) rotate([0, 90, 0])
         cylinder(d=liner_od + 0.4 + 2*3, h=8 + 2*skin + gap + e);
+      // 45-degree gusset carrying the boss's protruding underside, which is otherwise
+      // an unsupported horizontal-cylinder overhang
+      hull() {
+        translate([-out_w/2 - 8, -6, floor_t + plenum_h/2]) cube([e, 12, e]);
+        translate([-out_w/2 - e, -6, floor_t + plenum_h/2 - 8]) cube([e, 12, e]);
+        translate([-out_w/2 - e, -6, floor_t + plenum_h/2]) cube([e, 12, e]);
+      }
       // deck ledges: chamfered stubs at plenum height (2 per long wall, 1 per end)
       for (p=[[pocket_cx1,-1],[pocket_cx1,1],[pocket_cx2,-1],[pocket_cx2,1]])
         translate([p[0]-3, p[1]*int_d/2 - (p[1]>0 ? 3 : 0), 0]) ledge();
       for (sx=[-1,1])
         translate([sx*int_w/2 - (sx>0 ? 3 : 0), -3, 0]) rotate([0,0,0]) ledge_end(sx);
-      // feet
-      for (sx=[-1,1], sy=[-1,1])
-        translate([sx*(out_w/2 - 8), sy*(out_d/2 - 8), -foot_h])
-          cylinder(d1=10, d2=14, h=foot_h + e);
+      // plinth: a perimeter skirt, NOT feet. Cone feet put four 10 mm circles on the
+      // bed and left the whole floor bridging 8 mm of air — unprintable without a
+      // support raft under the largest part. A closed skirt rises from the bed and
+      // the floor bridges it, same trick as the lid skirt; one centre rib halves the
+      // span. Air gap under the box is unchanged.
+      translate([-out_w/2, -out_d/2, -foot_h]) difference() {
+        cube([out_w, out_d, foot_h + e]);
+        translate([skin, skin, -e]) cube([out_w - 2*skin, out_d - 2*skin, foot_h + 3*e]);
+      }
+      translate([-skin/2, -out_d/2, -foot_h]) cube([skin, out_d, foot_h + e]);
     }
     // inlet bore: minimal-contact — 3 ribs inside a loose bore guide the tube,
     // so the aluminum (running near source temp end to end) barely touches PC.
@@ -189,6 +202,15 @@ module lid() {
         cube([int_w - 0.8 - 2*skin, int_d - 0.8 - 2*skin, 3 + e], center=true); }
       for (sx=[-1,1]) translate([sx*(out_w/2 - 6), 0, 3]) // grip bars
         cube([6, out_d - 20, 3], center=true);
+      // standoff bumps live HERE, on the lid's top face, not under the cap: nubs on
+      // the cap's underside would land four points on the bed and leave its plate
+      // bridging air. The cap drops onto these, pins locate it, and every surface
+      // that sets the exhaust gap (A3) prints as a vertical feature.
+      for (cx=[pocket_cx1, pocket_cx2], sx=[-1,1], sy=[-1,1])
+        translate([cx + sx*(slot_w/2 + 3), sy*(slot_d/2 + 3), 1.5]) {
+          cylinder(d=5, h=cap_standoff);
+          cylinder(d=2.6, h=cap_standoff + 4);
+        }
     }
     for (cx=[pocket_cx1, pocket_cx2])       // shoe slots
       translate([cx, 0, 0]) cube([slot_w, slot_d, 10], center=true);
@@ -198,16 +220,19 @@ module lid() {
   }
 }
 module cap() {
-  union() {
-    cube([cap_w, cap_d, 2], center=true);
-    for (sx=[-1,1], sy=[-1,1])               // standoff nubs = calibrated leak (A3)
-      translate([sx*(slot_w/2 - 2), sy*(slot_d/2 - 2), -1 - cap_standoff/2])
-        cylinder(d=4, h=cap_standoff + e, center=true);
-    translate([0, 0, 1]) hull() {            // grip fin, grabbed bare-handed when warm
-      cube([24, 3, e], center=true);
-      translate([0, 0, 14]) cube([14, 3, e], center=true); }
+  difference() {
+    union() {
+      cube([cap_w, cap_d, 2], center=true);
+      translate([0, 0, 1]) hull() {          // grip fin, grabbed bare-handed when warm
+        cube([24, 3, e], center=true);
+        translate([0, 0, 14]) cube([14, 3, e], center=true); }
+    }
+    // sockets over the lid's locating pins — holes, so the cap prints flat, plate down
+    for (sx=[-1,1], sy=[-1,1])
+      translate([sx*(slot_w/2 + 3), sy*(slot_d/2 + 3), 0])
+        cylinder(d=3.2, h=4, center=true);
     // notch a shank could pass if Q1 says the shoes carry handles
-    translate([cap_w/2 - 4, 0, 0]) cube([8.1, 8, 6], center=true);
+    translate([cap_w/2 - 2, 0, 0]) cube([8.1, 8, 6], center=true);
   }
 }
 
@@ -217,11 +242,11 @@ if (part == "deck") deck();
 if (part == "lid")  lid();
 if (part == "cap")  cap();
 if (part == "preview") {
-  difference() { body(); translate([0, -60, -10]) cube([200, 60, 140]); } // cutaway
+  difference() { body(); translate([0, -60, -20]) cube([200, 60, 150]); } // cutaway
   translate([0, 0, floor_t + plenum_h + deck_t/2]) deck();
   translate([0, 0, out_h + 1.5 + 3]) lid();
   for (cx=[pocket_cx1, pocket_cx2]) {
-    translate([cx, 0, out_h + 9]) cap();
+    translate([cx, 0, out_h + 6 + cap_standoff]) cap();
     color("chocolate") translate([cx, 0, floor_t + plenum_h + deck_t + shoe_h/2 + 1.5])
       cube([shoe_w, shoe_t, shoe_h], center=true);   // the copper shoes, for scale
   }

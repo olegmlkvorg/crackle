@@ -15,14 +15,14 @@ open-top pocket and lifts straight out with tongs through its own lid slot.
 
 | piece | count | file |
 |---|---|---|
-| body (double wall, plenum, inlet socket, probe port, feet) | 1 | `out/heatbox_body_shoe20x40x10_in20.stl` |
+| body (double wall, plenum, inlet socket, probe port, plinth) | 1 | `out/heatbox_body_shoe20x40x10_in20.stl` |
 | deck (drop-in, jet holes, pocket ribs) | 1 | `out/heatbox_deck_shoe20x40x10_in20.stl` |
-| lid (two slots, two vents) | 1 | `out/heatbox_lid_shoe20x40x10_in20.stl` |
-| cap (floats on 2 mm nubs = calibrated exhaust) | 2 | `out/heatbox_cap_shoe20x40x10_in20.stl` |
+| lid (two slots, two vents, cap standoffs + locating pins) | 1 | `out/heatbox_lid_shoe20x40x10_in20.stl` |
+| cap (rests on the lid's 2 mm standoffs = calibrated exhaust) | 2 | `out/heatbox_cap_shoe20x40x10_in20.stl` |
 
-Assembly is gravity only: deck drops onto its ledges, lid sits on the rim, caps sit in the
-slots. No fastener crosses a hot printed part, because at 110 C every clamped or screwed
-PC feature creeps.
+Assembly is gravity only: deck drops onto its ledges, lid sits on the rim, each cap drops
+over four pins. No fastener crosses a hot printed part, because at 110 C every clamped or
+screwed PC feature creeps.
 
 BOM beyond prints: aluminum tube 20 mm ID x 1 mm wall x ~60 mm (the inlet liner — the gun
 couples to metal, never to PC), a K-type bead thermocouple with any reader for the 6.5 mm
@@ -74,16 +74,30 @@ L/min carries 0.014 W per K of temperature drop.
 2. Soak 30 min. PASS: probe steady at 105-115 C, no visible change in the deck or walls.
    Probe below 105: raise setpoint toward 160 or raise flow. Probe above 115: lower
    setpoint — do not "let it settle".
-3. Shoes in, soak, then time one real recovery: pull a shoe, let it cool ~40 K, return
-   it, record minutes back to 105 C. That number is the swap interval, written on the box.
+3. Shoes in, soak, then time a real recovery **once per pocket, not once total**: pull a
+   shoe, let it cool ~40 K, return it, record minutes back to 105 C. The two pockets are
+   not symmetric — the left one sits over the liner's protruding tip and the probe port is
+   in the right wall — so one measurement cannot speak for both. The slower pocket sets
+   the swap interval, written on the box.
 
 ## Printing (K2 Plus, Hyper PC)
 
 Vendor page: nozzle 240-260 C, bed 50-80 C. Chamber heat on, filament dried first
-(generic PC practice — the vendor page is silent on drying). All parts print upright as
-modeled, no supports: the body bridges its top rim and the bore roof by design, and the
-bore deliberately has no locating rib at top dead center so bridge sag lands on open
-clearance. Walls are 2.4 mm solid skins (6 x 0.4 perimeters).
+(generic PC practice — the vendor page is silent on drying). All four parts print upright
+as modeled with no supports, and each unsupported span is deliberate:
+
+- the body stands on a **closed perimeter plinth** with one centre rib, so the bed carries
+  a continuous wall and the floor bridges ~47 mm between them. The first version used four
+  cone feet, which left the whole 118 x 52 floor hovering 8 mm over open air — a full
+  support raft under the largest, most expensive part. Caught before printing, not after.
+- the inlet boss carries a 45-degree gusset under its protruding half.
+- the bore has **no locating rib at top dead centre**, so the tunnel's bridge sag lands on
+  open clearance instead of the surface that positions the liner.
+- the cap is a flat plate: its standoffs and locating pins live on the lid, pointing up.
+  Nubs on the cap's underside would have printed as four dots on the bed with the plate
+  bridging between them.
+
+Walls are 2.4 mm solid skins (6 x 0.4 perimeters).
 
 ## Guards in the SCAD, each proven able to fire
 
