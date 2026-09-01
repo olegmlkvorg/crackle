@@ -13,7 +13,7 @@ part = "preview";       // body | deck | lid | cap | preview
 // ---- shoes (Q1 — confirm real dims before printing; these are the stated defaults)
 shoe_w = 20;            // face width, mm ("2 by 4" read as cm)
 shoe_h = 40;            // vertical extent standing
-shoe_t = 10;            // thickness — GUESSED, not given
+shoe_t = 2;             // Oleg 2026-09-01: the shoes are 2 mm PLATES
 shoe_clear = 4;         // air gap flanking each big face
 
 // ---- heat source (Q2)
@@ -47,10 +47,16 @@ cap_t   = 5 * layer_h_p;            // 2.0
 head    = 7;            // air space above shoe tops
 tong_jaw = 7;           // free space at each shoe end for tong jaws (assert A5)
 pocket_gap = 6;
-jet_off = 4;            // jet row offset outboard of shoe face (clears pocket ribs)
+jet_off = 5;            // jet row offset outboard of shoe face (A10: must clear the
+                        // slot ribs — at 4 the holes clipped them by 0.04 mm)
 jet_d   = 4;
 jets_per_row = 5;       // spacing must exceed jet_d (assert A6) or holes fuse tangent
 cap_standoff = 2;       // caps float on nubs; the standoff IS the exhaust (assert A3)
+slot_fit = 0.8;         // clearance across the plate: it must drop in hot, with oxide
+slot_ribs = 3;          // rib pairs forming the groove; gaps between them pass the air
+rib_run = 4;            // length of one rib (A9 caught 7: the runs merged)
+slot_wall = 11;         // groove height — a third of the plate stands in it
+pad_h = 2;              // rest pads, so the plate's bottom edge sits in moving air
 vent_d = 6;
 foot_h = 4;
 
@@ -108,6 +114,22 @@ assert(whole(floor_t/layer_h_p) && whole(deck_t/layer_h_p)
        && whole(lid_t/layer_h_p) && whole(cap_t/layer_h_p),
   str("A8 plates floor ", floor_t, " / deck ", deck_t, " / lid ", lid_t, " / cap ",
       cap_t, " are not all whole layers of ", layer_h_p));
+
+// A9 the card slot must admit the plate and still hold it: too tight and a hot,
+// oxidised plate jams; too loose and a 2 mm plate leans. Rib pairs closer than one
+// rib_t apart along the length would also merge into a solid wall and block the air.
+assert(slot_fit >= 0.4 && slot_fit <= 1.5,
+  str("A9 slot clearance ", slot_fit, " outside 0.4-1.5 mm for a ", shoe_t, " mm plate"));
+assert((shoe_w - rib_run)/(slot_ribs-1) > rib_run + rib_t,
+  str("A9 slot ribs pitch ", (shoe_w - rib_run)/(slot_ribs-1),
+      " merges runs of ", rib_run, " — the groove becomes a solid wall"));
+assert(slot_wall >= shoe_h/6,
+  str("A9 groove ", slot_wall, " too shallow to stand a ", shoe_h, " mm plate"));
+// A10 a jet hole that clips the slot rib leaves a sliver and a non-manifold mesh.
+// rib outer face is at shoe_t/2 + slot_fit/2 + rib_t; the hole's inner edge must clear it.
+assert(shoe_t/2 + jet_off - jet_d/2 > shoe_t/2 + slot_fit/2 + rib_t + 0.3,
+  str("A10 jet inner edge ", shoe_t/2 + jet_off - jet_d/2, " clips slot rib at ",
+      shoe_t/2 + slot_fit/2 + rib_t));
 
 echo(str("interior ", int_w, " x ", int_d, " x ", int_h,
          "  outer ", out_w, " x ", out_d, " x ", out_h + foot_h, " + lid"));
@@ -199,18 +221,26 @@ module deck() {
   difference() {
     union() {
       cube([int_w - 0.6, int_d - 0.6, deck_t], center=true);
-      // pocket corner L-ribs, 12 tall — locate the shoe, touch it on edges only.
-      // One (+,+) L built with its arms overlapping in a 2x2 corner block, mirrored
-      // to the other corners, so every union is solid rather than edge-tangent.
-      for (cx=[pocket_cx1, pocket_cx2], sx=[-1,1], sy=[-1,1])
-        translate([cx + sx*(shoe_w/2 + 0.8), sy*(shoe_t/2 + 0.8), deck_t/2 - e])
-          scale([sx, sy, 1]) {
-            translate([-8, 0, 0]) cube([10, rib_t, 12]);   // along the big face
-            translate([0, -8, 0]) cube([rib_t, 10, 12]);   // along the shoe end
-          }
-      // 3 dome bumps per pocket: the shoe stands on points, not on a plane
-      for (cx=[pocket_cx1, pocket_cx2], p=[[-6,0],[6,-2],[6,2]])
-        translate([cx + p[0], p[1], deck_t/2 - 0.4]) sphere(d=3);
+      // CARD SLOT, not corner ribs. A 2 mm plate on edge is not held by four corner
+      // posts and it does not stand on three domes — the domes were spaced +/-2 mm in
+      // y, which is OUTSIDE a 2 mm plate's own footprint, so it would have toppled
+      // between them. Three short rib PAIRS per pocket form a groove the plate slides
+      // into, and the gaps between pairs are what let air up the faces.
+      for (cx=[pocket_cx1, pocket_cx2], i=[0:slot_ribs-1], sy=[-1,1])
+        translate([cx - shoe_w/2 + rib_run/2 + i*(shoe_w - rib_run)/(slot_ribs-1),
+                   sy*(shoe_t/2 + slot_fit/2 + rib_t/2), deck_t/2 + slot_wall/2 - e])
+          cube([rib_run, rib_t, slot_wall], center=true);
+      // end stops: the plate cannot slide out along its own length
+      for (cx=[pocket_cx1, pocket_cx2], sx=[-1,1])
+        translate([cx + sx*(shoe_w/2 + 1 + rib_t/2), 0, deck_t/2 + slot_wall/2 - e])
+          cube([rib_t, shoe_t + slot_fit + 2*rib_t, slot_wall], center=true);
+      // two pads under each end of the plate: it rests on these, not on the deck face,
+      // so the bottom edge stays in moving air
+      for (cx=[pocket_cx1, pocket_cx2], sx=[-1,1])
+        translate([cx + sx*shoe_w/4, 0, deck_t/2 + pad_h/2 - e])
+          cube([6, shoe_t + slot_fit - 0.6, pad_h], center=true);   // 0.3 clear of the
+          // rib faces: a pad exactly as wide as the groove is EDGE-TANGENT to them, and
+          // a tangent union is a non-manifold mesh, not a joint.
     }
     // jet rows flanking each big face (advisor: never under the shoe — ribs block it)
     for (cx=[pocket_cx1, pocket_cx2], sy=[-1,1], i=[0:jets_per_row-1])

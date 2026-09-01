@@ -31,11 +31,17 @@ CASES = (
     ("A2 source ceiling",   {"source_temp": "210"},     "A2 source 210 C exceeds 200 C"),
     ("A3 exhaust area",     {"cap_standoff": "0.3"},    "A3 exit area"),
     ("A4 plenum vs liner",  {"plenum_h": "20"},         "A4 plenum 20 cannot pass"),
-    ("A5 tong room",        {"tong_jaw": "4"},          "A5 tong_jaw 4"),
+    # tong_jaw=4 would ALSO drop the exhaust area below the inlet and trip A3 first,
+    # which is the wrong-reason case this file is built to catch. 5 isolates A5.
+    ("A5 tong room",        {"tong_jaw": "5"},          "A5 tong_jaw 5"),
     ("A6 jet tangency",     {"jets_per_row": "6"},      "A6 jet spacing"),
     ("A7 wall not whole lines", {"skin": "2.4"},        "A7 skin 2.4"),
     ("A7 rib under two lines",  {"rib_t": "1.2"},       "A7 rib 1.2"),
     ("A8 plate not whole layers", {"deck_t": "3"},      "A8 plates"),
+    ("A9 slot too tight",       {"slot_fit": "0.2"},    "A9 slot clearance 0.2"),
+    ("A9 slot ribs merge",      {"rib_run": "7"},       "A9 slot ribs pitch"),
+    ("A9 groove too shallow",   {"slot_wall": "4"},     "A9 groove 4"),
+    ("A10 jet clips slot rib",  {"jet_off": "4"},       "A10 jet inner edge"),
 )
 
 

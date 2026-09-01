@@ -43,11 +43,12 @@ STEPS = [
      "until about 25 mm stands inside the box. Three ribs inside the socket hold it; it "
      "should be a firm push, not a hammer fit. This tube exists so the hot air from your "
      "gun lands on metal instead of plastic, so never run the box without it."),
-    ("Stand the two copper shoes in their pockets",
+    ("Slide the two copper plates into their slots",
      "step4",
-     "Each shoe stands upright between four corner ribs, resting on three small domes so "
-     "air passes underneath. There is a finger of space at both ends of each pocket — "
-     "that gap is for your tongs, so keep it clear."),
+     "Each 2 mm plate drops edge-first into a card slot: three pairs of short ribs form a "
+     "groove a little wider than the plate, and it rests on two low pads so its bottom "
+     "edge stays in moving air. It should slide in without forcing. There is a finger of "
+     "space at both ends of each slot — that gap is for your tongs, so keep it clear."),
     ("Put the lid on",
      "step5",
      "The lid drops over the rim with its skirt inside the inner wall. Two rectangular "
@@ -128,10 +129,9 @@ is in use. Printed in Creality Hyper&nbsp;PC.</p>
 
 <div class="stage"><b>Read this before you build it</b>
 This design has never been printed or run. Two of its inputs are assumptions, and both
-change the part: the shoes are modelled 20&nbsp;×&nbsp;40&nbsp;×&nbsp;10&nbsp;mm (only
-"2&nbsp;by&nbsp;4" was specified, so the 10&nbsp;mm thickness is a guess), and the heat
-source is modelled as an adjustable hot-air gun set between 140 and 160&nbsp;°C.
-Confirm both, regenerate, then print. The temperature gate on the last page is not
+change the part: the heat source is modelled as an adjustable hot-air gun set between 140 and
+160&nbsp;°C. Confirm it, regenerate, then print. The shoes are confirmed as
+20&nbsp;×&nbsp;40&nbsp;×&nbsp;2&nbsp;mm plates. The temperature gate on the last page is not
 optional: Hyper&nbsp;PC is rated to about 111&nbsp;°C and this box runs at 110.</div>
 
 <div class="two">
@@ -170,11 +170,12 @@ each exported STL at 1.19&nbsp;g/cm³. Your slicer decides the rest.</p>
 </figure>
 <p style="margin:0">Hot air arrives through the aluminium tube into the plenum, the empty
 space under the perforated deck. It spreads along the bottom, then rises through two rows
-of 4&nbsp;mm holes flanking each shoe, so the air washes both large faces on the way up
+of 4&nbsp;mm holes flanking each plate, so the air washes both large faces on the way up
 instead of hitting one spot. It leaves through the gap under each cap and two vents at the
-far end. Each shoe stands on three small domes inside corner ribs, touching the deck at as
-few points as possible so air reaches underneath. The wall is two thin skins with a
-5&nbsp;mm sealed air gap between them, and that trapped air is the insulation.</p>
+far end. Each plate stands edge-on in a card slot on two low pads, so nearly its whole
+surface is in moving air — which is why a 2&nbsp;mm plate recovers in minutes. The wall is
+two thin skins with a 5&nbsp;mm sealed air gap between them, and that trapped air is the
+insulation.</p>
 </div>
 
 <div class="page"></div>
@@ -203,20 +204,20 @@ leave it and hope it settles, because the plastic is at its limit there.</li>
 <li><b>Look at the deck.</b> It is the hottest printed piece and the cheapest to replace,
 so it is the part that tells you first if the box is too hot. Any softening or sag means
 stop.</li>
-<li><b>Time a real recovery, once for each pocket.</b> Take a shoe out, let it cool by
+<li><b>Time a real recovery, once for each pocket.</b> Take a plate out, let it cool by
 about 40&nbsp;°C, put it back, and count the minutes until the probe returns to
-105&nbsp;°C. Do this for the left pocket and the right pocket separately: the left one
+105&nbsp;°C. Expect roughly 2 to 5 minutes. Do this for the left pocket and the right pocket separately: the left one
 sits over the end of the inlet tube and the probe is in the right-hand wall, so the two
 do not behave the same. The slower of the two is your swap interval — write it on the
 box.</li>
 </ol>
 
 <h2>In use</h2>
-<p>One shoe out, two resting. Lift one cap, take that shoe with tongs, put the returning
-shoe into the empty pocket, drop the cap back over the pins. The other cap stays shut.
-Expect a returned shoe to need somewhere between 6 and 17 minutes to come back to
-temperature — that range is genuine uncertainty about how well the jets reach the shoe
-faces, which is exactly what step 4 of the first run measures and settles.</p>
+<p>One plate out, two resting. Lift one cap, take that plate with tongs, slide the
+returning plate into the empty slot, drop the cap back over the pins. The other cap stays
+shut. Expect a returned plate to need roughly 2 to 5 minutes to come back to temperature —
+that range is genuine uncertainty about how well the jets reach the plate faces, which is
+what step 4 of the first run measures and settles.</p>
 
 <h2>Limits — the three ways this breaks</h2>
 <table>

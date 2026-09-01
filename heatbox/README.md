@@ -1,9 +1,17 @@
 # heatbox — 110 C hot-air chamber for two copper shoes
 
-**STAGE: DESIGNED, NOT PRINTED. Nothing below is verified on hardware.** Two inputs are
-stated guesses and both change the part: the shoe's real dimensions (modeled 20 x 40 x 10 mm,
-only "2 by 4" was given) and the heat source (modeled as a temperature-adjustable gun,
-setpoint 140-160 C, round nozzle into a 20 mm duct). Confirm both, regenerate, then print.
+**STAGE: DESIGNED, NOT PRINTED. Nothing below is verified on hardware.** The shoes are
+20 x 40 x **2 mm plates** (Oleg, 2026-09-01 — the first cut assumed 10 mm blocks and was
+wrong about the holder, the depth and the recovery time alike). One input is still a
+stated guess: the heat source, modeled as a temperature-adjustable gun, setpoint
+140-160 C, round nozzle into a 20 mm duct.
+
+**A 2 mm plate is a different mechanical problem from a block, and the holder changed
+with it.** Four corner posts do not hold a plate on edge, and the three rest domes of the
+block design sat +/-2 mm off centre — OUTSIDE a 2 mm plate's own footprint, so it would
+have toppled between them. Each pocket is now a CARD SLOT: three short rib pairs forming
+a 2.8 mm groove, with the gaps between pairs passing the air, end stops, and two low pads
+so the bottom edge rests clear of the deck face.
 
 Three copper shoes rotate: one in use, two resting in the chamber at 110 C, either one
 removable at any moment. The chamber is a printed double-wall box fed by the 2 cm hot-air
@@ -27,8 +35,8 @@ screwed PC feature creeps.
 BOM beyond prints: aluminum tube 20 mm ID x 1 mm wall x ~60 mm (the inlet liner — the gun
 couples to metal, never to PC), a K-type bead thermocouple with any reader for the 6.5 mm
 probe port, tongs, and optionally a small aluminum sheet bent into an L for the plenum
-deflector groove if the source runs above 160 C. Outer size 103 x 43 x 85 mm plus lid,
-144 g of PC solid across all five prints (`python3 mass.py`).
+deflector groove if the source runs above 160 C. Outer size 103 x 37 x 85 mm plus lid,
+132 g of PC solid across all five prints (`python3 mass.py`).
 
 **The assembly guide is a generated artifact, not a written one.** `make_guide.py` renders
 the section, the exploded view and the six step pictures from this same `.scad`, measures
@@ -60,18 +68,20 @@ Air at 150 C: rho 0.83 kg/m3, cp 1.01 J/gK, so mdot[g/s] = 0.0138 x flow[L/min] 
 L/min carries 0.014 W per K of temperature drop.
 
 - **Required source temperature:** T_in = T_chamber + Q_walls / (mdot x cp). Double-wall
-  loss estimate Q_walls ≈ U x A x dT ≈ 3 W/m2K x 0.043 m2 x 85 K ≈ 11 W, so at 30 L/min
-  (0.42 W/K): T_in ≈ 110 + 26 ≈ **136 C**. Half the flow needs ~160 C. Recommended
+  loss estimate Q_walls ≈ U x A x dT ≈ 3 W/m2K x 0.031 m2 x 85 K ≈ 8 W, so at 30 L/min
+  (0.42 W/K): T_in ≈ 110 + 19 ≈ **129 C**. Half the flow needs ~148 C. Recommended
   setpoint window 140-160 C; the SCAD refuses a declared source above 200 C, and above
   140 C without the liner.
-- **Shoe energy:** m = 8.96 g/cm3 x 8 cm3 ≈ 72 g, E = m x 0.385 J/gK x 85 K ≈ 2.4 kJ from
-  cold.
+- **Shoe energy:** m = 8.96 g/cm3 x 1.6 cm3 ≈ **14.3 g**, E = m x 0.385 J/gK x 85 K ≈
+  **468 J** from cold. A fifth of the block this was first sized for, and it is why the
+  plate version is the easy case.
 - **Recovery time is convection-limited, and this is the design constraint.** Time
-  constant tau = m x c / (h x A) with A ≈ 0.0028 m2. Impinging/washing jets give h ≈
-  20-60 W/m2K, so tau ≈ 3-8 min. A shoe returned at ~70 C is within 5 K of chamber at
-  ~2.1 tau ≈ **6-17 min**. With two resting per one in use, each shoe rests twice its
-  out-time, so swaps every 3-8 min sustain the rotation. The spread is honest: measure it
-  once with the probe strapped to a shoe, and that measurement sets the swap rhythm.
+  constant tau = m x c / (h x A). A plate is nearly all surface: A ≈ 0.00184 m2 against
+  14.3 g, so tau = 2992/h seconds. Washing jets give h ≈ 20-60 W/m2K, so tau ≈ 0.8-2.5
+  min, and a plate returned 40 K cold is within 5 K of chamber at 2.08 tau ≈ **2-5 min**.
+  With two resting per one in use each plate rests twice its out-time, so swaps every
+  1-2.5 min sustain the rotation. The spread is real convection uncertainty: measure it
+  once per pocket with the probe against a plate, and that sets the swap rhythm.
 - **Warm-up from cold:** ~300 g of PC plus two shoes ≈ 25 kJ of structure, roughly
   10-20 min before the probe settles. Trust the probe, not this estimate.
 
@@ -133,6 +143,9 @@ give, and they have not been re-measured since the change.**
 | A7 | a wall that is not a whole number of extrusion lines (gap infill) | `-D skin=2.4` |
 | A7 | a rib under two lines wide (prints as mush) | `-D rib_t=1.2` |
 | A8 | a plate that is not a whole number of layers | `-D deck_t=3` |
+| A9 | a card slot that cannot admit or cannot hold the plate | `-D slot_fit=0.2` |
+| A9 | slot ribs so long they merge into a solid wall | `-D rib_run=7` |
+| A10 | a jet hole clipping the slot rib (sliver, non-manifold) | `-D jet_off=4` |
 
 All ten fired with the right message on 2026-09-01 before the green render
 (`openscad -o /dev/null` swallows the assert — use a real output path when re-proving).
