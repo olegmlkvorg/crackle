@@ -27,7 +27,14 @@ screwed PC feature creeps.
 BOM beyond prints: aluminum tube 20 mm ID x 1 mm wall x ~60 mm (the inlet liner — the gun
 couples to metal, never to PC), a K-type bead thermocouple with any reader for the 6.5 mm
 probe port, tongs, and optionally a small aluminum sheet bent into an L for the plenum
-deflector groove if the source runs above 160 C. Outer size 118 x 52 x 92 mm plus lid.
+deflector groove if the source runs above 160 C. Outer size 103 x 43 x 85 mm plus lid,
+144 g of PC solid across all five prints (`python3 mass.py`).
+
+**The assembly guide is a generated artifact, not a written one.** `make_guide.py` renders
+the section, the exploded view and the six step pictures from this same `.scad`, measures
+every mass from the exported STLs, and prints `doc/heatbox-assembly.pdf` through headless
+Chrome. Change the part, re-run it, and the guide moves with it — there is no hand-drawn
+diagram to go stale.
 
 ## The material is at its limit — design consequences
 
@@ -38,7 +45,7 @@ the fetch) is HDT 104.5 C at 0.455 MPa, Vicat 114.7 C. So a 110 C chamber runs t
 material AT its rating, not under it. Everything follows from that:
 
 1. **No printed feature carries load at temperature.** Shoes stand on the deck, parts
-   stack by gravity, the liner is guided by three 0.5 mm ribs, and the gun's weight must
+   stack by gravity, the liner is guided by three 1.64 mm ribs, and the gun's weight must
    NEVER rest on the socket — park the gun on its own stand.
 2. **The jet lands on metal.** Source air is necessarily hotter than 110 C, so it enters
    through the aluminum liner, which protrudes 25 mm into the plenum. The liner runs near
@@ -87,8 +94,8 @@ Vendor page: nozzle 240-260 C, bed 50-80 C. Chamber heat on, filament dried firs
 as modeled with no supports, and each unsupported span is deliberate:
 
 - the body stands on a **closed perimeter plinth** with one centre rib, so the bed carries
-  a continuous wall and the floor bridges ~47 mm between them. The first version used four
-  cone feet, which left the whole 118 x 52 floor hovering 8 mm over open air — a full
+  a continuous wall and the floor bridges ~40 mm between them. The first version used four
+  cone feet, which left the whole floor hovering 8 mm over open air — a full
   support raft under the largest, most expensive part. Caught before printing, not after.
 - the inlet boss carries a 45-degree gusset under its protruding half.
 - the bore has **no locating rib at top dead centre**, so the tunnel's bridge sag lands on
@@ -97,7 +104,21 @@ as modeled with no supports, and each unsupported span is deliberate:
   Nubs on the cap's underside would have printed as four dots on the bed with the plate
   bridging between them.
 
-Walls are 2.4 mm solid skins (6 x 0.4 perimeters).
+**Wall thickness is derived from the nozzle, and this is the expensive lesson of the
+build.** The first slice on the K2 Plus 0.8 nozzle came back 189.25 g and 3h19m, of which
+**53.65 g and 48m57s — a quarter of the whole print — was GAP INFILL.** The cause was a
+typed 2.4 mm wall: at that profile's 0.82 mm line width it is 2.93 lines, so the slicer
+laid two perimeters and then dribbled the leftover 0.76 mm in as gap fill, the slowest and
+heaviest way to move plastic. Walls are now `wall_lines * line_w` and plates are whole
+multiples of the layer height, both read from the profile actually selected:
+
+    .../profiles/Creality/process/0.40mm Standard @Creality K2 Plus 0.8 nozzle.json
+    -> line_width 0.82, wall_loops 2, layer_height 0.4
+
+Guards A7 and A8 refuse a wall or a plate that does not divide. Together with a smaller
+footprint the body fell from 193 g to 111 g solid, and the whole set from 236 g to 144 g.
+**Re-slice to confirm the time and the gap-infill line — those numbers are the slicer's to
+give, and they have not been re-measured since the change.**
 
 ## Guards in the SCAD, each proven able to fire
 
@@ -109,9 +130,16 @@ Walls are 2.4 mm solid skins (6 x 0.4 perimeters).
 | A4 | plenum too low to pass the liner tube | `-D plenum_h=20` |
 | A5 | pocket with no tong room | `-D tong_jaw=4` |
 | A6 | jet holes touching tangent (non-manifold mesh) | `-D jets_per_row=6` |
+| A7 | a wall that is not a whole number of extrusion lines (gap infill) | `-D skin=2.4` |
+| A7 | a rib under two lines wide (prints as mush) | `-D rib_t=1.2` |
+| A8 | a plate that is not a whole number of layers | `-D deck_t=3` |
 
-All six fired with the right message on 2026-09-01 before the first green render
+All ten fired with the right message on 2026-09-01 before the green render
 (`openscad -o /dev/null` swallows the assert — use a real output path when re-proving).
+**They are no longer proven by hand: `tests/heatbox_guards.py` re-proves every one on each
+suite run**, and it reads the verdict from the output file rather than the exit code,
+because an echo-format export writes the assertion failure INTO the file and still exits
+0 — a test trusting the return code would go green on a model with every guard deleted.
 A6 exists because the first deck shipped six 4 mm holes over 20 mm: centers exactly one
 diameter apart, tangent circles, non-manifold STL.
 

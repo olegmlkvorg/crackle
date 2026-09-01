@@ -14,7 +14,7 @@ part = "preview";       // body | deck | lid | cap | preview
 shoe_w = 20;            // face width, mm ("2 by 4" read as cm)
 shoe_h = 40;            // vertical extent standing
 shoe_t = 10;            // thickness — GUESSED, not given
-shoe_clear = 5;         // air gap flanking each big face
+shoe_clear = 4;         // air gap flanking each big face
 
 // ---- heat source (Q2)
 inlet_id      = 20;     // given: 2 cm hot-air duct
@@ -23,21 +23,36 @@ liner         = true;   // false only if source is temperature-limited (see asse
 source_temp   = 160;    // max recommended setpoint, C
 chamber_target = 110;   // C
 
-// ---- structure
-skin    = 2.4;          // per-skin wall (6 perimeters at 0.4)
-gap     = 6;            // double-wall air gap, the insulation
-floor_t = 3;
+// ---- printer. THESE TWO NUMBERS SIZE EVERY WALL IN THE FILE, and typing a wall
+// thickness instead of deriving it from them cost 53.65 g and 49 minutes of gap infill
+// on the first slice (Creality Print, K2 Plus 0.8 nozzle, 2026-09-01). A 2.4 mm wall is
+// 2.93 lines at 0.82: the slicer lays 2 perimeters and then dribbles the leftover
+// 0.76 mm in as gap infill, which is the slowest and heaviest way to move plastic.
+// Read them from the process profile actually selected, do not guess:
+//   .../profiles/Creality/process/0.40mm Standard @Creality K2 Plus 0.8 nozzle.json
+//   -> line_width 0.82, wall_loops 2, layer_height 0.4
+line_w  = 0.82;         // extrusion width of the selected profile
+layer_h_p = 0.4;        // layer height of the selected profile
+wall_lines = 2;         // wall_loops; a skin of exactly this many lines has no interior
+
+// ---- structure. Walls are LINE COUNTS, plates are LAYER COUNTS.
+skin    = wall_lines * line_w;      // 1.64 — two perimeters and nothing between them
+rib_t   = 2 * line_w;               // any rib thinner than this prints as mush
+gap     = 5;            // double-wall air gap, the insulation
+floor_t = 8 * layer_h_p;            // 3.2
 plenum_h = 26;          // under-deck plenum; must clear liner_od (assert A4)
-deck_t  = 3;
-head    = 12;           // air space above shoe tops
-tong_jaw = 8;           // free space at each shoe end for tong jaws (assert A5)
-pocket_gap = 8;
-jet_off = 5;            // jet row offset outboard of shoe face (clears pocket ribs)
+deck_t  = 8 * layer_h_p;            // 3.2
+lid_t   = 8 * layer_h_p;            // 3.2
+cap_t   = 5 * layer_h_p;            // 2.0
+head    = 7;            // air space above shoe tops
+tong_jaw = 7;           // free space at each shoe end for tong jaws (assert A5)
+pocket_gap = 6;
+jet_off = 4;            // jet row offset outboard of shoe face (clears pocket ribs)
 jet_d   = 4;
 jets_per_row = 5;       // spacing must exceed jet_d (assert A6) or holes fuse tangent
 cap_standoff = 2;       // caps float on nubs; the standoff IS the exhaust (assert A3)
 vent_d = 6;
-foot_h = 8;
+foot_h = 4;
 
 // ---- derived (relationships, not values — crackle house rule)
 bay_x = shoe_w + 2*tong_jaw;
@@ -77,6 +92,22 @@ assert(tong_jaw >= 6, str("A5 tong_jaw ", tong_jaw, " leaves no grip room"));
 // (found the hard way: 6 holes over 20 mm put centers exactly one diameter apart).
 assert(shoe_w/(jets_per_row-1) > jet_d,
   str("A6 jet spacing ", shoe_w/(jets_per_row-1), " <= jet_d ", jet_d));
+// A7 a vertical wall that is not a whole number of extrusion lines gets its remainder
+// filled as GAP INFILL — 53.65 g and 48m57s of it on the 2026-09-01 slice, a quarter of
+// that print's whole duration. Costs nothing to satisfy and is invisible in a diff.
+function lines(t) = t / line_w;
+function whole(x) = abs(x - round(x)) < 0.02;
+assert(whole(lines(skin)),
+  str("A7 skin ", skin, " is ", lines(skin), " lines at ", line_w,
+      " — the remainder prints as gap infill"));
+assert(whole(lines(rib_t)) && rib_t >= 2*line_w,
+  str("A7 rib ", rib_t, " is ", lines(rib_t), " lines at ", line_w,
+      " — under two lines a rib prints as mush"));
+// A8 a horizontal plate that is not a whole number of layers ends in a partial layer.
+assert(whole(floor_t/layer_h_p) && whole(deck_t/layer_h_p)
+       && whole(lid_t/layer_h_p) && whole(cap_t/layer_h_p),
+  str("A8 plates floor ", floor_t, " / deck ", deck_t, " / lid ", lid_t, " / cap ",
+      cap_t, " are not all whole layers of ", layer_h_p));
 
 echo(str("interior ", int_w, " x ", int_d, " x ", int_h,
          "  outer ", out_w, " x ", out_d, " x ", out_h + foot_h, " + lid"));
@@ -108,8 +139,8 @@ module body() {
           cube([out_w - 2*(2*skin+gap), out_d - 2*(2*skin+gap), skin + 2*e]); }
       // sparse ribs tying the skins (4 verticals per long side)
       for (sx=[-1.5:1:1.5], sy=[-1,1])
-        translate([sx*int_w/4 - 1, sy*(int_d/2 + skin + gap/2) - gap/2 - 1, floor_t])
-          cube([2, gap + 2, int_h - 10]);
+        translate([sx*int_w/4 - rib_t/2, sy*(int_d/2 + skin + gap/2) - gap/2 - 1, floor_t])
+          cube([rib_t, gap + 2, int_h - 10]);
       // inlet socket boss, left end wall, axis at plenum mid-height
       translate([-out_w/2 - 8, 0, floor_t + plenum_h/2]) rotate([0, 90, 0])
         cylinder(d=liner_od + 0.4 + 2*3, h=8 + 2*skin + gap + e);
@@ -144,7 +175,7 @@ module body() {
       difference() {
         cylinder(d=liner_od + 1.4, h=8 + 2*skin + gap + 3*e);
         for (a=[30, 150, 270]) rotate([0, 0, a])
-          translate([liner_od/2 + 0.2, -1, -e]) cube([1.2, 2, 8 + 2*skin + gap + 5*e]);
+          translate([liner_od/2 + 0.2, -1, -e]) cube([rib_t, 2, 8 + 2*skin + gap + 5*e]);
       }
     }
     // probe port, right end wall, mid-height above deck: 6.5 mm for a K-type bead
@@ -174,8 +205,8 @@ module deck() {
       for (cx=[pocket_cx1, pocket_cx2], sx=[-1,1], sy=[-1,1])
         translate([cx + sx*(shoe_w/2 + 0.8), sy*(shoe_t/2 + 0.8), deck_t/2 - e])
           scale([sx, sy, 1]) {
-            translate([-8, 0, 0]) cube([10, 2, 12]);   // along the big face
-            translate([0, -8, 0]) cube([2, 10, 12]);   // along the shoe end
+            translate([-8, 0, 0]) cube([10, rib_t, 12]);   // along the big face
+            translate([0, -8, 0]) cube([rib_t, 10, 12]);   // along the shoe end
           }
       // 3 dome bumps per pocket: the shoe stands on points, not on a plane
       for (cx=[pocket_cx1, pocket_cx2], p=[[-6,0],[6,-2],[6,2]])
@@ -196,12 +227,12 @@ module deck() {
 module lid() {
   difference() {
     union() {
-      cube([out_w, out_d, 3], center=true);
-      translate([0, 0, -3]) difference() {   // skirt registering inside inner skin
-        cube([int_w - 0.8, int_d - 0.8, 3], center=true);
-        cube([int_w - 0.8 - 2*skin, int_d - 0.8 - 2*skin, 3 + e], center=true); }
-      for (sx=[-1,1]) translate([sx*(out_w/2 - 6), 0, 3]) // grip bars
-        cube([6, out_d - 20, 3], center=true);
+      cube([out_w, out_d, lid_t], center=true);
+      translate([0, 0, -lid_t]) difference() {   // skirt registering inside inner skin
+        cube([int_w - 0.8, int_d - 0.8, lid_t], center=true);
+        cube([int_w - 0.8 - 2*skin, int_d - 0.8 - 2*skin, lid_t + e], center=true); }
+      for (sx=[-1,1]) translate([sx*(out_w/2 - 6), 0, lid_t]) // grip bars
+        cube([6, out_d - 20, lid_t], center=true);
       // standoff bumps live HERE, on the lid's top face, not under the cap: nubs on
       // the cap's underside would land four points on the bed and leave its plate
       // bridging air. The cap drops onto these, pins locate it, and every surface
@@ -222,7 +253,7 @@ module lid() {
 module cap() {
   difference() {
     union() {
-      cube([cap_w, cap_d, 2], center=true);
+      cube([cap_w, cap_d, cap_t], center=true);
       translate([0, 0, 1]) hull() {          // grip fin, grabbed bare-handed when warm
         cube([24, 3, e], center=true);
         translate([0, 0, 14]) cube([14, 3, e], center=true); }
@@ -236,11 +267,65 @@ module cap() {
   }
 }
 
+// ================================================================ assembly views
+// The guide's diagrams are RENDERED FROM THIS MODEL, never drawn to look right, so a
+// change to the part changes the picture in the same commit. Each step shows the state
+// AFTER that step's action, with the piece being added lifted clear.
+deck_z = floor_t + plenum_h + deck_t/2;
+lid_z  = out_h + skin + lid_t/2;
+cap_z  = lid_z + lid_t/2 + cap_standoff + cap_t/2;
+
+module shoes(only=2) {
+  for (i=[0:only-1]) color("chocolate")
+    translate([i == 0 ? pocket_cx1 : pocket_cx2, 0,
+               floor_t + plenum_h + deck_t + shoe_h/2])
+      cube([shoe_w, shoe_t, shoe_h], center=true);
+}
+module liner_tube() {          // the aluminum, so the guide shows what is NOT printed
+  color("silver") translate([-out_w/2 - 30, 0, floor_t + plenum_h/2]) rotate([0, 90, 0])
+    difference() { cylinder(d=liner_od, h=60); cylinder(d=inlet_id, h=60 + e); }
+}
+// step 1 body, 2 deck, 3 liner, 4 shoes, 5 lid, 6 caps.
+// `fly` is the ONE piece still in the air; everything before it is seated. In the
+// exploded view every piece flies at a rising offset, so the picture reads bottom to
+// top in the order the hands do it.
+// A piece "in flight" must clear the RIM to be visible at all — a deck lifted 30 mm is
+// still down inside a box 79 mm deep, which made step 2 a picture of nothing happening.
+// So flight height is measured from the top of the box, never as a bare offset.
+clear_h = out_h + 26;
+module assembly(step, fly=0, lift=0) {
+  body();
+  if (step >= 2) translate([0, 0, fly == 2 ? clear_h : deck_z + (lift ? 22 : 0)]) deck();
+  if (step >= 3) translate([0, 0, fly == 3 ? 34 : 0]) liner_tube();
+  if (step >= 4) translate([0, 0, fly == 4 ? clear_h - 10 : (lift ? 44 : 0)]) shoes();
+  if (step >= 5)
+    translate([0, 0, fly == 5 ? clear_h + 16 : lid_z + (lift ? 70 : 0)]) lid();
+  if (step >= 6) for (cx=[pocket_cx1, pocket_cx2])
+    translate([cx, 0, fly == 6 ? clear_h + 34 : cap_z + (lift ? 92 : 0)]) cap();
+}
+// the working section: what the air actually does, for the guide's first page
+module cutaway() {
+  // Only the BODY is cut; deck, shoes, liner and lid stay whole and keep their colours,
+  // with the lid floating clear so the section is readable. Cutting the whole assembly
+  // instead needs --render (preview paints phantom cut planes where the subtracting
+  // solid leaves the part) and CGAL then flattens every colour to one, which turns an
+  // explanatory section into a yellow slab. Tried both; this is the one that reads.
+  difference() { body(); translate([0, -out_d, -20]) cube([2*out_w, out_d, 240]); }
+  translate([0, 0, deck_z]) deck();
+  liner_tube();
+  shoes();
+  translate([0, 0, lid_z + 26]) lid();
+  for (cx=[pocket_cx1, pocket_cx2]) translate([cx, 0, cap_z + 40]) cap();
+}
+
 // ================================================================ emit
 if (part == "body") body();
 if (part == "deck") deck();
 if (part == "lid")  lid();
 if (part == "cap")  cap();
+if (part == "exploded") assembly(6, fly=0, lift=1);
+if (part == "cutaway") cutaway();
+for (n=[1:6]) if (part == str("step", n)) assembly(n, fly=n, lift=30);
 if (part == "preview") {
   difference() { body(); translate([0, -60, -20]) cube([200, 60, 150]); } // cutaway
   translate([0, 0, floor_t + plenum_h + deck_t/2]) deck();
