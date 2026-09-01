@@ -31,7 +31,13 @@ def read_facets(path):
         raise ValueError(f"{path.name}: trailing {len(verts)} vertices, file truncated")
 
 
-def measure(path):
+def signed_volume(path):
+    """Signed tetrahedron sum, facet count, and bounding-box extent.
+
+    The sign is kept rather than folded away here so a test can see it: an outward-wound
+    solid must come out POSITIVE, and a reversed winding is a real defect that abs()
+    would silently paper over.
+    """
     volume = 0.0
     lo = [float("inf")] * 3
     hi = [float("-inf")] * 3
@@ -47,7 +53,12 @@ def measure(path):
         count += 1
     if not count:
         raise ValueError(f"{path.name}: no facets parsed")
-    return abs(volume), count, [hi[i] - lo[i] for i in range(3)]
+    return volume, count, [hi[i] - lo[i] for i in range(3)]
+
+
+def measure(path):
+    volume, count, box = signed_volume(path)
+    return abs(volume), count, box
 
 
 def main(argv):
