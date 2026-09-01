@@ -250,6 +250,39 @@ middle option nobody has tried.
 not ask for, prove which one owns it before changing either. The temperatures settled this in one
 reading — 140/50 appear nowhere in our code.
 
+## A VENDOR'S OWN SLICER PROFILE OUTRANKS THE VENDOR'S OWN PRODUCT PAGE
+
+**Creality say two different things about one spool of Hyper PC, and they differ by 40 C
+on the number that decides whether the part sticks.**
+
+| source | bed |
+|---|---|
+| the product listing (`makerparts3d`, and the spec block Creality distributes) | 50-80 C |
+| `Hyper PC @Creality K2 Plus 0.8 nozzle.json`, shipped inside Creality Print | **110 C**, first layer and after |
+
+The page number was published in a build's README and its assembly PDF on 2026-09-01 and
+was very likely the cause of the adhesion failure that followed. **The profile is the one
+that prints; the page is copy.** The same profile also carries `chamber_temperature 50`,
+`activate_chamber_temp_control 1` and `close_fan_the_first_x_layers 3`, none of which the
+page mentions at all.
+
+Cross-check against this repo before believing either: `machine.BED_TEMP` has no PC row,
+but its nearest analogue ABS is bed 100 with `FAN_MAX` 0.10, which agrees with the profile
+and not with the page. `machine.BED_MAX['k2plus']` is 120.0 measured under load, so 110 is
+inside what the machine actually holds.
+
+**The profiles are on disk and they are readable — read them.**
+
+    /Applications/Creality Print.app/Contents/Resources/profiles/Creality/filament/
+    /Applications/Creality Print.app/Contents/Resources/profiles/Creality/process/
+
+The same directory settled a second question the same day: `line_width 0.82`,
+`wall_loops 2`, `layer_height 0.4` for the 0.8 nozzle. A wall typed as 2.4 mm is 2.93
+lines at that width, and the slicer fills the remainder as GAP INFILL — 53.65 g and
+48m57s, a quarter of that print's duration. **A wall thickness is a relationship to the
+profile's line width, not a number to type**, which is the same lesson as STORE THE
+RELATIONSHIP above, arriving through the slicer instead of through the plate.
+
 ## Testing these files from a shell
 
 **zsh does not word-split an unquoted parameter.** `python3 $CMD` sends the whole string as one

@@ -196,17 +196,46 @@ regenerated part that silently overwrites a printed one's gcode already bit this
 
 ## References examined
 
-- **makerparts3d.com Hyper PC listing** (opened): the only spec sheet found — print temps,
-  density 1.19, and the 111.2 C claim quoted above. Adopted as the material bound.
-- **store.creality.com Hyper PC page** (opened): no technical specs at all. Nothing to adopt.
-- **RepRap wiki, Heated Build Chamber** (opened): duct-fed hot air as the heat source
-  adopted (it is this design's premise). Manual sliding-vent throttling rejected — fixed
-  orifice areas sized against the inlet (guard A3) instead, no moving hot parts. MDF box
-  with glued cardboard insulation rejected — printed double skin needs no adhesive at 110 C.
-- **Ultimaker PC TDS**: not opened (server 403), numbers taken from the search snippet and
-  labeled as such above. Used only as the comparable for where PC blends actually sit.
-- **Regad-style heated creasing stations**: named prior art for the two-hot-one-working
-  rotation. Not examined — no open design found in this pass.
+Each entry names WHAT WAS OPENED and the verdict. A source that was not opened says so.
+
+- **`Hyper PC @Creality K2 Plus 0.8 nozzle.json` and `0.40mm Standard @Creality K2 Plus
+  0.8 nozzle.json`**, shipped inside Creality Print (opened, on disk). Mechanism: the
+  process profile's `line_width` 0.82 / `wall_loops` 2 / `layer_height` 0.4, and the
+  filament profile's `hot_plate_temp` 110 / `chamber_temperature` 50 /
+  `close_fan_the_first_x_layers` 3. **ADOPTED as the authority for every wall thickness
+  and every temperature in this design** — and it is the reference that CONTRADICTED the
+  vendor's own product page by 40 C on bed temperature.
+- **`kennetek/gridfinity-rebuilt-openscad` Discussion #17** (opened). Mechanism: wall
+  thickness is the fixed constant `d_wall` in `gridfinity-constants.scad`, edited by hand;
+  the thread is a user on a 0.8 nozzle reporting *"there are actually holes in the wall"*
+  and being told to retype the constant. **REJECTED the fixed-constant approach and kept
+  the derived one** — but the thread is the useful half: the defect this design hit is
+  common enough to have its own support thread in the most-used parametric OpenSCAD
+  project there is, which is why it is a guard here (A7) and not a comment.
+- **`devzero/bosl2-parts`** — seen only in a search result, NOT opened: its
+  `gridfinity_bin` takes `wall_thickness` defaulting to 0.95, which looks like one
+  0.8-nozzle line but is still typed rather than derived. Recorded as a second data point
+  on how the ecosystem handles this, not as an examined source.
+- **RepRap wiki, Heated Build Chamber** (opened). Duct-fed hot air from an external
+  source **ADOPTED** — it is this design's premise. Manual sliding-vent throttling
+  **REJECTED**: fixed orifice areas sized against the inlet (guard A3) hold the balance
+  with no moving part in the hot zone. MDF box with glued cardboard insulation
+  **REJECTED**: a printed double skin with a sealed air gap needs no adhesive at 110 C.
+- **makerparts3d Hyper PC listing** (opened): the only published spec sheet found — print
+  temps, density 1.19, and the "structural integrity above 111.2 C" claim with no test
+  load stated. **ADOPTED as the material bound**, and its bed figure **RETRACTED** in
+  favour of the slicer profile above.
+- **store.creality.com Hyper PC page** (opened): no technical specification at all.
+  Nothing to adopt; recorded because "the vendor's page" is two different pages and only
+  one of them has numbers.
+- **Ultimaker PC technical data sheet**: **NOT opened** — the PDF returns HTTP 403. The
+  HDT 104.5 C / Vicat 114.7 C figures quoted earlier come from a search snippet and are
+  labeled as such wherever they appear.
+
+Nothing was found for the two-hot-one-working rotation itself. An earlier version of this
+section named "Regad-style heated creasing stations" as prior art; it is removed rather
+than left standing, because nobody opened it and a name in a reference list that was never
+read is the padding this section exists to prevent.
 
 Future options, deliberately not built: an inline PID on the source side if the gun's own
 thermostat proves sloppy, and a hanging-shank deck v2 if the real shoes turn out to carry
