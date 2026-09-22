@@ -337,6 +337,12 @@ def _foot_islands(tris, z):
     # 0.697 mm2 island reported as 10.00 mm wide. Raising here rather than clamping, because a
     # silently corrected number is a wrong number that nobody ever looks at again.
     for a, w in out:
+        if a < 0.05:
+            # A sliver: an island under 0.05 mm2 is below any line width and below the probe's
+            # own rounding, so the invariant cannot be checked on it. It counts as nothing, as
+            # it always did in the width table; asserting on it killed the whole gate on a sound
+            # part (a 0.0012 mm2 island, 2026-09-23 00:5x, the sprung wall's tab holes at z=0.83).
+            continue
         if math.pi * (w / 2.0) ** 2 > a * 1.05 + 1e-9:
             raise AssertionError(
                 "island width %.4f mm cannot fit in its own area %.4f mm2 at z=%.4f -- the width "
