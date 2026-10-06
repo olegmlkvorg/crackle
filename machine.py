@@ -1462,6 +1462,24 @@ def aux_fans(printer, frac):
 SAVED_MESH = {"k2plus": "default"}
 
 
+def home_clean(w, printer):
+    """Home, CLEAN THE TIP, home Z again, reload the mesh. For the K2 only.
+
+    Oleg 2026-10-06, a flow ladder whose first layer flew over 1 mm high: "perhaps before you
+    measure z before printing, you shall clean head". The K2 zeroes Z by touching the plate with
+    the NOZZLE, so a blob of hard TPU under a cold tip sets zero high by its own thickness.
+    The machine's own NEW_CLEAR_NOZZLE goes to the purge box behind the plate (Y371, past the
+    plate's 350), heats to 220, pushes 60mm out, wipes the tip (BOX_NOZZLE_CLEAN) and drops the
+    nozzle back to its 140 probe temperature. Then G28 Z re-takes zero on the clean tip, and the
+    saved mesh is put back because G28 clears it."""
+    if printer != "k2plus":
+        return home(w, printer)
+    w("G28                                ; coarse, with whatever is on the tip")
+    w("NEW_CLEAR_NOZZLE                   ; purge box behind the plate: 220C, 60mm out, wipe, back to 140")
+    w("G28 Z                              ; zero again on the CLEAN tip")
+    w(f'BED_MESH_PROFILE LOAD={SAVED_MESH[printer]}      ; G28 cleared it; put the saved mesh back')
+
+
 def home(w, printer, calibrate=False):
     """G28, and then PUT THE BED MESH BACK, because G28 throws it away — or, with
     `calibrate=True`, RE-MEASURE it: a full BED_MESH_CALIBRATE saved over the session profile,
