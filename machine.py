@@ -759,7 +759,14 @@ PROVEN_LAYER1 = {
     # 0.25 x 3.94 -- read off two zladder plates by Oleg 2026-08-07 (cited as the R9 coupon since),
     # and then carried by the f3x4r1c 339.5x304.8 bucket that COMPLETED at 518 min and was
     # accepted with a photo 2026-08-08: "Perfect bucket".
-    "k2plus": [(0.10, 2.00), (0.25, 3.94)],
+    "k2plus": [(0.10, 2.00), (0.25, 3.94),
+               # 0.24 x 0.93 -- ORDERED, NOT YET READ. Oleg at the machine 2026-10-06, 72D TPU on
+               # the 0.4 nozzle, after three 0.10 anchors: "first layer heigh should be 0.24 as
+               # 0.1 does nt extrude anything almost". That sentence is his reading of the 0.10
+               # plates; the 0.24 plate itself is the next coupon. This entry is the one exception
+               # to "a pair somebody watched come off the plate", made visible here, and it is
+               # retracted or confirmed from that plate, not left as it stands.
+               (0.24, 0.93)],
 }
 
 
