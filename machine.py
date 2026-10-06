@@ -1472,19 +1472,22 @@ def home_clean(w, printer, temp, purge_mm=60.0):
 
     This is the K2's own START_PRINT order, read off its config and reproduced line for line
     with the parts we do not want left out (their calibrate, their M109 point waits):
-      nozzle to 140 -> G28 -> NOZZLE_CLEAR (the scrub on the plate) -> bed, nozzle 140 ->
-      BOX_NOZZLE_CLEAN (wipe in the box) -> G28 Z (zero on the clean 140 tip) -> mesh back ->
-      print temp, in the box -> purge -> BOX_NOZZLE_CLEAN (wipe at print temp, as they do).
+      nozzle to 140 -> G28 -> NOZZLE_CLEAR (the scrub on the plate) -> G28 Z (zero on the
+      scrubbed 140 tip) -> mesh back -> print temp, in the box -> purge -> BOX_NOZZLE_CLEAN
+      (wipe at print temp, as they do). Their 140 box wipe is left out: see the note below.
     The nozzle goes 140 -> print temp once. The purge is stationary ON PURPOSE and tagged
     '; BOX PURGE': the wipe after it is its far end (validate R10). K2 only."""
     if printer != "k2plus":
         return home(w, printer)
+    # NO BOX WIPE AT 140: BOX_NOZZLE_CLEAN extrudes during the wipe, and the machine refused it
+    # ("Extrude below minimum temp") and PAUSED the job, twice (2026-10-06, console). Their own
+    # START_PRINT survives because its scrub leaves the nozzle hotter. The scrub and the Z zero
+    # happen at 140; the box wipe happens once, at print temperature, after the purge.
     w("M104 S140                          ; the probe/clean temperature, theirs")
     w("G28                                ; coarse, with whatever is on the tip")
     w("NOZZLE_CLEAR                       ; their scrub of the nozzle on the plate")
     w("TEMPERATURE_WAIT SENSOR=extruder MINIMUM=130 MAXIMUM=150")
-    w("BOX_NOZZLE_CLEAN                   ; their wipe in the box, at 140")
-    w("G28 Z                              ; zero again on the CLEAN tip")
+    w("G28 Z                              ; zero again on the scrubbed tip")
     w(f'BED_MESH_PROFILE LOAD={SAVED_MESH[printer]}      ; G28 cleared it; put the saved mesh back')
     w(f"M104 S{temp}")
     w("BOX_GO_TO_EXTRUDE_POS              ; heat in the purge box behind the plate (133,378)")
