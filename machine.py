@@ -1518,9 +1518,12 @@ def home(w, printer, calibrate=False):
       hangs off /printer/print/start because ONE job started with SDCARD_PRINT_FILE through
       /printer/gcode/script (send.py --start-via-script) skipped the probe (first move in 40 s).
       The NEXT job by the same route probed again. The one difference seen: the skip followed a
-      CANCELLED job, the probe followed a COMPLETED one whose tail ran M84. One observation
-      each; the route alone is not the switch. The next test is the same route after a tail
-      without M84.
+      CANCELLED job, the probe followed a COMPLETED one whose tail ran M84. Then the test: the
+      same route after a COMPLETED job whose tail left the motors ON went straight to the
+      file's own first move, no probe (three skips, one probe, all by the script route). So:
+      start with SDCARD_PRINT_FILE via gcode/script AND never end a file with M84. Both are
+      needed; the start endpoint probes regardless, and M84 brought the probe back even by
+      the script route.
 
       HALF-MEASURED 2026-08-31, off the running machine's configfile while it was injecting one:
       NOTHING in the Klipper config references BED_MESH_CALIBRATE_START_PRINT — not homing_override,
