@@ -1256,7 +1256,8 @@ def prime_region(printer, avoid=(), want=None, floor=None, near=None):
     return rows, meta
 
 
-def prime(w, *, printer, z, rate, feed, travel_feed, avoid=(), near=None, reset_e=True, e0=0.0):
+def prime(w, *, printer, z, rate, feed, travel_feed, avoid=(), near=None, reset_e=True, e0=0.0,
+          purge_mm=PRIME_PURGE_MM):
     """Emit the whole start-of-extrusion sequence. ONE implementation, for every generator.
 
     `w`            the emit callable the generator already has
@@ -1273,6 +1274,11 @@ def prime(w, *, printer, z, rate, feed, travel_feed, avoid=(), near=None, reset_
     `avoid`        ('rect',x0,y0,x1,y1) / ('circle',cx,cy,r) footprints of everything that will be
                    printed. NOT optional in spirit: an empty tuple means "nothing is on this plate".
     `near`         the body's first point, used only to break ties between equally good strips.
+    `purge_mm`     filament mm of purge laid along the lead-in, default PRIME_PURGE_MM. A hotend
+                   that sat at 245 drains itself (Oleg 2026-10-06, 72D TPU: "the filament
+                   naturally drained out so the print has no material for a while"); the purge
+                   is still PINNED along a path, never stationary (R10) -- a bigger purge is a
+                   longer lead-in, and prime_region is asked for the rows to hold it.
 
     Returns (x, y, e) -- where the head is and what the E axis reads -- so no caller re-derives it.
     Emits no '; BODY_START'; that stays the caller's, because the caller owns what follows."""
@@ -1281,7 +1287,7 @@ def prime(w, *, printer, z, rate, feed, travel_feed, avoid=(), near=None, reset_
     lead_rate = rate * PRIME_FAT
     if PRIME_FAT > PRIME_FAT_MAX:
         raise ValueError(f"prime: PRIME_FAT {PRIME_FAT} exceeds {PRIME_FAT_MAX}")
-    lead_mm = PRIME_PURGE_MM / lead_rate
+    lead_mm = purge_mm / lead_rate
     taper_mm = PRIME_TAPER_SEG * len(PRIME_TAPER)
     rows, meta = prime_region(printer, avoid=avoid,
                               want=lead_mm + PRIME_WITNESS_MM + taper_mm,
@@ -1300,7 +1306,7 @@ def prime(w, *, printer, z, rate, feed, travel_feed, avoid=(), near=None, reset_
 
     w(f"; PRIME  {meta['rows']} rows x {meta['row_mm']:.1f}mm on the {meta['edge']} of the mesh, "
       f"{path:.1f}mm of path, ALL OF IT PINNED -- no stationary extrusion at any Z (validate R10)")
-    w(f"; PRIME  purge {PRIME_PURGE_MM:g}mm of filament over the first {lead_mm:.1f}mm at "
+    w(f"; PRIME  purge {purge_mm:g}mm of filament over the first {lead_mm:.1f}mm at "
       f"{PRIME_FAT:g}x layer 1, then layer 1's own {rate:.5f}mm/mm as a first-layer WITNESS")
     w(f"G0 F{travel_feed} Z{max(z + 1.0, 1.0):.3f}   ; PRIME-TRAVEL lift, nothing on the plate yet")
     w(f"G0 F{travel_feed} X{pts[0][0]:.3f} Y{pts[0][1]:.3f}   ; PRIME-TRAVEL to the prime start")
