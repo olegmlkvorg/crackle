@@ -1462,38 +1462,38 @@ def aux_fans(printer, frac):
 SAVED_MESH = {"k2plus": "default"}
 
 
-def home_clean(w, printer, temp):
-    """Home, PURGE AND WIPE IN THE BOX, home Z again, reload the mesh. For the K2 only.
+def home_clean(w, printer, temp, purge_mm=60.0):
+    """Home and clean THE WAY THE MACHINE DOES, then purge at print temperature in its box.
 
     Oleg 2026-10-06, a flow ladder whose first layer flew over 1 mm high: "perhaps before you
-    measure z before printing, you shall clean head". The K2 zeroes Z by touching the plate with
-    the NOZZLE, so a blob of hard TPU under a cold tip sets zero high by its own thickness.
+    measure z before printing, you shall clean head", then, on the first attempt (which heated
+    to 225 and cooled to 140 before wiping): "again we got to 225 and then back to 140. also we
+    missing part where printer scrubs over the plate to clean the noze".
 
-    The sequence is the machine's own NEW_CLEAR_NOZZLE taken apart, because that macro wipes at
-    220 (Oleg: "cleaning noze makro has 140 hardcoded" -- the box wipe is meant for a 140 tip,
-    where the plastic is firm enough to scrape off instead of smear). So: go to the purge box
-    behind the plate (box extrude_pos 133,378, past the plate's 350), heat to the PRINT temp,
-    push 60mm out and pull 8 back, cool to the 140 probe temperature with the part fan, wipe
-    (BOX_NOZZLE_CLEAN), then G28 Z re-takes zero on the clean cold tip and the saved mesh goes
-    back because G28 clears it. The purge is stationary ON PURPOSE and tagged '; BOX PURGE':
-    the wipe is its far end, which is the mechanism validate R10 asks for."""
+    This is the K2's own START_PRINT order, read off its config and reproduced line for line
+    with the parts we do not want left out (their calibrate, their M109 point waits):
+      nozzle to 140 -> G28 -> NOZZLE_CLEAR (the scrub on the plate) -> bed, nozzle 140 ->
+      BOX_NOZZLE_CLEAN (wipe in the box) -> G28 Z (zero on the clean 140 tip) -> mesh back ->
+      print temp, in the box -> purge -> BOX_NOZZLE_CLEAN (wipe at print temp, as they do).
+    The nozzle goes 140 -> print temp once. The purge is stationary ON PURPOSE and tagged
+    '; BOX PURGE': the wipe after it is its far end (validate R10). K2 only."""
     if printer != "k2plus":
         return home(w, printer)
+    w("M104 S140                          ; the probe/clean temperature, theirs")
     w("G28                                ; coarse, with whatever is on the tip")
-    w("BOX_GO_TO_EXTRUDE_POS              ; the purge box behind the plate (133,378)")
-    w(f"M104 S{temp}")
-    w(f"TEMPERATURE_WAIT SENSOR=extruder MINIMUM={temp-10} MAXIMUM={temp+10}")
-    w("G91")
-    w("G1 E60 F300                        ; BOX PURGE, stationary by design: the box wipe is the far end")
-    w("G1 E-8 F180                        ; BOX PURGE, pull back so the tip stops weeping")
-    w("G90")
-    w("M106 S255")
-    w("M104 S140")
-    w("TEMPERATURE_WAIT SENSOR=extruder MINIMUM=130 MAXIMUM=150   ; the wipe wants a 140 tip")
-    w("BOX_NOZZLE_CLEAN                   ; the machine's own wipe, at its own 140")
-    w("M107")
+    w("NOZZLE_CLEAR                       ; their scrub of the nozzle on the plate")
+    w("TEMPERATURE_WAIT SENSOR=extruder MINIMUM=130 MAXIMUM=150")
+    w("BOX_NOZZLE_CLEAN                   ; their wipe in the box, at 140")
     w("G28 Z                              ; zero again on the CLEAN tip")
     w(f'BED_MESH_PROFILE LOAD={SAVED_MESH[printer]}      ; G28 cleared it; put the saved mesh back')
+    w(f"M104 S{temp}")
+    w("BOX_GO_TO_EXTRUDE_POS              ; heat in the purge box behind the plate (133,378)")
+    w(f"TEMPERATURE_WAIT SENSOR=extruder MINIMUM={temp-10} MAXIMUM={temp+10}")
+    w("G91")
+    w(f"G1 E{purge_mm:g} F300                       ; BOX PURGE, stationary by design: the box wipe is the far end")
+    w("G1 E-8 F180                        ; BOX PURGE, pull back so the tip stops weeping")
+    w("G90")
+    w("BOX_NOZZLE_CLEAN                   ; their wipe again, at print temp, as START_PRINT does")
 
 
 def home(w, printer, calibrate=False):
