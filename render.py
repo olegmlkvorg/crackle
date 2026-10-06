@@ -99,7 +99,10 @@ def svg(segs, out, w=1500, h=820, zmax_cut=None, layers=0, min_seg=0.0,
     scf = min(pw / max(x1 - x0, 1e-6), (h - pad * 3) / max(z1 - z0, 1e-6))
 
     def col(zz):
-        t = (zz - z0) / max(z1 - z0, 1e-6)
+        # A SINGLE-LAYER FILE HAS NO HEIGHT TO COLOUR BY. With z0 == z1 every segment scored t=0,
+        # the darkest teal on a near-black plate: a 14-ring flow ladder rendered as nothing
+        # (2026-10-06). One layer is drawn at mid-scale.
+        t = 0.6 if (z1 - z0) < 1e-3 else (zz - z0) / (z1 - z0)
         # dark teal at the plate -> bright ice at the apex
         r = int(20 + 200 * t ** 1.3); g = int(60 + 175 * t); b = int(70 + 165 * t)
         return f"rgb({r},{g},{b})"
