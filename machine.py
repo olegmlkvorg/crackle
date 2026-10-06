@@ -1514,7 +1514,10 @@ def home(w, printer, calibrate=False):
           calibrated anyway. The hypothesis is dead; it is recorded because it is the obvious one
           and the next person will have it too.
 
-      WHAT SELECTS IT IS STILL UNKNOWN. Do not quote a cause here until one is measured.
+      RESOLVED 2026-10-06: it hangs off Moonraker's /printer/print/start. Starting the same
+      file with SDCARD_PRINT_FILE through /printer/gcode/script (send.py --start-via-script)
+      homed, loaded the mesh and reached the file's own first move in 40 s with NO probe. The
+      paragraphs below record the measurements that led here.
 
       HALF-MEASURED 2026-08-31, off the running machine's configfile while it was injecting one:
       NOTHING in the Klipper config references BED_MESH_CALIBRATE_START_PRINT — not homing_override,
