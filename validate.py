@@ -1869,7 +1869,16 @@ def check(path):
             # branch was unreachable for 93% of them. Layer 1 is dropped from the failure
             # candidates and reported separately; every other layer is judged on its own.
             _l1 = next((_t for _t in _ratios if _t[2] == 1), None)
-            _cand = [_t for _t in _ratios if not (_pressed_ok and _t[2] == 1)] or _ratios
+            _cand = [_t for _t in _ratios if not (_pressed_ok and _t[2] == 1)]
+            if not _cand and _pressed_ok and _l1 is not None:
+                # A SINGLE-LAYER PRESSED FILE (a first-layer coupon, a flow ladder) has only the
+                # excused layer. The old `or _ratios` fallback judged that excused layer anyway
+                # and failed every such coupon at 1.5x+, which is what a pressed wide line IS.
+                print(f"  fill ratio {_l1[1]:.2f}x at Z{_l1[0]} = layer 1, the only layer, excused: "
+                      f"PRESSED_LAYER1 is declared, so it over-extrudes ON PURPOSE.")
+                _ratios = []
+            _cand = _cand or _ratios
+        if _ratios:
             _wz, _wr, _wl, _wmeas, _wwhy = max(_cand, key=lambda t: t[1])
             # "worst layer" stops being true the moment layer 1 is held out of the running, and an
             # imprecise caption is the whole of this bug. So the caption states its own scope.
@@ -2041,6 +2050,15 @@ def check(path):
     elif not _r1found or _r1z is None:
         print(f"  R9 first layer NOT JUDGED: R1 above already fails for want of a body bead to "
               f"measure. One absence, one verdict.")
+    elif _flowtest and _flow_variable:
+        # A FIRST-LAYER FLOW LADDER HAS NO SINGLE PAIR BY DESIGN: every ring lands a different
+        # width at one height, and the plate reading of THIS file is what produces a pair for
+        # PROVEN_LAYER1. Judging its average width against the ledger would refuse the one file
+        # that can extend the ledger. Declared twice (FLOW_TEST=1 and FLOW=VARIABLE), checked
+        # by R4 NOT APPLICABLE above, and said out loud here rather than ticked.
+        print(f"  R9 first layer NOT JUDGED: declared flow ladder "
+              f"({_flow_variable.group(1)}..{_flow_variable.group(2)} mm3/s); its widths are the "
+              f"measurement, not a pair to verify. Read the plate and add the pair that held.")
     else:
         _fl = first_layer_emitted(path, _zerr)
         _h1, _w1, _zoff = _fl['h1'], _fl['w1'], _fl['zoff']
