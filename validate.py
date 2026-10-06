@@ -630,6 +630,17 @@ def check(path):
     _mws = re.search(r'^; WAVE_SLOPE=([\d.]+)', '\n'.join(_lines[:60]), re.M)
     _wall_i = next((i for i, l in enumerate(_lines) if l.startswith('; WALL_START')), None)
     _wave_thr = 0.35
+    # A DECLARED STRAND SAG LOWERS THE SUPPORT. Oleg 2026-10-06: "filament can not stay in the
+    # air same way nozzle moves ... otherwise layers will never merge". A woven file that
+    # declares '; SAG=<mm>' lands each lap that much BELOW the nozzle path of the lap under it,
+    # on purpose, because the thrown strand hangs there. Against OLD material (a lap ago) the
+    # dive threshold after WALL_START is raised by the declared sag; a landing deeper than the
+    # sag plus the usual margin is still a collision and still fails.
+    _msag = re.search(r'^; SAG=([\d.]+)', '\n'.join(_lines[:80]), re.M)
+    _sag_thr = float(_msag.group(1)) if _msag else 0.0
+    if _msag and _wall_i is not None:
+        print(f"  strand sag declared ({_sag_thr:g}mm): old-material dive threshold after "
+              f"WALL_START raised by that much — landings come down onto the hanging strand")
     if _mws and _wall_i is not None:
         _wlh = re.search(r'^; LAYER_H=([\d.]+)', '\n'.join(_lines[:60]), re.M)
         _wave_thr = max(0.35, min((float(_wlh.group(1)) if _wlh else 0.6) * 0.9,
@@ -675,7 +686,7 @@ def check(path):
                 _cy = int((_py + (_ny - _py) * _t) / _CELL)
                 _cz = _pz + (_nz - _pz) * _t
                 _prev = _topo.get((_cx, _cy))
-                _thr = _wave_thr if (_wall_i is not None and _i > _wall_i) else 0.35
+                _thr = (_wave_thr + _sag_thr) if (_wall_i is not None and _i > _wall_i) else 0.35
                 if _prev is not None and _prev[0] > 0.3 and _prev[0] - _cz > _thr \
                         and _odo + _seg * _t - _prev[1] > _SELF_MM:
                     if _worst is None or _prev[0] - _cz > _worst[2] - _worst[1]:
@@ -1341,7 +1352,13 @@ def check(path):
                 # all LINK from the histogram and R3b only saw POCKET-tagged ones. Plain
                 # LINK connectors run at body speed so they enter harmlessly; a genuine
                 # second speed on them now fails R3.
-                if not _ispocket and not _iscorner:
+                # A bridge running at a DECLARED '; SPEED_BRIDGE=' value is a checked regime
+                # (R3d verifies every bridge speed against the declaration and that it is
+                # slower than the body), so it leaves the body histogram the way corners and
+                # pockets do. A bridge at any OTHER speed stays in, and R3 sees it.
+                _isdeclbridge = bool(_isbridge and _bspd_decl
+                                     and any(abs(_sp - _d_) < 0.6 for _d_ in _bspd_decl))
+                if not _ispocket and not _iscorner and not _isdeclbridge:
                     _spd[_sp] = _spd.get(_sp, 0) + 1
                 # A BRIDGE STAYS IN THE SPEED HISTOGRAM ON PURPOSE. It runs at the body speed and
                 # is meant to; only its FLOW is a second regime. If a generator ever slowed one to
