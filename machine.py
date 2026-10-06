@@ -1603,7 +1603,10 @@ def home(w, printer, calibrate=False):
 # The 80 was his 2026-08-08 call for ductile first-layer welds on the fat-bead bucket work; the
 # tag floors at 60 get a set floor instead of a rubbery one. (210, 60) is already a proven
 # PROVEN_SEND temps pair, so the ledger agrees. The 80 story stays above; this line supersedes it.
-BED_TEMP = {"pla": 60, "pla-matte": 60, "petg": 70, "tpu": 45, "tpu-72d": 45, "abs": 100}
+# tpu-72d bed 50, NOT 45: the K2's own job-start probe heats the plate to 50 (default_bed_temp)
+# before the file runs, and Oleg 2026-10-06: "never put bed to 40, it will take ages to cool".
+# A target under the probe's 50 either waits for cooling or prints on a plate drifting down.
+BED_TEMP = {"pla": 60, "pla-matte": 60, "petg": 70, "tpu": 45, "tpu-72d": 50, "abs": 100}
 
 # PART-COOLING FAN CEILING, PER MATERIAL. Oleg, 2026-07-26: "fans for printing pla should be only on
 # 20% at most". Running 80% on PLA — which this project had been doing on 320mm plates — chills the
