@@ -2370,7 +2370,7 @@ def check(path):
             _mat = _ln.split('=', 1)[1].strip().lower()
         if 'BODY_START' in _ln:
             break
-    if _mat == 'tpu':
+    if _mat is not None and _mat.startswith('tpu'):
         _head = ""
         for _ln in open(path):
             _head += _ln

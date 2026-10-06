@@ -191,6 +191,8 @@ DEFAULT_MATERIAL = LOADED[DEFAULT_PRINTER]
 # MEASURED, sustained  -- a flow held for real minutes without the extruder complaining:
 SUSTAINED_FLOW_BY_MATERIAL = {
     "pla":       55.0,   # Oleg 2026-07-27
+    "tpu-72d":   15.2,   # ASSUMED from the soft TPU figure below, NOT measured on the 72D;
+                         # Oleg 2026-10-06 named the filament (72D transparent) and its 245C.
     "tpu":       15.2,      # MEASURED, not inherited: a ramp that ran clean to turn 27,
                          # with the margin deliberate, and TPU jams the extruder within a minute
                          # above it. Added 2026-07-27 because R6 was failing every TPU file for
@@ -1601,7 +1603,7 @@ def home(w, printer, calibrate=False):
 # The 80 was his 2026-08-08 call for ductile first-layer welds on the fat-bead bucket work; the
 # tag floors at 60 get a set floor instead of a rubbery one. (210, 60) is already a proven
 # PROVEN_SEND temps pair, so the ledger agrees. The 80 story stays above; this line supersedes it.
-BED_TEMP = {"pla": 60, "pla-matte": 60, "petg": 70, "tpu": 45, "abs": 100}
+BED_TEMP = {"pla": 60, "pla-matte": 60, "petg": 70, "tpu": 45, "tpu-72d": 45, "abs": 100}
 
 # PART-COOLING FAN CEILING, PER MATERIAL. Oleg, 2026-07-26: "fans for printing pla should be only on
 # 20% at most". Running 80% on PLA — which this project had been doing on 320mm plates — chills the
@@ -1613,7 +1615,7 @@ BED_TEMP = {"pla": 60, "pla-matte": 60, "petg": 70, "tpu": 45, "abs": 100}
 # molten and smears without air — and Oleg's "lets use fans more" (hanger-tag walls) is scoped
 # there: hangertag.py runs its WALL layers at full part fan by declared emission, floors still
 # uncooled. The cap below keeps governing the fat-bead generators unchanged.
-FAN_MAX = {"pla": 0.20, "pla-matte": 0.20, "petg": 0.40, "tpu": 1.00, "abs": 0.10}
+FAN_MAX = {"pla": 0.20, "pla-matte": 0.20, "petg": 0.40, "tpu": 1.00, "tpu-72d": 1.00, "abs": 0.10}
 # LAYER 1 GETS NO FAN — EXCEPT WHERE THE MATERIAL DEMANDS IT.
 # The first layer's job is to weld to the plate, and cooling it works against the only thing that
 # matters at that moment. But TPU is the exception in BOTH directions: it needs full fans throughout,
@@ -1697,7 +1699,8 @@ TPU_TEMP = 200
 # 81.2 was measured at 230 while the extruder stall that set SUSTAINED_FLOW happened at 210.
 # Treating them as one entry is the same defect as sharing SHRINK between metal and bamboo: a number
 # that belongs to ONE material silently governing another.
-MATERIAL_TEMP = {"pla": TEMP, "pla-matte": 230, "petg": 240, "tpu": TPU_TEMP, "abs": 250}
+# tpu-72d: 245, Oleg 2026-10-06 "this tpu required 245c" (72D transparent TPU on the K2 at .2).
+MATERIAL_TEMP = {"pla": TEMP, "pla-matte": 230, "petg": 240, "tpu": TPU_TEMP, "tpu-72d": 245, "abs": 250}
 # pla-matte's 60 has real provenance — the only entry here that does:
 #   55-65 burst ramp at 230C (2.3 min, 57.4 mm3/s mean delivered): SILENT. Oleg: "test was perfecrt".
 #   70-90 identical conditions: the extruder CRACKED, by ear, firmware reporting zero stalls.
@@ -1706,7 +1709,7 @@ MATERIAL_TEMP = {"pla": TEMP, "pla-matte": 230, "petg": 240, "tpu": TPU_TEMP, "a
 # A burst figure is not a working figure. Kept in step with SUSTAINED_FLOW_BY_MATERIAL (which
 # holds the same 60 with the full story) — two tables disagreeing about the same filament is
 # how a stale number survives, and the first version of THIS comment still said 65.
-MATERIAL_FLOW = {"pla": FLOW, "pla-matte": 60.0, "petg": 40.0, "tpu": TPU_FLOW, "abs": 30.0}
+MATERIAL_FLOW = {"pla": FLOW, "pla-matte": 60.0, "petg": 40.0, "tpu": TPU_FLOW, "tpu-72d": TPU_FLOW, "abs": 30.0}
 
 
 def check_spool(printer, material):
