@@ -2201,8 +2201,26 @@ def check(path):
     _e10 = 0.0
     _abs10 = True
     _pinned10 = False
+    # A PURGE IN THE K2'S BOX IS WIPED, WHICH IS A FAR END. Oleg 2026-10-06: the tip must be
+    # cleaned before Z is zeroed, and the machine's own routine for that is a stationary push
+    # in the purge box behind the plate followed by BOX_NOZZLE_CLEAN. R10's mechanism (nothing
+    # holds the extrudate) is answered by the wipe, not by motion, so a stationary extrusion is
+    # accepted ONLY when all three hold on the raw lines: it is tagged '; BOX PURGE', a
+    # BOX_GO_TO_EXTRUDE_POS precedes it, and a BOX_NOZZLE_CLEAN follows it before BODY_START.
+    _raw10 = open(path).read().splitlines()
+    _box_in = next((i for i, l in enumerate(_raw10, 1) if l.split(';')[0].strip().startswith('BOX_GO_TO_EXTRUDE_POS')), None)
+    _box_wipe = next((i for i, l in enumerate(_raw10, 1) if l.split(';')[0].strip().startswith('BOX_NOZZLE_CLEAN')), None)
+    _body10 = next((i for i, l in enumerate(_raw10, 1) if l.startswith('; BODY_START')), len(_raw10) + 1)
+    _box10 = []
     for _i, _l in enumerate(open(path), 1):
         _c = _l.split(';')[0].strip()
+        if 'BOX PURGE' in _l and _c.startswith('G1') and _box_in and _box_wipe \
+                and _box_in < _i < _box_wipe < _body10:
+            _box10.append(_i)
+            _mb = re.search(r'\bE(-?\d+(?:\.\d+)?)', _c)
+            if _mb and _abs10:
+                _e10 = float(_mb.group(1))
+            continue
         if _c.startswith('M82'):
             _abs10 = True
             continue
@@ -2235,6 +2253,9 @@ def check(path):
                 else:
                     _pinned10 = True
         _x10, _y10, _z10 = _nx, _ny, _nz
+    if _box10:
+        print(f"  R10 {len(_box10)} stationary extrusion(s) in the purge box (lines {_box10[0]}..{_box10[-1]}), "
+              f"between BOX_GO_TO_EXTRUDE_POS and BOX_NOZZLE_CLEAN — accepted: the wipe is the far end.")
     _unpinned = [r for r in _r10 if not r[3]]
     _seam10 = [r for r in _r10 if r[3]]
     if _unpinned:

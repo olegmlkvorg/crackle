@@ -1462,20 +1462,36 @@ def aux_fans(printer, frac):
 SAVED_MESH = {"k2plus": "default"}
 
 
-def home_clean(w, printer):
-    """Home, CLEAN THE TIP, home Z again, reload the mesh. For the K2 only.
+def home_clean(w, printer, temp):
+    """Home, PURGE AND WIPE IN THE BOX, home Z again, reload the mesh. For the K2 only.
 
     Oleg 2026-10-06, a flow ladder whose first layer flew over 1 mm high: "perhaps before you
     measure z before printing, you shall clean head". The K2 zeroes Z by touching the plate with
     the NOZZLE, so a blob of hard TPU under a cold tip sets zero high by its own thickness.
-    The machine's own NEW_CLEAR_NOZZLE goes to the purge box behind the plate (Y371, past the
-    plate's 350), heats to 220, pushes 60mm out, wipes the tip (BOX_NOZZLE_CLEAN) and drops the
-    nozzle back to its 140 probe temperature. Then G28 Z re-takes zero on the clean tip, and the
-    saved mesh is put back because G28 clears it."""
+
+    The sequence is the machine's own NEW_CLEAR_NOZZLE taken apart, because that macro wipes at
+    220 (Oleg: "cleaning noze makro has 140 hardcoded" -- the box wipe is meant for a 140 tip,
+    where the plastic is firm enough to scrape off instead of smear). So: go to the purge box
+    behind the plate (box extrude_pos 133,378, past the plate's 350), heat to the PRINT temp,
+    push 60mm out and pull 8 back, cool to the 140 probe temperature with the part fan, wipe
+    (BOX_NOZZLE_CLEAN), then G28 Z re-takes zero on the clean cold tip and the saved mesh goes
+    back because G28 clears it. The purge is stationary ON PURPOSE and tagged '; BOX PURGE':
+    the wipe is its far end, which is the mechanism validate R10 asks for."""
     if printer != "k2plus":
         return home(w, printer)
     w("G28                                ; coarse, with whatever is on the tip")
-    w("NEW_CLEAR_NOZZLE                   ; purge box behind the plate: 220C, 60mm out, wipe, back to 140")
+    w("BOX_GO_TO_EXTRUDE_POS              ; the purge box behind the plate (133,378)")
+    w(f"M104 S{temp}")
+    w(f"TEMPERATURE_WAIT SENSOR=extruder MINIMUM={temp-10} MAXIMUM={temp+10}")
+    w("G91")
+    w("G1 E60 F300                        ; BOX PURGE, stationary by design: the box wipe is the far end")
+    w("G1 E-8 F180                        ; BOX PURGE, pull back so the tip stops weeping")
+    w("G90")
+    w("M106 S255")
+    w("M104 S140")
+    w("TEMPERATURE_WAIT SENSOR=extruder MINIMUM=130 MAXIMUM=150   ; the wipe wants a 140 tip")
+    w("BOX_NOZZLE_CLEAN                   ; the machine's own wipe, at its own 140")
+    w("M107")
     w("G28 Z                              ; zero again on the CLEAN tip")
     w(f'BED_MESH_PROFILE LOAD={SAVED_MESH[printer]}      ; G28 cleared it; put the saved mesh back')
 
