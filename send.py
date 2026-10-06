@@ -927,9 +927,16 @@ def sha256(path):
     return h.hexdigest()
 
 
-def upload_and_start(host, path):
+def upload_and_start(host, path, via_script=False):
     """Moonraker. Reached ONLY from --live, which refuses without an explicit --printer-host, so
-    there is no host constant anywhere in this file for an accident to find."""
+    there is no host constant anywhere in this file for an accident to find.
+
+    `via_script` skips Moonraker's /printer/print/start and issues Klipper's own
+    SDCARD_PRINT_FILE through /printer/gcode/script instead. Oleg 2026-10-06, after a sixth
+    job-start calibrate of the day: "lets skip the start endpoint then, since it is so stubborn".
+    Creality's service layer injects BED_MESH_CALIBRATE_START_PRINT on job start (machine.home's
+    docstring, measured 2026-08-15/31); whether it hangs off the start endpoint or off the
+    virtual sdcard is the thing this route measures."""
     import urllib.request
     # MOONRAKER LISTENS ON :7125; a bare IP lands on the printer's own web UI, which answers
     # "501 Not Implemented". That exact refusal is in send-log.jsonl twice, a month apart
@@ -950,11 +957,18 @@ def upload_and_start(host, path):
     with urllib.request.urlopen(req, timeout=600) as r:
         up = r.read().decode()[:400]
     import urllib.parse
+    if via_script:
+        body = json.dumps({'script': f'SDCARD_PRINT_FILE FILENAME="{name}"'}).encode()
+        req = urllib.request.Request(f'http://{host}/printer/gcode/script', data=body, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        with urllib.request.urlopen(req, timeout=60) as r:
+            st = r.read().decode()[:400]
+        return {'upload': up, 'start': st, 'start_route': 'gcode/script SDCARD_PRINT_FILE'}
     q = urllib.parse.urlencode({'filename': name})
     req = urllib.request.Request(f'http://{host}/printer/print/start?{q}', data=b'', method='POST')
     with urllib.request.urlopen(req, timeout=60) as r:
         st = r.read().decode()[:400]
-    return {'upload': up, 'start': st}
+    return {'upload': up, 'start': st, 'start_route': 'printer/print/start'}
 
 
 def record(logpath, row):
@@ -1119,7 +1133,8 @@ def cmd_send(args):
         row['live'] = True
         row['host'] = args.printer_host
         try:
-            row['moonraker'] = upload_and_start(args.printer_host, path)
+            row['moonraker'] = upload_and_start(args.printer_host, path,
+                                                via_script=getattr(args, 'start_via_script', False))
             print(f"\n  SENT to {args.printer_host}: {row['moonraker']}")
         except Exception as e:                              # noqa: BLE001
             row['moonraker_error'] = f"{type(e).__name__}: {e}"
@@ -1285,6 +1300,10 @@ def main(argv=None):
     s.add_argument('--printer-host', default=None,
                    help='REQUIRED by --live. There is no default host in this file.')
     s.add_argument('--allow-long', action='store_true')
+    s.add_argument('--start-via-script', action='store_true',
+                   help="start with Klipper's SDCARD_PRINT_FILE via /printer/gcode/script instead "
+                        "of /printer/print/start, below Creality's job-start hook (see "
+                        "upload_and_start)")
     s.add_argument('--oleg-said', metavar='WORDS',
                    help="Oleg's VERBATIM instruction to send a file this gate refuses on ledger "
                         "grounds. Only he can accept a print, so only he can overrule an unproven "
