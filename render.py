@@ -135,7 +135,11 @@ def svg(segs, out, w=1500, h=820, zmax_cut=None, layers=0, min_seg=0.0,
                 # punches holes in the path, which SPLITS runs and makes the file bigger, not
                 # smaller. Skipping a point inside a run keeps it one continuous polyline, and a
                 # point under a pixel from its predecessor cannot be seen anyway.
-                if math.dist(cur[2][-1], b2) < 0.9 and len(cur[2]) > 1:
+                # Measure from the point BEFORE the last one: replacing the last point whenever
+                # the new one is within a pixel of it let a ring of 0.25mm segments collapse
+                # into one zero-length line (the 14-ring flow ladder rendered as nothing,
+                # 2026-10-06). The last point slides along until it is a pixel from the kept one.
+                if len(cur[2]) > 1 and math.dist(cur[2][-2], b2) < 0.9:
                     cur[2][-1] = b2
                 else:
                     cur[2].append(b2)
