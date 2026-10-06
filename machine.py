@@ -191,8 +191,10 @@ DEFAULT_MATERIAL = LOADED[DEFAULT_PRINTER]
 # MEASURED, sustained  -- a flow held for real minutes without the extruder complaining:
 SUSTAINED_FLOW_BY_MATERIAL = {
     "pla":       55.0,   # Oleg 2026-07-27
-    "tpu-72d":   15.2,   # ASSUMED from the soft TPU figure below, NOT measured on the 72D;
-                         # Oleg 2026-10-06 named the filament (72D transparent) and its 245C.
+    "tpu-72d":   50.0,   # OLEG'S FIGURE, 2026-10-06, not yet measured: "the physical cap suppose
+                         # to be like 40 to 50mm3". The 15.2 that sat here was the SOFT TPU's
+                         # extruder-slip figure and did not belong to a 72D; flow_rings.py is the
+                         # measurement, and this number follows its plate.
     "tpu":       15.2,      # MEASURED, not inherited: a ramp that ran clean to turn 27,
                          # with the margin deliberate, and TPU jams the extruder within a minute
                          # above it. Added 2026-07-27 because R6 was failing every TPU file for
@@ -1734,7 +1736,7 @@ MATERIAL_TEMP = {"pla": TEMP, "pla-matte": 230, "petg": 240, "tpu": TPU_TEMP, "t
 # A burst figure is not a working figure. Kept in step with SUSTAINED_FLOW_BY_MATERIAL (which
 # holds the same 60 with the full story) — two tables disagreeing about the same filament is
 # how a stale number survives, and the first version of THIS comment still said 65.
-MATERIAL_FLOW = {"pla": FLOW, "pla-matte": 60.0, "petg": 40.0, "tpu": TPU_FLOW, "tpu-72d": TPU_FLOW, "abs": 30.0}
+MATERIAL_FLOW = {"pla": FLOW, "pla-matte": 60.0, "petg": 40.0, "tpu": TPU_FLOW, "tpu-72d": 50.0, "abs": 30.0}
 
 
 def check_spool(printer, material):
