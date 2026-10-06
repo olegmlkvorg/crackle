@@ -1514,10 +1514,13 @@ def home(w, printer, calibrate=False):
           calibrated anyway. The hypothesis is dead; it is recorded because it is the obvious one
           and the next person will have it too.
 
-      RESOLVED 2026-10-06: it hangs off Moonraker's /printer/print/start. Starting the same
-      file with SDCARD_PRINT_FILE through /printer/gcode/script (send.py --start-via-script)
-      homed, loaded the mesh and reached the file's own first move in 40 s with NO probe. The
-      paragraphs below record the measurements that led here.
+      NOT RESOLVED, and a retraction stays visible: on 2026-10-06 I wrote here that the hook
+      hangs off /printer/print/start because ONE job started with SDCARD_PRINT_FILE through
+      /printer/gcode/script (send.py --start-via-script) skipped the probe (first move in 40 s).
+      The NEXT job by the same route probed again. The one difference seen: the skip followed a
+      CANCELLED job, the probe followed a COMPLETED one whose tail ran M84. One observation
+      each; the route alone is not the switch. The next test is the same route after a tail
+      without M84.
 
       HALF-MEASURED 2026-08-31, off the running machine's configfile while it was injecting one:
       NOTHING in the Klipper config references BED_MESH_CALIBRATE_START_PRINT — not homing_override,
