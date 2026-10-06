@@ -2208,14 +2208,20 @@ def check(path):
     # accepted ONLY when all three hold on the raw lines: it is tagged '; BOX PURGE', a
     # BOX_GO_TO_EXTRUDE_POS precedes it, and a BOX_NOZZLE_CLEAN follows it before BODY_START.
     _raw10 = open(path).read().splitlines()
-    _box_in = next((i for i, l in enumerate(_raw10, 1) if l.split(';')[0].strip().startswith('BOX_GO_TO_EXTRUDE_POS')), None)
-    _box_wipe = next((i for i, l in enumerate(_raw10, 1) if l.split(';')[0].strip().startswith('BOX_NOZZLE_CLEAN')), None)
+    _box_ins = [i for i, l in enumerate(_raw10, 1) if l.split(';')[0].strip().startswith('BOX_GO_TO_EXTRUDE_POS')]
+    _box_wipes = [i for i, l in enumerate(_raw10, 1) if l.split(';')[0].strip().startswith('BOX_NOZZLE_CLEAN')]
     _body10 = next((i for i, l in enumerate(_raw10, 1) if l.startswith('; BODY_START')), len(_raw10) + 1)
     _box10 = []
+
+    def _in_box(i):
+        # a box-enter BEFORE this line and a box-wipe AFTER it, both ahead of the body; the
+        # machine's own start wipes once at 140 before the purge too, so "the first wipe" is
+        # not the one that matters — the NEXT wipe after the purge is.
+        return any(b < i for b in _box_ins) and any(i < wv < _body10 for wv in _box_wipes)
+
     for _i, _l in enumerate(open(path), 1):
         _c = _l.split(';')[0].strip()
-        if 'BOX PURGE' in _l and _c.startswith('G1') and _box_in and _box_wipe \
-                and _box_in < _i < _box_wipe < _body10:
+        if 'BOX PURGE' in _l and _c.startswith('G1') and _in_box(_i):
             _box10.append(_i)
             _mb = re.search(r'\bE(-?\d+(?:\.\d+)?)', _c)
             if _mb and _abs10:
