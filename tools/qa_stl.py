@@ -945,7 +945,15 @@ def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None):
     grow = [(dj, math.sqrt(max(0.0, allow * allow - ((abs(dj) - 1) * LS_PITCH) ** 2)))
             for dj in range(-R, R + 1)]
     sup, pieces = {}, []
+    w0 = grow[R][1]
     for j, spans in cur.items():
+        # FAST PATH: most rows sit inside the same row below grown by the full allowance; only a
+        # row that is not needs the disc growth over its neighbours (178 s -> see the commit).
+        quick = [(a - w0, b + w0) for a, b in prev.get(j, ())]
+        if quick and not _ls_minus(spans, quick):
+            if not (exclude and j in exclude):
+                sup[j] = quick
+                continue
         ivs = []
         for dj, w in grow:
             for a, b in prev.get(j + dj, ()):
