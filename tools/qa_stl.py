@@ -933,11 +933,14 @@ def _ls_classify(pieces, cur, sup, x0, half_span):
     return far <= half_span, opened, far
 
 
-def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w):
+def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None):
     """Unsupported regions of `cur` against `prev` grown by `allow`. The growth reaches one
     extra scanline in y (LS_PITCH), because a layer edge in y is known only to the row: without
     it an exact-45 deg wall facing y reads a sliver row as overhang every other layer. x is exact.
-    Returns [(area_mm2, kind, cx, cy, far_mm, open)] for every region above the noise floor."""
+    `exclude` (row -> sorted intervals) is removed from the unsupported set first: material already
+    reported at the same xy in an earlier layer is not counted again.
+    Returns ([(area_mm2, kind, cx, cy, far_mm, open)] for every region above the noise floor,
+    {row: [intervals]} of the overhang regions)."""
     R = int(allow / LS_PITCH) + 1
     grow = [(dj, math.sqrt(max(0.0, allow * allow - ((abs(dj) - 1) * LS_PITCH) ** 2)))
             for dj in range(-R, R + 1)]
@@ -949,10 +952,13 @@ def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w):
                 ivs.append([a - w, b + w])
         s = _ls_union(ivs)
         sup[j] = s
-        for a, b in _ls_minus(spans, s):
+        un = _ls_minus(spans, s)
+        if exclude and j in exclude:
+            un = _ls_minus(un, exclude[j])
+        for a, b in un:
             pieces.append((j, a, b))
     if not pieces:
-        return []
+        return [], {}
     parent = list(range(len(pieces)))
 
     def find(k):
@@ -970,7 +976,7 @@ def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w):
     regions = {}
     for k in range(len(pieces)):
         regions.setdefault(find(k), []).append(pieces[k])
-    out = []
+    out, flagged = [], {}
     for reg in regions.values():
         area = sum(b - a for _j, a, b in reg) * LS_PITCH
         if area < line_w * line_w:
@@ -979,7 +985,10 @@ def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w):
         cy = sum((y0 + (j + 0.5) * LS_PITCH) * (b - a) for j, a, b in reg) * LS_PITCH / area
         is_bridge, opened, far = _ls_classify(reg, cur, sup, x0, half_span)
         out.append((area, "bridge" if is_bridge else "overhang", cx, cy, far * LS_PITCH, opened))
-    return out
+        if not is_bridge:
+            for j, a, b in reg:
+                flagged.setdefault(j, []).append((a, b))
+    return out, flagged
 
 
 def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
@@ -1000,6 +1009,8 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
         noise     area under line_w ** 2: below one bead (dropped, not reported)
         bridge    see _ls_classify, up to bridge_max
         overhang  everything else; this is the defect
+    COUNTED ONCE: the slope comparison skips xy already reported as overhang in the last LS_BASE
+    of layers (an island 2 mm up read 600 mm2 for its 100 mm2, once per layer of the baseline).
     Returns ([(z, area_mm2, kind, cx, cy, far_mm, open, test)], plane_count)."""
     xs = [v[0] for t in tris for v in t]
     ys = [v[1] for t in tris for v in t]
@@ -1018,23 +1029,41 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
     while z < zmax:
         planes.append(z)
         z += layer_h
-    nxt, active, hist, out = 0, [], [], []
+    nxt, active, hist, out, recent = 0, [], [], [], []
     for z in planes:
         while nxt < len(order) and order[nxt][0] <= z:
             active.append(order[nxt])
             nxt += 1
         active = [e for e in active if e[1] >= z]
         cur = _ls_rows(_foot_section([e[2] for e in active], z), y0, ny)
+        seen = {}                                   # overhang xy reported in the last nbase layers
+        for f in recent:
+            for j, ivs in f.items():
+                seen.setdefault(j, []).extend([a, b] for a, b in ivs)
+        seen = {j: [tuple(x) for x in _ls_union(v)] for j, v in seen.items()}
+        flagged = {}
         if hist:
             zp, prev = hist[-1]
             allow = (z - zp) / tan if tan else line_w / 2.0
-            for r in _ls_compare(cur, prev, allow, x0, y0, half_span, line_w):
+            regs, flagged = _ls_compare(cur, prev, allow, x0, y0, half_span, line_w)
+            for r in regs:
                 out.append((z,) + r + ("step",))
             if tan and len(hist) >= nbase:
                 zb, base = hist[-nbase]
-                for r in _ls_compare(cur, base, (z - zb) / tan, x0, y0, half_span, line_w):
+                excl = {j: sorted(seen.get(j, []) + flagged.get(j, []))
+                        for j in set(seen) | set(flagged)}
+                excl = {j: [tuple(x) for x in _ls_union([list(i) for i in v])]
+                        for j, v in excl.items()}
+                regs, more = _ls_compare(cur, base, (z - zb) / tan, x0, y0, half_span, line_w,
+                                         excl)
+                for r in regs:
                     if r[1] == "overhang":
                         out.append((z,) + r + ("slope",))
+                for j, v in more.items():
+                    flagged.setdefault(j, []).extend(v)
+        recent.append(flagged)
+        if len(recent) > nbase:
+            recent.pop(0)
         hist.append((z, cur))
         if len(hist) > nbase:
             hist.pop(0)
