@@ -59,7 +59,7 @@ import sys
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from machine import SLICER_LINE_W, SLICER_FIRST_H
+from machine import SLICER_LINE_W, SLICER_FIRST_H, SLICER_LAYER_H
 
 FABRIC_MIN_FACE = 47.0  # deg floor for fabric downward faces (45 + 2 margin, low-fan TPU)
 DOWN_NZ = -0.707        # unit-normal nz below this = downward-facing
@@ -766,8 +766,284 @@ def _layer_continuity(body_tris, dz=0.4, walk=1.1, sample=0.6):
     return runs, (max(runs) if runs else 0.0), orphans
 
 
+# -- LAYERSUP: material against material, layer by layer (brief A1, 2026-10-24) ------------------
+# The method both slicers use to decide support, reimplemented from their descriptions (AGPL
+# sources, read and not copied): PrusaSlicer Support/SupportMaterial.cpp grows the lower layer's
+# FILLED polygons by an allowance and calls whatever of this layer lies outside it overhang;
+# CuraEngine support.cpp does the same with tan(angle) * layer height. LAYERCONT compares OUTLINE
+# points and so cannot tell a cavity floor that starts inside solid material from a floating edge
+# (276 false orphans on the print-kb fit coupon block, 0 here).
+LS_PITCH = 0.1           # mm scanline pitch in y. x stays exact (float span ends); only y is sampled.
+                         # 1/8 of SLICER_LINE_W, and the 45 degree allowance at SLICER_LAYER_H is
+                         # 2.4 rows, so the allowance is resolved, not rounded to zero.
+LS_SEED = 0.0137         # mm. Scanlines and slice planes sit off every round coordinate: a row or a
+                         # plane exactly on a row of vertices crosses no edge strictly and reads as
+                         # empty (the prototype's marble/coupon_male.stl at z 9.5 read 2,193 mm2 of
+                         # false overhang). Same nudge _sealed_voids uses for its grid.
+LS_DEG = 45.0            # deg from horizontal, the house no-support rule (fabric's FABRIC_MIN_FACE
+                         # is this plus margin). Allowance = layer_h / tan(deg), CuraEngine's and
+                         # PrusaSlicer's angle mode. 0 selects PrusaSlicer's no-angle default, half a
+                         # line width, which on 0.24 layers only flags walls flatter than 30 deg.
+LS_BASE = 1.0            # mm, the slope comparison's baseline (5 layers at SLICER_LAYER_H). Long
+                         # enough that a 40 deg wall's excess (0.23 mm here) clears the one-row y
+                         # tolerance; short enough to stay local. A design choice, not a measurement.
+
+
+def _ls_rows(segs, y0, ny):
+    """Nonzero-winding x spans of one cross-section on every scanline. Each segment adds its
+    crossing only to the rows it spans, so a row never scans every segment of the layer."""
+    rows = [None] * ny
+    for (ax, ay), (bx, by) in segs:
+        lo, hi = (ay, by) if ay < by else (by, ay)
+        j0 = max(0, int(math.ceil((lo - y0) / LS_PITCH - 0.5)))
+        j1 = min(ny - 1, int(math.floor((hi - y0) / LS_PITCH - 0.5)))
+        d = 1 if by > ay else -1
+        for j in range(j0, j1 + 1):
+            y = y0 + (j + 0.5) * LS_PITCH
+            if (ay - y) * (by - y) < 0:
+                if rows[j] is None:
+                    rows[j] = []
+                rows[j].append((ax + (y - ay) / (by - ay) * (bx - ax), d))
+    out = {}
+    for j, r in enumerate(rows):
+        if not r or len(r) < 2:
+            continue
+        r.sort()
+        spans, w, s = [], 0, 0.0
+        for x, d in r:
+            was = w
+            w += d
+            if was == 0 and w != 0:
+                s = x
+            elif was != 0 and w == 0 and x > s:
+                spans.append((s, x))
+        if spans:
+            out[j] = spans
+    return out
+
+
+def _ls_union(ivs):
+    ivs.sort()
+    out = []
+    for a, b in ivs:
+        if out and a <= out[-1][1]:
+            if b > out[-1][1]:
+                out[-1][1] = b
+        else:
+            out.append([a, b])
+    return out
+
+
+def _ls_minus(spans, sup):
+    """spans minus the sorted, disjoint intervals sup."""
+    out = []
+    for a, b in spans:
+        x = a
+        for c, d in sup:
+            if d <= x:
+                continue
+            if c >= b:
+                break
+            if c > x:
+                out.append((x, c))
+            x = max(x, d)
+            if x >= b:
+                break
+        if x < b:
+            out.append((x, b))
+    return [(a, b) for a, b in out if b - a > 1e-6]
+
+
+def _ls_inside(spans, x):
+    if not spans:
+        return False
+    for a, b in spans:
+        if a <= x <= b:
+            return True
+        if a > x:
+            return False
+    return False
+
+
+def _ls_classify(pieces, cur, sup, x0, half_span):
+    """Bridge or overhang, decided on cells of LS_PITCH for this one unsupported region.
+    A BRIDGE touches supported material of its own layer in two or more separate places, or
+    material closes it in on every side (a hole roof), and no cell of it is further than
+    bridge_max / 2 from a contact. Anything else -- a cantilever, a floating island, a span past
+    bridge_max -- is OVERHANG. Returns (is_bridge, open_to_air, farthest_cells)."""
+    cells = set()
+    for j, a, b in pieces:
+        for i in range(int(math.ceil((a - x0) / LS_PITCH - 0.5)),
+                       int(math.floor((b - x0) / LS_PITCH - 0.5)) + 1):
+            cells.add((i, j))
+    if not cells:
+        return False, True, 0
+
+    def mat(i, j):
+        return _ls_inside(cur.get(j), x0 + (i + 0.5) * LS_PITCH)
+
+    def held(i, j):
+        return any(a <= x0 + (i + 0.5) * LS_PITCH <= b for a, b in sup.get(j, ()))
+
+    contact, opened, seeds = set(), False, []
+    for (i, j) in cells:
+        touch = False
+        for c in ((i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)):
+            if c in cells:
+                continue
+            if mat(*c):
+                if held(*c):
+                    contact.add(c)
+                    touch = True
+            else:
+                opened = True
+        if touch:
+            seeds.append((i, j))
+    groups, seen = 0, set()
+    for c0 in contact:
+        if c0 in seen:
+            continue
+        groups += 1
+        stack = [c0]
+        seen.add(c0)
+        while stack:
+            i, j = stack.pop()
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    d = (i + di, j + dj)
+                    if d in contact and d not in seen:
+                        seen.add(d)
+                        stack.append(d)
+    if not (groups >= 2 or (groups >= 1 and not opened)):
+        return False, opened, 0
+    dist = dict.fromkeys(seeds, 1)
+    frontier, far = list(seeds), 1
+    while frontier and far <= half_span:
+        nxt = []
+        for (i, j) in frontier:
+            for c in ((i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)):
+                if c in cells and c not in dist:
+                    dist[c] = far + 1
+                    nxt.append(c)
+        if nxt:
+            far += 1
+        frontier = nxt
+    if len(dist) < len(cells):
+        return False, opened, far       # some of it lies further than bridge_max / 2 from a contact
+    return far <= half_span, opened, far
+
+
+def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w):
+    """Unsupported regions of `cur` against `prev` grown by `allow`. The growth reaches one
+    extra scanline in y (LS_PITCH), because a layer edge in y is known only to the row: without
+    it an exact-45 deg wall facing y reads a sliver row as overhang every other layer. x is exact.
+    Returns [(area_mm2, kind, cx, cy, far_mm, open)] for every region above the noise floor."""
+    R = int(allow / LS_PITCH) + 1
+    grow = [(dj, math.sqrt(max(0.0, allow * allow - ((abs(dj) - 1) * LS_PITCH) ** 2)))
+            for dj in range(-R, R + 1)]
+    sup, pieces = {}, []
+    for j, spans in cur.items():
+        ivs = []
+        for dj, w in grow:
+            for a, b in prev.get(j + dj, ()):
+                ivs.append([a - w, b + w])
+        s = _ls_union(ivs)
+        sup[j] = s
+        for a, b in _ls_minus(spans, s):
+            pieces.append((j, a, b))
+    if not pieces:
+        return []
+    parent = list(range(len(pieces)))
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+    byrow = {}
+    for k, (j, a, b) in enumerate(pieces):
+        for m in byrow.get(j - 1, ()):
+            _j, c, d = pieces[m]
+            if c < b and a < d:
+                parent[find(k)] = find(m)
+        byrow.setdefault(j, []).append(k)
+    regions = {}
+    for k in range(len(pieces)):
+        regions.setdefault(find(k), []).append(pieces[k])
+    out = []
+    for reg in regions.values():
+        area = sum(b - a for _j, a, b in reg) * LS_PITCH
+        if area < line_w * line_w:
+            continue
+        cx = sum((a + b) / 2.0 * (b - a) for _j, a, b in reg) * LS_PITCH / area
+        cy = sum((y0 + (j + 0.5) * LS_PITCH) * (b - a) for j, a, b in reg) * LS_PITCH / area
+        is_bridge, opened, far = _ls_classify(reg, cur, sup, x0, half_span)
+        out.append((area, "bridge" if is_bridge else "overhang", cx, cy, far * LS_PITCH, opened))
+    return out
+
+
+def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
+    """Every layer's material against the material below it, as a slicer decides support.
+
+    Planes: first_h / 2 above the floor, then the centre of each layer_h layer above first_h,
+    each nudged by LS_SEED. Each plane's cross-section is FILLED by nonzero winding (overlapping
+    shells union, as in the slicer; even-odd cancelled them and invented 3,070 mm2 of overhang on
+    marble/base_ballast in the prototype). Two comparisons per layer:
+        step   against the layer directly below, grown by dz / tan(deg) (dz = the real distance
+               between the two planes, so the thick first layer gets its own allowance), or by
+               line_w / 2 when deg is 0. Catches islands, ledges and roofs.
+        slope  (angle mode) against the layer LS_BASE mm below, grown by that dz / tan(deg). A
+               40 deg wall steps out only 0.05 mm per 0.24 layer past the 45 deg allowance, under
+               any noise floor; over LS_BASE the excess adds up to a measurable strip. Only its
+               OVERHANG regions count: a bridge's material is legitimately missing LS_BASE below.
+    Unsupported regions are joined across scanlines and classed:
+        noise     area under line_w ** 2: below one bead (dropped, not reported)
+        bridge    see _ls_classify, up to bridge_max
+        overhang  everything else; this is the defect
+    Returns ([(z, area_mm2, kind, cx, cy, far_mm, open, test)], plane_count)."""
+    xs = [v[0] for t in tris for v in t]
+    ys = [v[1] for t in tris for v in t]
+    zs = [v[2] for t in tris for v in t]
+    x0 = min(xs) - 1.0 + LS_SEED
+    y0 = min(ys) - 1.0 + LS_SEED
+    ny = int(math.ceil((max(ys) + 1.0 - y0) / LS_PITCH))
+    zmin, zmax = min(zs), max(zs)
+    half_span = int(round(bridge_max / 2.0 / LS_PITCH))
+    tan = math.tan(math.radians(deg)) if deg else None
+    nbase = max(2, int(math.ceil(LS_BASE / layer_h)))
+    order = sorted(((min(t[0][2], t[1][2], t[2][2]), max(t[0][2], t[1][2], t[2][2]), t)
+                    for t in tris), key=lambda e: e[0])
+    planes = [zmin + first_h / 2.0 + LS_SEED]
+    z = zmin + first_h + layer_h / 2.0 + LS_SEED
+    while z < zmax:
+        planes.append(z)
+        z += layer_h
+    nxt, active, hist, out = 0, [], [], []
+    for z in planes:
+        while nxt < len(order) and order[nxt][0] <= z:
+            active.append(order[nxt])
+            nxt += 1
+        active = [e for e in active if e[1] >= z]
+        cur = _ls_rows(_foot_section([e[2] for e in active], z), y0, ny)
+        if hist:
+            zp, prev = hist[-1]
+            allow = (z - zp) / tan if tan else line_w / 2.0
+            for r in _ls_compare(cur, prev, allow, x0, y0, half_span, line_w):
+                out.append((z,) + r + ("step",))
+            if tan and len(hist) >= nbase:
+                zb, base = hist[-nbase]
+                for r in _ls_compare(cur, base, (z - zb) / tan, x0, y0, half_span, line_w):
+                    if r[1] == "overhang":
+                        out.append((z,) + r + ("slope",))
+        hist.append((z, cur))
+        if len(hist) > nbase:
+            hist.pop(0)
+    return out, len(planes)
+
+
 def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
-             line_w=None, minw_samples=24):
+             line_w=None, minw_samples=24, layer_support=False, layer_h=None,
+             overhang_deg=LS_DEG):
     """Run all checks for one file. Returns True if every check passed."""
     print("== %s [%s] ==" % (path, cls))
     fails = [0]
@@ -956,6 +1232,31 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
                "thinner than that is below this gate's resolution; %d columns undecidable and "
                "counted as unmeasured"
                % (seal, seal_cols, cols, tallest, pitch, odd))
+
+    # -- LAYERSUP (closed, opt-in --layer-support until the crackle sweep is judged) -----------
+    if cls == "closed" and layer_support and tris3d:
+        body = [(t[0], t[1], t[2]) for t in tris3d]
+        lw = line_w or SLICER_LINE_W
+        lh = layer_h or SLICER_LAYER_H
+        regs, npl = _layer_support(body, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H)
+        ov = [r for r in regs if r[2] == "overhang"]
+        how = ""
+        if ov:
+            fl = [(v0[:2] + (maxz - v0[2],), v2[:2] + (maxz - v2[2],), v1[:2] + (maxz - v1[2],))
+                  for v0, v1, v2 in body]
+            regs_f, _n = _layer_support(fl, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H)
+            if not [r for r in regs_f if r[2] == "overhang"]:
+                regs, ov, how = regs_f, [], "  (only as printed UPSIDE-DOWN)"
+        br = [r for r in regs if r[2] == "bridge"]
+        worst = max(ov, key=lambda r: r[1]) if ov else None
+        report("LAYERSUP", not ov,
+               "%d overhang region(s), %.1f mm2%s; %d bridge region(s) <= %.1f mm. %d planes at "
+               "%.2f mm layers, allowance dz/tan(%g deg)%s, noise floor %.2f mm2%s"
+               % (len(ov), sum(r[1] for r in ov),
+                  "" if not worst else ", worst %.1f mm2 at z %.2f (x %.1f, y %.1f, %s test)"
+                  % (worst[1], worst[0], worst[3], worst[4], worst[7]),
+                  len(br), bridge_max, npl, lh, overhang_deg,
+                  "" if overhang_deg else " (0: half line width)", lw * lw, how))
 
     # -- FABRIC: per-component watertight, overhang steepness, bed-all, clearance ----
     if cls == "fabric":
@@ -1149,6 +1450,15 @@ def main():
                          "SLICER_LINE_W, read from all six Creality K2 Plus 0.8 nozzle process "
                          "profiles, which agree. Pass the value from YOUR profile if it differs; "
                          "0 disables the check." % SLICER_LINE_W)
+    ap.add_argument("--layer-support", action="store_true",
+                    help="closed: also run LAYERSUP, material vs material layer by layer "
+                         "(opt-in until its crackle sweep is judged)")
+    ap.add_argument("--layer-h", type=float, default=SLICER_LAYER_H,
+                    help="LAYERSUP layer height mm (default %.2f = machine.py SLICER_LAYER_H)"
+                         % SLICER_LAYER_H)
+    ap.add_argument("--overhang-deg", type=float, default=LS_DEG,
+                    help="LAYERSUP allowance angle from horizontal (default %g, the house rule); "
+                         "0 = half a line width, PrusaSlicer's no-angle default" % LS_DEG)
     ap.add_argument("--minw-samples", type=int, default=24,
                     help="MINWIDTH: how many layers to sample through the part (default 24)")
     args = ap.parse_args()
@@ -1156,7 +1466,8 @@ def main():
     failed = 0
     for path in args.stl:
         if not run_file(path, args.cls, args.bed, args.allow_overhang, args.clear_min,
-                        args.bridge_max, args.transit, args.line_width, args.minw_samples):
+                        args.bridge_max, args.transit, args.line_width, args.minw_samples,
+                        args.layer_support, args.layer_h, args.overhang_deg):
             failed += 1
     n = len(args.stl)
     if failed:
