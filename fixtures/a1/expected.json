@@ -1,0 +1,57 @@
+{
+  "solid-box": {
+    "overhang": false,
+    "why": "plain solid",
+    "proto_overhang_mm2": 0
+  },
+  "floating-box": {
+    "overhang": true,
+    "why": "island 2 mm above the part",
+    "proto_overhang_mm2": 100
+  },
+  "ledge-0.15": {
+    "overhang": false,
+    "why": "0.15 mm step, inside the 45 degree allowance of one layer height (0.2 mm)",
+    "proto_overhang_mm2": 0
+  },
+  "ledge-2": {
+    "overhang": true,
+    "why": "2 mm cantilever",
+    "proto_overhang_mm2": 18
+  },
+  "roof-6": {
+    "overhang": false,
+    "why": "6 mm bridge between pillars",
+    "proto_overhang_mm2": 0
+  },
+  "roof-15": {
+    "overhang": true,
+    "why": "15 mm span over bridge-max 8",
+    "proto_overhang_mm2": 146
+  },
+  "wedge-40": {
+    "overhang": true,
+    "why": "40 degree outward undercut; qa_stl PRINTABLE passes it (2026-10-24)",
+    "proto_overhang_mm2": 11
+  },
+  "wedge-50": {
+    "overhang": false,
+    "why": "50 degree undercut",
+    "proto_overhang_mm2": 0
+  },
+  "vertex-row-plane": {
+    "overhang": false,
+    "why": "top of the lower block at z 4.1, on a 0.1 + 0.2k sampling plane",
+    "proto_overhang_mm2": 0
+  },
+  "overlapping-shells": {
+    "overhang": false,
+    "why": "two overlapping closed boxes, not merged; a slicer unions them",
+    "proto_overhang_mm2": 0
+  },
+  "../../coupons/out/fit-coupon-block": {
+    "overhang": false,
+    "why": "real part with horizontal teardrop holes; LAYERCONT false-fails it",
+    "proto_overhang_mm2": 0
+  }
+}

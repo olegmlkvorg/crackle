@@ -48,6 +48,14 @@ Checks:
                   because the island was a ring one bead wide. Skipped for open/vase-solid, which
                   are spiralize inputs where the modelled wall is not the extrusion width.
     9 BED         bbox X and Y extents <= --bed (default 340)
+   10 LAYERSUP    (closed, OPT-IN --layer-support) every layer's FILLED cross-section against
+                  the one below grown by dz / tan(--overhang-deg, default 45), plus a 1 mm baseline
+                  that catches walls just past the angle; unsupported regions over one line width
+                  squared are bridges (supported in two places or enclosed, <= --bridge-max) or
+                  OVERHANG, which fails. Retries flipped like PRINTABLE. The PrusaSlicer/CuraEngine
+                  support test. Motivating case: PRINTABLE passes a 2 mm cantilever, a 15 mm flat
+                  roof and a 40 deg undercut (print-kb A1 fixtures, 2026-10-24), and LAYERCONT
+                  false-fails the fit coupon's horizontal holes 276 times.
 
 Facet normals are recomputed from vertex winding; stored normals are not trusted.
 """
@@ -689,7 +697,11 @@ def _layer_continuity(body_tris, dz=0.4, walk=1.1, sample=0.6):
     span whose ends are supported). Face-angle rules are necessary but NOT sufficient (a tilted
     ring's crest passes the face rule yet prints in mid-air -- Oleg caught it, 2026-08-02).
     Returns (bridge_runs, longest_run_mm, unsupported_orphans) where orphans = unsupported points
-    NOT in a bridge (no supported ends) -- those are hard failures."""
+    NOT in a bridge (no supported ends) -- those are hard failures.
+
+    OUTLINE ONLY: it compares slice outline points, never filled material, so a cavity floor that
+    starts inside solid material reads as unsupported (276 false orphans on the print-kb fit coupon
+    block's horizontal holes, 2026-10-23). Fabric only for that reason; solids use LAYERSUP."""
     minz = min(v[2] for t in body_tris for v in t)
     maxz = max(v[2] for t in body_tris for v in t)
     layers = []
@@ -1459,7 +1471,8 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
 def main():
     ap = argparse.ArgumentParser(
         description="STL quality gate: LAW, HEADER, DEGENERATE, "
-                    "WATERTIGHT/LEAN, PRINTABLE, SEALED-VOID, BED. Exit 1 on any FAIL.")
+                    "WATERTIGHT/LEAN, PRINTABLE, SEALED-VOID, FOOT, MINWIDTH, BED, opt-in "
+                    "LAYERSUP. Exit 1 on any FAIL.")
     ap.add_argument("stl", nargs="+", help="binary STL file(s) to check")
     ap.add_argument("--class", dest="cls",
                     choices=("closed", "open", "vase-solid", "fabric"),
@@ -1474,7 +1487,8 @@ def main():
     ap.add_argument("--allow-overhang", type=int, default=0,
                     help="spanning overhang faces tolerated (default 0)")
     ap.add_argument("--bridge-max", type=float, default=8.0,
-                    help="fabric: longest tolerated bridge run mm (crest of a tilted ring bridges)")
+                    help="fabric LAYERCONT and closed LAYERSUP: longest tolerated bridge mm "
+                         "(default 8; Orca's default is 10)")
     ap.add_argument("--clear-min", type=float, default=0.45,
                     help="fabric: min pairwise surface clearance in mm (default 0.45)")
     ap.add_argument("--transit", type=float, default=None, metavar="DIA",
