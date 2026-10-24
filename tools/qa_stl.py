@@ -5,9 +5,11 @@ Usage:
     python3 qa_stl.py part.stl [part2.stl ...] [--class closed|open] [--bed 340] [--allow-overhang 0]
 
 Classes:
-    closed (default)  formwork solids: LAW, HEADER, DEGENERATE, WATERTIGHT, PRINTABLE, BED
+    closed (default)  formwork solids: LAW, HEADER, DEGENERATE, WATERTIGHT, WINDING, PRINTABLE,
+                      SEALED-VOID, LAYERSUP, MINWIDTH, FOOT, BED
     open              vase surfaces:   LAW, HEADER, DEGENERATE, LEAN, BED
-    vase-solid        closed solids fed to slicer VASE mode (e.g. leg.stl): as closed, but the
+    vase-solid        closed solids fed to slicer VASE mode (e.g. leg.stl): WATERTIGHT and WINDING as
+                      closed, but the
                       flat top/bottom caps never print (spiralize discards them), so instead of
                       PRINTABLE it checks SIDE-LEAN (lean of non-cap faces, |nz| < 0.95)
     fabric            print-in-place lattices of DISJOINT interlocked solids (chainmail). Splits
@@ -29,6 +31,11 @@ Checks:
     2 HEADER      binary STL must not start b"solid"
     3 DEGENERATE  0 zero-area triangles (|cross| < 1e-9)
     4 WATERTIGHT  (closed) every undirected edge shared by exactly 2 triangles, verts rounded 3dp
+    4b WINDING    (closed, vase-solid) no directed edge used twice in the same direction. WATERTIGHT
+                  pairs edges without direction, so a face wound backwards passes it; in a
+                  consistently wound closed surface each edge is walked once each way. Motivating
+                  case: stand/foot_cup.stl's blind bore caps and hole walls (178 such edges, LAYERSUP
+                  read the inverted cap as overhang, 2026-10-24).
     5 LEAN        (open) max wall lean from vertical <= 55 deg, bed faces (z <= 0.5) excluded
     6 PRINTABLE   (closed) 0 REAL spanning overhangs: recomputed unit facet normal nz < -0.707
                   AND centroid z > 0.5 (not the bed) AND centroid r inside wallR(5mm z-band)
@@ -48,14 +55,18 @@ Checks:
                   because the island was a ring one bead wide. Skipped for open/vase-solid, which
                   are spiralize inputs where the modelled wall is not the extrusion width.
     9 BED         bbox X and Y extents <= --bed (default 340)
-   10 LAYERSUP    (closed, OPT-IN --layer-support) every layer's FILLED cross-section against
+   10 LAYERSUP    (closed, ON by default, --no-layer-support turns it off) every layer's FILLED
+                  cross-section against
                   the one below grown by dz / tan(--overhang-deg, default 45), plus a 1 mm baseline
                   that catches walls just past the angle; unsupported regions over one line width
                   squared are bridges (supported in two places or enclosed, <= --bridge-max) or
                   OVERHANG, which fails. Retries flipped like PRINTABLE. The PrusaSlicer/CuraEngine
                   support test. Motivating case: PRINTABLE passes a 2 mm cantilever, a 15 mm flat
                   roof and a 40 deg undercut (print-kb A1 fixtures, 2026-10-24), and LAYERCONT
-                  false-fails the fit coupon's horizontal holes 276 times.
+                  false-fails the fit coupon's horizontal holes 276 times. A scanline whose
+                  winding does not return to zero is a mesh orientation fault, not material: the
+                  check then DECLINES with "could not measure: winding unbalanced at z ..." and
+                  reports no overhang (stand/foot_cup.stl read 3 false overhangs that way).
 
 Facet normals are recomputed from vertex winding; stored normals are not trusted.
 """
@@ -803,7 +814,13 @@ LS_BASE = 1.0            # mm, the slope comparison's baseline (5 layers at SLIC
 
 def _ls_rows(segs, y0, ny):
     """Nonzero-winding x spans of one cross-section on every scanline. Each segment adds its
-    crossing only to the rows it spans, so a row never scans every segment of the layer."""
+    crossing only to the rows it spans, so a row never scans every segment of the layer.
+
+    Returns (rows, unbalanced). A closed, consistently wound section crosses every scanline with
+    directions summing to zero. A row whose sum is not zero cannot be filled (an inverted face or
+    an open mesh), so it is left out of `rows` and COUNTED: the caller must decline the layer,
+    because a dropped row reads as empty and the material above it as overhang (stand/foot_cup.stl,
+    a blind cap wound into the solid, 2026-10-24)."""
     rows = [None] * ny
     for (ax, ay), (bx, by) in segs:
         lo, hi = (ay, by) if ay < by else (by, ay)
@@ -817,8 +834,12 @@ def _ls_rows(segs, y0, ny):
                     rows[j] = []
                 rows[j].append((ax + (y - ay) / (by - ay) * (bx - ax), d))
     out = {}
+    unbalanced = 0
     for j, r in enumerate(rows):
-        if not r or len(r) < 2:
+        if not r:
+            continue
+        if sum(d for _x, d in r) != 0:
+            unbalanced += 1
             continue
         r.sort()
         spans, w, s = [], 0, 0.0
@@ -831,7 +852,7 @@ def _ls_rows(segs, y0, ny):
                 spans.append((s, x))
         if spans:
             out[j] = spans
-    return out
+    return out, unbalanced
 
 
 def _ls_union(ivs):
@@ -1031,7 +1052,9 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
         overhang  everything else; this is the defect
     COUNTED ONCE: the slope comparison skips xy already reported as overhang in the last LS_BASE
     of layers (an island 2 mm up read 600 mm2 for its 100 mm2, once per layer of the baseline).
-    Returns ([(z, area_mm2, kind, cx, cy, far_mm, open, test)], plane_count)."""
+    UNBALANCED rows (see _ls_rows) are returned as faults; a caller with any fault has no verdict.
+    Returns ([(z, area_mm2, kind, cx, cy, far_mm, open, test)], plane_count,
+             [(z, unbalanced_rows)])."""
     xs = [v[0] for t in tris for v in t]
     ys = [v[1] for t in tris for v in t]
     zs = [v[2] for t in tris for v in t]
@@ -1049,13 +1072,15 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
     while z < zmax:
         planes.append(z)
         z += layer_h
-    nxt, active, hist, out, recent = 0, [], [], [], []
+    nxt, active, hist, out, recent, faults = 0, [], [], [], [], []
     for z in planes:
         while nxt < len(order) and order[nxt][0] <= z:
             active.append(order[nxt])
             nxt += 1
         active = [e for e in active if e[1] >= z]
-        cur = _ls_rows(_foot_section([e[2] for e in active], z), y0, ny)
+        cur, unb = _ls_rows(_foot_section([e[2] for e in active], z), y0, ny)
+        if unb:
+            faults.append((z, unb))
         seen = {}                                   # overhang xy reported in the last nbase layers
         for f in recent:
             for j, ivs in f.items():
@@ -1087,11 +1112,34 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
         hist.append((z, cur))
         if len(hist) > nbase:
             hist.pop(0)
-    return out, len(planes)
+    return out, len(planes), faults
+
+
+def _layersup_verdict(report, regs, npl, body, maxz, lh, lw, overhang_deg, bridge_max):
+    """LAYERSUP's verdict on balanced sections: overhang regions as printed, then flipped."""
+    ov = [r for r in regs if r[2] == "overhang"]
+    how = ""
+    if ov:
+        fl = [(v0[:2] + (maxz - v0[2],), v2[:2] + (maxz - v2[2],), v1[:2] + (maxz - v1[2],))
+              for v0, v1, v2 in body]
+        regs_f, _n, faults_f = _layer_support(fl, lh, overhang_deg, bridge_max, lw,
+                                              SLICER_FIRST_H)
+        if not faults_f and not [r for r in regs_f if r[2] == "overhang"]:
+            regs, ov, how = regs_f, [], "  (only as printed UPSIDE-DOWN)"
+    br = [r for r in regs if r[2] == "bridge"]
+    worst = max(ov, key=lambda r: r[1]) if ov else None
+    report("LAYERSUP", not ov,
+           "%d overhang region(s), %.1f mm2%s; %d bridge region(s) <= %.1f mm. %d planes at "
+           "%.2f mm layers, allowance dz/tan(%g deg)%s, noise floor %.2f mm2%s"
+           % (len(ov), sum(r[1] for r in ov),
+              "" if not worst else ", worst %.1f mm2 at z %.2f (x %.1f, y %.1f, %s test)"
+              % (worst[1], worst[0], worst[3], worst[4], worst[7]),
+              len(br), bridge_max, npl, lh, overhang_deg,
+              "" if overhang_deg else " (0: half line width)", lw * lw, how))
 
 
 def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
-             line_w=None, minw_samples=24, layer_support=False, layer_h=None,
+             line_w=None, minw_samples=24, layer_support=True, layer_h=None,
              overhang_deg=LS_DEG):
     """Run all checks for one file. Returns True if every check passed."""
     print("== %s [%s] ==" % (path, cls))
@@ -1137,6 +1185,7 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
                  # once the bbox is known -- radius is measured from the PART, not the origin
     tris3d = []  # (v0, v1, v2, cenx, ceny, cenz, nz) -- closed only, for the burial test
     edges = Counter() if cls in ("closed", "vase-solid") else None
+    directed = Counter() if edges is not None else None
     minx = miny = minz = float("inf")
     maxx = maxy = maxz = float("-inf")
     for rec in struct.iter_unpack("<12fH", body):
@@ -1157,6 +1206,7 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
             for i in range(3):
                 a, b = vs[i], vs[(i + 1) % 3]
                 edges[(a, b) if a <= b else (b, a)] += 1
+                directed[(a, b)] += 1
         e1x, e1y, e1z = v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]
         e2x, e2y, e2z = v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]
         cx = e1y * e2z - e1z * e2y
@@ -1192,6 +1242,10 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
         report("WATERTIGHT", unpaired == 0,
                "%d non-paired edges (%d edges, verts rounded 3dp)"
                % (unpaired, len(edges)))
+        same_dir = sum(1 for c in directed.values() if c > 1)
+        report("WINDING", same_dir == 0,
+               "%d edges used twice in the same direction, limit 0 (WATERTIGHT pairs edges "
+               "without direction, so a face wound backwards passes it)" % same_dir)
 
     # -- 5 LEAN (open) / SIDE-LEAN (vase-solid) --------------------------------
     if cls in ("open", "vase-solid"):
@@ -1282,30 +1336,23 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
                "counted as unmeasured"
                % (seal, seal_cols, cols, tallest, pitch, odd))
 
-    # -- LAYERSUP (closed, opt-in --layer-support until the crackle sweep is judged) -----------
+    # -- LAYERSUP (closed, on by default since the 2026-10-24 sweep judgement) ------------------
     if cls == "closed" and layer_support and tris3d:
         body = [(t[0], t[1], t[2]) for t in tris3d]
         lw = line_w or SLICER_LINE_W
         lh = layer_h or SLICER_LAYER_H
-        regs, npl = _layer_support(body, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H)
-        ov = [r for r in regs if r[2] == "overhang"]
-        how = ""
-        if ov:
-            fl = [(v0[:2] + (maxz - v0[2],), v2[:2] + (maxz - v2[2],), v1[:2] + (maxz - v1[2],))
-                  for v0, v1, v2 in body]
-            regs_f, _n = _layer_support(fl, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H)
-            if not [r for r in regs_f if r[2] == "overhang"]:
-                regs, ov, how = regs_f, [], "  (only as printed UPSIDE-DOWN)"
-        br = [r for r in regs if r[2] == "bridge"]
-        worst = max(ov, key=lambda r: r[1]) if ov else None
-        report("LAYERSUP", not ov,
-               "%d overhang region(s), %.1f mm2%s; %d bridge region(s) <= %.1f mm. %d planes at "
-               "%.2f mm layers, allowance dz/tan(%g deg)%s, noise floor %.2f mm2%s"
-               % (len(ov), sum(r[1] for r in ov),
-                  "" if not worst else ", worst %.1f mm2 at z %.2f (x %.1f, y %.1f, %s test)"
-                  % (worst[1], worst[0], worst[3], worst[4], worst[7]),
-                  len(br), bridge_max, npl, lh, overhang_deg,
-                  "" if overhang_deg else " (0: half line width)", lw * lw, how))
+        regs, npl, faults = _layer_support(body, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H)
+        if faults:
+            # No verdict on a mesh whose sections cannot be filled. The flipped retry would fill
+            # the same unbalanced rows, so it is not run.
+            report("LAYERSUP", False,
+                   "could not measure: winding unbalanced at z %s (%d row(s) over %d of %d planes) "
+                   "-- an inverted or open face, not overhang; see WINDING / WATERTIGHT"
+                   % (", ".join("%.2f" % z for z, _k in faults[:5])
+                      + (" ..." if len(faults) > 5 else ""),
+                      sum(k for _z, k in faults), len(faults), npl))
+        else:
+            _layersup_verdict(report, regs, npl, body, maxz, lh, lw, overhang_deg, bridge_max)
 
     # -- FABRIC: per-component watertight, overhang steepness, bed-all, clearance ----
     if cls == "fabric":
@@ -1471,8 +1518,8 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
 def main():
     ap = argparse.ArgumentParser(
         description="STL quality gate: LAW, HEADER, DEGENERATE, "
-                    "WATERTIGHT/LEAN, PRINTABLE, SEALED-VOID, FOOT, MINWIDTH, BED, opt-in "
-                    "LAYERSUP. Exit 1 on any FAIL.")
+                    "WATERTIGHT, WINDING/LEAN, PRINTABLE, SEALED-VOID, LAYERSUP, FOOT, MINWIDTH, "
+                    "BED. Exit 1 on any FAIL.")
     ap.add_argument("stl", nargs="+", help="binary STL file(s) to check")
     ap.add_argument("--class", dest="cls",
                     choices=("closed", "open", "vase-solid", "fabric"),
@@ -1501,9 +1548,9 @@ def main():
                          "SLICER_LINE_W, read from all six Creality K2 Plus 0.8 nozzle process "
                          "profiles, which agree. Pass the value from YOUR profile if it differs; "
                          "0 disables the check." % SLICER_LINE_W)
-    ap.add_argument("--layer-support", action="store_true",
-                    help="closed: also run LAYERSUP, material vs material layer by layer "
-                         "(opt-in until its crackle sweep is judged)")
+    ap.add_argument("--layer-support", action=argparse.BooleanOptionalAction, default=True,
+                    help="closed: run LAYERSUP, material vs material layer by layer (default on; "
+                         "--no-layer-support turns it off)")
     ap.add_argument("--layer-h", type=float, default=SLICER_LAYER_H,
                     help="LAYERSUP layer height mm (default %.2f = machine.py SLICER_LAYER_H)"
                          % SLICER_LAYER_H)
