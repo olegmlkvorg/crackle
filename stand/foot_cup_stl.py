@@ -23,7 +23,8 @@ Prints PAD-DOWN, socket-UP, support-free. What it IS:
 MESH MODEL: a soup of individually-WATERTIGHT closed sub-solids that INTERPENETRATE and are UNIONED BY
 THE SLICER (same as base_stl.py). A horizontal blind bore is NOT a boolean subtraction (union can't
 subtract) — it is built as an explicit connected tunnel: a flat facet with a teardrop hole, a teardrop
-tube sweeping inward, and a blind teardrop cap. verify() proves 0 non-paired edges + 0 degenerate tris.
+tube sweeping inward, and a blind teardrop cap. verify() counts non-paired edges, same-direction edges
+(a face wound backwards) and degenerate tris; main() prints the first two, degenerate tris assert.
 
 SLICE MODE: NORMAL, modest walls + light infill (a little gypsum fills the leg + cup for foot mass).
 Fits any bed. Print pad-down.
@@ -279,7 +280,7 @@ def add_horizontal_bore(tris, v0, v1, z0, z1, bore_r, depth, axis_z, tdrop_n):
     for (a, b, c) in tf:
         A = to3d(*tv[a]); B = to3d(*tv[b]); C = to3d(*tv[c])
         A = (A[0] + inx, A[1] + iny, A[2]); B = (B[0] + inx, B[1] + iny, B[2]); C = (C[0] + inx, C[1] + iny, C[2])
-        tris.append((A, C, B))
+        tris.append((A, B, C))
 
 
 # ----------------------------------------------------------------------------- STL io + verify
@@ -313,6 +314,7 @@ def verify(path, tris):
         assert count == len(tris), f"header count {count} != {len(tris)}"
         degen = 0
         edges = {}
+        directed = {}
         xs = []; ys = []; zs = []
         for _ in range(count):
             fh.read(12)
@@ -326,10 +328,15 @@ def verify(path, tris):
             for i in range(3):
                 e = tuple(sorted((key[i], key[(i + 1) % 3])))
                 edges[e] = edges.get(e, 0) + 1
+                d = (key[i], key[(i + 1) % 3])
+                directed[d] = directed.get(d, 0) + 1
     assert degen == 0, f"{degen} degenerate (zero-area) triangles"
     open_edges = sum(1 for c in edges.values() if c != 2)
+    # a face wound backwards still pairs every UNDIRECTED edge; it shows as a directed edge used
+    # twice in the same direction (the inverted blind caps and hole walls, fixed 2026-10-24)
+    same_dir = sum(1 for c in directed.values() if c > 1)
     bounds = (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
-    return count, open_edges, bounds
+    return count, open_edges, same_dir, bounds
 
 
 # ----------------------------------------------------------------------------- build
@@ -366,7 +373,10 @@ def build(a):
         else:
             add_wall_edge(tris, v0, v1, 0.0, a.pad_h)
     for h in vhole:                                                     # vertical hole walls
-        _add_side_wall(tris, h, 0.0, a.pad_h, outward=False)
+        # outward=False flips a CCW loop's walls to face the hole axis; the hole loops are CW, so
+        # they go in reversed (passing CW loops inverted every hole wall: 128 directed edges were
+        # shared in the same direction with the pad caps, which undirected WATERTIGHT cannot see)
+        _add_side_wall(tris, h[::-1], 0.0, a.pad_h, outward=False)
 
     cup_z0 = a.pad_h - 2.0                                              # interpenetrate the pad top
     cup_z1 = a.pad_h + a.socket_depth
@@ -399,7 +409,12 @@ def main():
     ap.add_argument("--ports", type=int, default=3, help="gypsum ports through the socket floor")
     ap.add_argument("--port-dia", type=float, default=7.0, help="gypsum port dia mm")
     ap.add_argument("--port-r", type=float, default=22.0, help="gypsum port radius from centre mm")
-    ap.add_argument("--port-phase", type=float, default=90.0, help="first port angle deg")
+    ap.add_argument("--port-phase", type=float, default=0.0,
+                    help="first port angle deg. 0 puts a port on the bisector between the two "
+                         "horizontal bores (at +-30 deg); the old 90 put the third port at 330 = -30, "
+                         "ON the -30 bore's axis, so that tunnel cut through the port and the shell "
+                         "self-intersected (LAYERSUP read the overlap as 2.8 mm2 of overhang, "
+                         "2026-10-24)")
     ap.add_argument("--horiz-depth", type=float, default=30.0, help="horizontal bamboo socket depth mm")
     ap.add_argument("--horiz-z", type=float, default=7.0, help="height of the horizontal bore axis mm")
     ap.add_argument("--points", type=int, default=96, help="samples around the pad/cup")
@@ -410,10 +425,11 @@ def main():
 
     tris, info = build(a)
     write_binary_stl(a.out, tris)
-    n, open_edges, b = verify(a.out, tris)
+    n, open_edges, same_dir, b = verify(a.out, tris)
     dx = b[1] - b[0]; dy = b[3] - b[2]; dz = b[5] - b[4]
     print(f"{a.out}: {n} triangles, {os.path.getsize(a.out)} bytes")
     print(f"  open (non-paired) edges: {open_edges}  [0 = watertight]")
+    print(f"  same-direction edges: {same_dir}  [0 = consistently wound]")
     print(f"  bounds  X {b[0]:.1f}..{b[1]:.1f}  Y {b[2]:.1f}..{b[3]:.1f}  Z {b[4]:.1f}..{b[5]:.1f}")
     print(f"  pad {a.pad_sides}-gon Ø{a.pad_dia:g} x {a.pad_h:g}, ROUND socket bore over the leg PEAKS "
           f"(leg peak r {info['peak_r']:.2f}), clearance {a.socket_clear:g} radial, depth {a.socket_depth:g}, height {dz:.1f}")
