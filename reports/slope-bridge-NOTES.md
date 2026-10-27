@@ -44,3 +44,5 @@ Brief: ~/dev/Assist/agents/briefs/crackle-slope-bridge-2026-10-27.md. Base: 57d6
 - The 4: fan triangles at z 2.641 by the big holes, centroids (28.19, 35.82) etc. At plane 2.69 x 27.74..28.69 is
   unsupported (the hole's corner past the plane-9 bridge, under the noise floor, so LAYERSUP drops it). Not
   excused by design: it is not held. Whether sub-bead pieces should excuse faces is a separate policy call.
+- Suite (heavy slot, d1a3e88): 19/19 passed, 160 s. Resweep of the 15 FAIL files
+  (reports/a1-sweep/slope-bridge-resweep.tsv): every PRINTABLE and LAYERSUP verdict unchanged.
