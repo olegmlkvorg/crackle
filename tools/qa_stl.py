@@ -44,7 +44,11 @@ Checks:
                   OWN xy bbox centre, so the verdict does not depend on where the file sits.
                   Faces whose just-outside point is INSIDE material are excluded (the slicer
                   union erases them), decided by the vertical winding walk, not by which
-                  connected component they belong to.
+                  connected component they belong to. BRIDGES ARE LAYERSUP'S (bridge policy
+                  2026-10-27): when LAYERSUP measured the part, a face that is the underside of a
+                  region LAYERSUP classes as a bridge (held, <= --bridge-max) is excluded here, so
+                  a hanging hole passes both checks and a 15 mm roof still fails both. With
+                  --no-layer-support, or when LAYERSUP declines on winding, nothing is excluded.
     7 SEALED-VOID (closed) 0 ray columns with material above AND below a void. watertight !=
                   printable: a sealed cavity is a flawless manifold and cannot print.
     8 FOOT        (closed, fabric) the first layer can hold a bead. Cross-section at half the
@@ -966,12 +970,13 @@ def _ls_classify(pieces, cur, sup, x0, half_span):
     return far <= half_span, opened, far
 
 
-def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None):
+def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None, bridges=None):
     """Unsupported regions of `cur` against `prev` grown by `allow`. The growth reaches one
     extra scanline in y (LS_PITCH), because a layer edge in y is known only to the row: without
     it an exact-45 deg wall facing y reads a sliver row as overhang every other layer. x is exact.
     `exclude` (row -> sorted intervals) is removed from the unsupported set first: material already
-    reported at the same xy in an earlier layer is not counted again.
+    reported at the same xy in an earlier layer is not counted again. `bridges`, when a list,
+    collects each bridge region's pieces [(row, a, b)] for PRINTABLE (see _bridge_faces).
     Returns ([(area_mm2, kind, cx, cy, far_mm, open)] for every region above the noise floor,
     {row: [intervals]} of the overhang regions)."""
     R = int(allow / LS_PITCH) + 1
@@ -1026,13 +1031,16 @@ def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None):
         cy = sum((y0 + (j + 0.5) * LS_PITCH) * (b - a) for j, a, b in reg) * LS_PITCH / area
         is_bridge, opened, far = _ls_classify(reg, cur, sup, x0, half_span)
         out.append((area, "bridge" if is_bridge else "overhang", cx, cy, far * LS_PITCH, opened))
-        if not is_bridge:
+        if is_bridge:
+            if bridges is not None:
+                bridges.append(reg)
+        else:
             for j, a, b in reg:
                 flagged.setdefault(j, []).append((a, b))
     return out, flagged
 
 
-def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
+def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h, bridges=None):
     """Every layer's material against the material below it, as a slicer decides support.
 
     Planes: first_h / 2 above the floor, then the centre of each layer_h layer above first_h,
@@ -1053,6 +1061,7 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
     COUNTED ONCE: the slope comparison skips xy already reported as overhang in the last LS_BASE
     of layers (an island 2 mm up read 600 mm2 for its 100 mm2, once per layer of the baseline).
     UNBALANCED rows (see _ls_rows) are returned as faults; a caller with any fault has no verdict.
+    `bridges`, when a list, collects (z, x0, y0, pieces) for every bridge region of the step test.
     Returns ([(z, area_mm2, kind, cx, cy, far_mm, open, test)], plane_count,
              [(z, unbalanced_rows)])."""
     xs = [v[0] for t in tris for v in t]
@@ -1090,7 +1099,11 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
         if hist:
             zp, prev = hist[-1]
             allow = (z - zp) / tan if tan else line_w / 2.0
-            regs, flagged = _ls_compare(cur, prev, allow, x0, y0, half_span, line_w)
+            found = [] if bridges is not None else None
+            regs, flagged = _ls_compare(cur, prev, allow, x0, y0, half_span, line_w,
+                                        bridges=found)
+            if found:
+                bridges.extend((z, x0, y0, reg) for reg in found)
             for r in regs:
                 out.append((z,) + r + ("step",))
             if tan and len(hist) >= nbase:
@@ -1115,15 +1128,45 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h):
     return out, len(planes), faults
 
 
-def _layersup_verdict(report, regs, npl, body, maxz, lh, lw, overhang_deg, bridge_max):
-    """LAYERSUP's verdict on balanced sections: overhang regions as printed, then flipped."""
+def _flip(body, maxz):
+    """The mesh upside down (z -> maxz - z), rewound so it stays outward-facing."""
+    return [(v0[:2] + (maxz - v0[2],), v2[:2] + (maxz - v2[2],), v1[:2] + (maxz - v1[2],))
+            for v0, v1, v2 in body]
+
+
+def _bridge_faces(idx, tris, bridges, layer_h):
+    """The faces of `idx` that are the underside of a LAYERSUP bridge: centroid xy inside a bridge
+    region (one scanline / LS_PITCH of tolerance) found on a plane within one layer of the face's
+    z extent. `tris` holds (v0, v1, v2, cenx, ceny) in the same orientation `bridges` was measured
+    in. This is how PRINTABLE leaves bridge judgement to LAYERSUP alone (bridge policy 2026-10-27)."""
+    if not bridges:
+        return set()
+    rows = {}
+    for z, x0, y0, reg in bridges:
+        for j, a, b in reg:
+            rows.setdefault(j, []).append((z, a, b))
+    x0, y0 = bridges[0][1], bridges[0][2]
+    out = set()
+    for i in idx:
+        v0, v1, v2, cx, cy = tris[i][:5]
+        zlo = min(v0[2], v1[2], v2[2]) - layer_h
+        zhi = max(v0[2], v1[2], v2[2]) + layer_h
+        j = int(math.floor((cy - y0) / LS_PITCH))
+        if any(zlo <= z <= zhi and a - LS_PITCH <= cx <= b + LS_PITCH
+               for jj in (j - 1, j, j + 1) for z, a, b in rows.get(jj, ())):
+            out.add(i)
+    return out
+
+
+def _layersup_verdict(report, regs, npl, body, maxz, lh, lw, overhang_deg, bridge_max,
+                      flipped=None):
+    """LAYERSUP's verdict on balanced sections: overhang regions as printed, then flipped.
+    `flipped` is the flipped _layer_support result when the caller already has it."""
     ov = [r for r in regs if r[2] == "overhang"]
     how = ""
     if ov:
-        fl = [(v0[:2] + (maxz - v0[2],), v2[:2] + (maxz - v2[2],), v1[:2] + (maxz - v1[2],))
-              for v0, v1, v2 in body]
-        regs_f, _n, faults_f = _layer_support(fl, lh, overhang_deg, bridge_max, lw,
-                                              SLICER_FIRST_H)
+        regs_f, _n, faults_f = flipped or _layer_support(_flip(body, maxz), lh, overhang_deg,
+                                                         bridge_max, lw, SLICER_FIRST_H)
         if not faults_f and not [r for r in regs_f if r[2] == "overhang"]:
             regs, ov, how = regs_f, [], "  (only as printed UPSIDE-DOWN)"
     br = [r for r in regs if r[2] == "bridge"]
@@ -1263,7 +1306,22 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
                "max wall lean %.1f deg (limit %.0f, bed faces z<=%.1f excluded%s)"
                % (max_lean, LEAN_MAX_DEG, BED_Z, note))
 
-    # -- 6 PRINTABLE (closed): as-is, then flipped; buried soup faces excluded --
+    # -- LAYERSUP measured first: PRINTABLE leaves its bridges to it (bridge policy 2026-10-27) --
+    ls = None
+    if cls == "closed" and layer_support and tris3d:
+        body = [(t[0], t[1], t[2]) for t in tris3d]
+        lw = line_w or SLICER_LINE_W
+        lh = layer_h or SLICER_LAYER_H
+        br_up, br_fl, ls_fl = [], [], []
+        ls = _layer_support(body, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H, br_up)
+
+        def flipped_ls():
+            if not ls_fl:
+                ls_fl.append(_layer_support(_flip(body, maxz), lh, overhang_deg, bridge_max, lw,
+                                            SLICER_FIRST_H, br_fl))
+            return ls_fl[0]
+
+    # -- 6 PRINTABLE (closed): as-is, then flipped; buried soup faces and LAYERSUP bridges excluded --
     if cls == "closed":
         def spanning_idx(fs):
             wall_r = {}
@@ -1305,11 +1363,29 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
         # burial is orientation-independent; test each candidate once
         cand = set(up_idx) | set(fl_idx)
         buried_set = set(i for i in cand if buried(i))
-        up = [faces[i][1] for i in up_idx if i not in buried_set]
-        fl = [i for i in fl_idx if i not in buried_set]
+        up_idx = [i for i in up_idx if i not in buried_set]
+        fl_idx = [i for i in fl_idx if i not in buried_set]
+        # A face under a bridge LAYERSUP admits (held, <= --bridge-max) is LAYERSUP's to judge.
+        # Without a LAYERSUP measurement (--no-layer-support, or unbalanced winding) nothing is
+        # excused. Flipped bridges are measured only when the upright count fails.
+        nbr = 0
+        if ls is not None and not ls[2]:
+            ex = _bridge_faces(up_idx, tris3d, br_up, lh)
+            nbr, up_idx = len(ex), [i for i in up_idx if i not in ex]
+            if len(up_idx) > allow and fl_idx:
+                ftris = [(v0[:2] + (maxz - v0[2],), v1[:2] + (maxz - v1[2],),
+                          v2[:2] + (maxz - v2[2],), cx, cy)
+                         for v0, v1, v2, cx, cy, _cz, _nz in tris3d]
+                if not flipped_ls()[2]:
+                    fl_idx = [i for i in fl_idx if i not in _bridge_faces(fl_idx, ftris, br_fl, lh)]
+        up = [faces[i][1] for i in up_idx]
+        fl = fl_idx
         nb = len(buried_set)
         note = (" (%d buried soup faces excluded: interpenetration, slicer erases them)" % nb
                 if nb else "")
+        if nbr:
+            note += (" (%d faces under LAYERSUP bridges <= %.1f mm excluded: LAYERSUP judges them)"
+                     % (nbr, bridge_max))
         if len(up) <= allow:
             report("PRINTABLE", True,
                    "%d spanning overhang faces (allow %d)%s" % (len(up), allow, note))
@@ -1337,11 +1413,8 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
                % (seal, seal_cols, cols, tallest, pitch, odd))
 
     # -- LAYERSUP (closed, on by default since the 2026-10-24 sweep judgement) ------------------
-    if cls == "closed" and layer_support and tris3d:
-        body = [(t[0], t[1], t[2]) for t in tris3d]
-        lw = line_w or SLICER_LINE_W
-        lh = layer_h or SLICER_LAYER_H
-        regs, npl, faults = _layer_support(body, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H)
+    if ls is not None:
+        regs, npl, faults = ls
         if faults:
             # No verdict on a mesh whose sections cannot be filled. The flipped retry would fill
             # the same unbalanced rows, so it is not run.
@@ -1352,7 +1425,8 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
                       + (" ..." if len(faults) > 5 else ""),
                       sum(k for _z, k in faults), len(faults), npl))
         else:
-            _layersup_verdict(report, regs, npl, body, maxz, lh, lw, overhang_deg, bridge_max)
+            _layersup_verdict(report, regs, npl, body, maxz, lh, lw, overhang_deg, bridge_max,
+                              ls_fl[0] if ls_fl else None)
 
     # -- FABRIC: per-component watertight, overhang steepness, bed-all, clearance ----
     if cls == "fabric":
