@@ -4,9 +4,11 @@ a fixture under fixtures/a1/ at the defaults (machine.py SLICER_LAYER_H, SLICER_
 SLICER_FIRST_H, 45 deg, bridge-max 8), and each of the three earlier prototype bugs is reproduced
 by forcing the old behaviour back in and showing the check then gets the fixture WRONG.
 
-Fixtures: the ten print-kb A1 meshes (Assist commit add94ca7, expected.json beside them), the fit
+Fixtures: the ten print-kb A1 meshes (copied from Assist commit add94ca7; print-kb moved to
+~/dev/wardrobe-station 2026-10-26, where verticals/print-kb/fixtures/a1/ and
+coupons/out/fit-coupon-block.stl are byte-identical to these copies, checked 2026-10-27), the fit
 coupon block with and without its labels (labels removed by commenting lines 57-58 of
-Assist verticals/print-kb/coupons/fit-coupon.scad, openscad 2021.01), and fabric/chainmail_link.stl,
+verticals/print-kb/coupons/fit-coupon.scad, openscad 2021.01), and fabric/chainmail_link.stl,
 the tilted ring whose crest motivated LAYERCONT (crackle 53590ca). fixtures/foot_cup_inverted_cap.stl
 is stand/foot_cup.stl as committed before its blind-cap fix: a scanline whose winding does not
 return to zero must make LAYERSUP decline, never read as overhang (layersup judgement F1).
