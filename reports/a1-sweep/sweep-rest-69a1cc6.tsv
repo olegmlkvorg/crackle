@@ -1,0 +1,9 @@
+stand/base.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 141 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2
+stand/bowl.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 458 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2
+stand/foot_cup.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 137 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2
+stand/funnel.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 541 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2
+stand/leg.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 1249 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2
+stand/platform_assembled.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 91 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2 (only as printed UPSIDE-DOWN)
+stand/platform_seg1.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 91 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2 (only as printed UPSIDE-DOWN)
+stand/platform_seg2.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 91 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2 (only as printed UPSIDE-DOWN)
+stand/platform_seg3.stl	PASS	PASS LAYERSUP 0 overhang region(s), 0.0 mm2; 0 bridge region(s) <= 8.0 mm. 91 planes at 0.24 mm layers, allowance dz/tan(45 deg), noise floor 0.67 mm2 (only as printed UPSIDE-DOWN)

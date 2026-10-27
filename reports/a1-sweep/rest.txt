@@ -1,0 +1,9 @@
+stand/base.stl
+stand/bowl.stl
+stand/foot_cup.stl
+stand/funnel.stl
+stand/leg.stl
+stand/platform_assembled.stl
+stand/platform_seg1.stl
+stand/platform_seg2.stl
+stand/platform_seg3.stl
