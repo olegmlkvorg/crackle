@@ -75,6 +75,7 @@ Checks:
 Facet normals are recomputed from vertex winding; stored normals are not trusted.
 """
 import argparse
+import bisect
 import math
 import os
 import struct
@@ -970,13 +971,16 @@ def _ls_classify(pieces, cur, sup, x0, half_span):
     return far <= half_span, opened, far
 
 
-def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None, bridges=None):
+def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None, bridges=None,
+                held=None):
     """Unsupported regions of `cur` against `prev` grown by `allow`. The growth reaches one
     extra scanline in y (LS_PITCH), because a layer edge in y is known only to the row: without
     it an exact-45 deg wall facing y reads a sliver row as overhang every other layer. x is exact.
     `exclude` (row -> sorted intervals) is removed from the unsupported set first: material already
     reported at the same xy in an earlier layer is not counted again. `bridges`, when a list,
-    collects each bridge region's pieces [(row, a, b)] for PRINTABLE (see _bridge_faces).
+    collects each bridge region's pieces [(row, a, b)] for PRINTABLE (see _bridge_faces). `held`,
+    when a dict, receives {row: [intervals]} of `cur` inside the grown `prev` (no unsupported piece,
+    noise included), for PRINTABLE (see _held_faces).
     Returns ([(area_mm2, kind, cx, cy, far_mm, open)] for every region above the noise floor,
     {row: [intervals]} of the overhang regions)."""
     R = int(allow / LS_PITCH) + 1
@@ -991,6 +995,8 @@ def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None, bridg
         if quick and not _ls_minus(spans, quick):
             if not (exclude and j in exclude):
                 sup[j] = quick
+                if held is not None:
+                    held[j] = list(spans)
                 continue
         ivs = []
         for dj, w in grow:
@@ -999,6 +1005,10 @@ def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None, bridg
         s = _ls_union(ivs)
         sup[j] = s
         un = _ls_minus(spans, s)
+        if held is not None:
+            h = _ls_minus(spans, un)
+            if h:
+                held[j] = h
         if exclude and j in exclude:
             un = _ls_minus(un, exclude[j])
         for a, b in un:
@@ -1040,7 +1050,7 @@ def _ls_compare(cur, prev, allow, x0, y0, half_span, line_w, exclude=None, bridg
     return out, flagged
 
 
-def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h, bridges=None):
+def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h, bridges=None, held=None):
     """Every layer's material against the material below it, as a slicer decides support.
 
     Planes: first_h / 2 above the floor, then the centre of each layer_h layer above first_h,
@@ -1053,7 +1063,9 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h, bridges=None
         slope  (angle mode) against the layer LS_BASE mm below, grown by that dz / tan(deg). A
                40 deg wall steps out only 0.05 mm per 0.24 layer past the 45 deg allowance, under
                any noise floor; over LS_BASE the excess adds up to a measurable strip. Only its
-               OVERHANG regions count: a bridge's material is legitimately missing LS_BASE below.
+               OVERHANG regions count, and every step-test bridge found since the base layer
+               (this plane's included) joins the base: a bridge is a new floor, and its material
+               and what stands on it are legitimately missing LS_BASE below.
     Unsupported regions are joined across scanlines and classed:
         noise     area under line_w ** 2: below one bead (dropped, not reported)
         bridge    see _ls_classify, up to bridge_max
@@ -1062,6 +1074,8 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h, bridges=None
     of layers (an island 2 mm up read 600 mm2 for its 100 mm2, once per layer of the baseline).
     UNBALANCED rows (see _ls_rows) are returned as faults; a caller with any fault has no verdict.
     `bridges`, when a list, collects (z, x0, y0, pieces) for every bridge region of the step test.
+    `held`, when a list, collects (z, x0, y0, {row: intervals}) per plane: material the step test
+    found within allowance of the layer below, less any slope-test overhang there.
     Returns ([(z, area_mm2, kind, cx, cy, far_mm, open, test)], plane_count,
              [(z, unbalanced_rows)])."""
     xs = [v[0] for t in tris for v in t]
@@ -1081,7 +1095,7 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h, bridges=None
     while z < zmax:
         planes.append(z)
         z += layer_h
-    nxt, active, hist, out, recent, faults = 0, [], [], [], [], []
+    nxt, active, hist, out, recent, faults, floors = 0, [], [], [], [], [], []
     for z in planes:
         while nxt < len(order) and order[nxt][0] <= z:
             active.append(order[nxt])
@@ -1099,15 +1113,30 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h, bridges=None
         if hist:
             zp, prev = hist[-1]
             allow = (z - zp) / tan if tan else line_w / 2.0
-            found = [] if bridges is not None else None
+            found, hv = [], ({} if held is not None else None)
             regs, flagged = _ls_compare(cur, prev, allow, x0, y0, half_span, line_w,
-                                        bridges=found)
-            if found:
+                                        bridges=found, held=hv)
+            if found and bridges is not None:
                 bridges.extend((z, x0, y0, reg) for reg in found)
+            floors.append({})
+            for reg in found:
+                for j, a, b in reg:
+                    floors[-1].setdefault(j, []).append([a, b])
             for r in regs:
                 out.append((z,) + r + ("step",))
             if tan and len(hist) >= nbase:
                 zb, base = hist[-nbase]
+                # bridges since the base are floors: material above one compares against it
+                # (a held bridge's xy is legitimately void LS_BASE below; hanging-row plate 2026-10-27)
+                fl = {}
+                for f in floors[-nbase:]:
+                    for j, ivs in f.items():
+                        fl.setdefault(j, []).extend(ivs)
+                if fl:
+                    base = dict(base)
+                    for j, ivs in fl.items():
+                        base[j] = [tuple(x) for x in _ls_union(
+                            [list(i) for i in base.get(j, ())] + [list(i) for i in ivs])]
                 excl = {j: sorted(seen.get(j, []) + flagged.get(j, []))
                         for j in set(seen) | set(flagged)}
                 excl = {j: [tuple(x) for x in _ls_union([list(i) for i in v])]
@@ -1119,9 +1148,15 @@ def _layer_support(tris, layer_h, deg, bridge_max, line_w, first_h, bridges=None
                         out.append((z,) + r + ("slope",))
                 for j, v in more.items():
                     flagged.setdefault(j, []).extend(v)
+                    if hv and j in hv:
+                        hv[j] = _ls_minus(hv[j], sorted(v))
+            if hv is not None:
+                held.append((z, x0, y0, hv))
         recent.append(flagged)
         if len(recent) > nbase:
             recent.pop(0)
+        if len(floors) > nbase:
+            floors.pop(0)
         hist.append((z, cur))
         if len(hist) > nbase:
             hist.pop(0)
@@ -1154,6 +1189,29 @@ def _bridge_faces(idx, tris, bridges, layer_h):
         j = int(math.floor((cy - y0) / LS_PITCH))
         if any(zlo <= z <= zhi and a - LS_PITCH <= cx <= b + LS_PITCH
                for jj in (j - 1, j, j + 1) for z, a, b in rows.get(jj, ())):
+            out.add(i)
+    return out
+
+
+def _held_faces(idx, tris, held, layer_h):
+    """The faces of `idx` whose centroid xy, on the first plane above the centroid (within one
+    layer), is material the step test found held by the layer below within allowance (`held`
+    from _layer_support, same orientation as `tris`). Such a face is a ceiling narrow enough to
+    be printed by the allowance alone (the 0.5 mm end gaps of a hanging hole, 2026-10-27). No
+    xy tolerance: a real roof's centroid sits in an unsupported piece and is never excused."""
+    if not held:
+        return set()
+    zs = [h[0] for h in held]
+    out = set()
+    for i in idx:
+        v0, v1, v2, cx, cy = tris[i][:5]
+        cz = (v0[2] + v1[2] + v2[2]) / 3.0
+        k = bisect.bisect_right(zs, cz)
+        if k >= len(held) or held[k][0] > cz + layer_h:
+            continue
+        _z, x0, y0, rows = held[k]
+        j = int(math.floor((cy - y0) / LS_PITCH))
+        if _ls_inside(rows.get(j), cx):
             out.add(i)
     return out
 
@@ -1312,13 +1370,13 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
         body = [(t[0], t[1], t[2]) for t in tris3d]
         lw = line_w or SLICER_LINE_W
         lh = layer_h or SLICER_LAYER_H
-        br_up, br_fl, ls_fl = [], [], []
-        ls = _layer_support(body, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H, br_up)
+        br_up, br_fl, ls_fl, hd_up, hd_fl = [], [], [], [], []
+        ls = _layer_support(body, lh, overhang_deg, bridge_max, lw, SLICER_FIRST_H, br_up, hd_up)
 
         def flipped_ls():
             if not ls_fl:
                 ls_fl.append(_layer_support(_flip(body, maxz), lh, overhang_deg, bridge_max, lw,
-                                            SLICER_FIRST_H, br_fl))
+                                            SLICER_FIRST_H, br_fl, hd_fl))
             return ls_fl[0]
 
     # -- 6 PRINTABLE (closed): as-is, then flipped; buried soup faces and LAYERSUP bridges excluded --
@@ -1370,22 +1428,24 @@ def run_file(path, cls, bed, allow, clear_min, bridge_max=8.0, transit_dia=None,
         # excused. Flipped bridges are measured only when the upright count fails.
         nbr = 0
         if ls is not None and not ls[2]:
-            ex = _bridge_faces(up_idx, tris3d, br_up, lh)
+            ex = _bridge_faces(up_idx, tris3d, br_up, lh) | _held_faces(up_idx, tris3d, hd_up, lh)
             nbr, up_idx = len(ex), [i for i in up_idx if i not in ex]
             if len(up_idx) > allow and fl_idx:
                 ftris = [(v0[:2] + (maxz - v0[2],), v1[:2] + (maxz - v1[2],),
                           v2[:2] + (maxz - v2[2],), cx, cy)
                          for v0, v1, v2, cx, cy, _cz, _nz in tris3d]
                 if not flipped_ls()[2]:
-                    fl_idx = [i for i in fl_idx if i not in _bridge_faces(fl_idx, ftris, br_fl, lh)]
+                    ex_f = (_bridge_faces(fl_idx, ftris, br_fl, lh)
+                            | _held_faces(fl_idx, ftris, hd_fl, lh))
+                    fl_idx = [i for i in fl_idx if i not in ex_f]
         up = [faces[i][1] for i in up_idx]
         fl = fl_idx
         nb = len(buried_set)
         note = (" (%d buried soup faces excluded: interpenetration, slicer erases them)" % nb
                 if nb else "")
         if nbr:
-            note += (" (%d faces under LAYERSUP bridges <= %.1f mm excluded: LAYERSUP judges them)"
-                     % (nbr, bridge_max))
+            note += (" (%d faces under LAYERSUP bridges <= %.1f mm or held within its allowance "
+                     "excluded: LAYERSUP judges them)" % (nbr, bridge_max))
         if len(up) <= allow:
             report("PRINTABLE", True,
                    "%d spanning overhang faces (allow %d)%s" % (len(up), allow, note))

@@ -116,9 +116,10 @@ mutant("excuse-none", lambda: setattr(q, "_bridge_faces", lambda *a: set()),
        lambda: setattr(q, "_bridge_faces", orig_bf))
 
 
-def all_regions_as_bridges(cur, prev, allow, x0, y0, half_span, line_w, exclude=None, bridges=None):
+def all_regions_as_bridges(cur, prev, allow, x0, y0, half_span, line_w, exclude=None, bridges=None,
+                           held=None):
     """Footprint collection that ignores the classification: overhang regions handed over too."""
-    out, flagged = orig_cmp(cur, prev, allow, x0, y0, half_span, line_w, exclude, bridges)
+    out, flagged = orig_cmp(cur, prev, allow, x0, y0, half_span, line_w, exclude, bridges, held)
     if bridges is not None:
         fake = []
         orig_cmp(cur, prev, allow, x0, y0, 10 ** 6, line_w, exclude, fake)
